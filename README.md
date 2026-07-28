@@ -40,7 +40,7 @@ GPIO12 是原单风扇项目已验证的连接。GPIO13 是为第二路风扇设
 ## 安装与构建
 
 ```bash
-cd ~/WindArmor
+cd ~/workspace/WindArmor
 source /opt/ros/jazzy/setup.bash
 sudo apt update
 rosdep install --from-paths src --ignore-src -r -y
@@ -51,7 +51,7 @@ source install/setup.bash
 每次树莓派开机后，初始化一次 `can10`：
 
 ```bash
-cd ~/WindArmor
+cd ~/workspace/WindArmor
 sudo ./scripts/setup_can.sh can10
 ```
 
@@ -60,7 +60,7 @@ sudo ./scripts/setup_can.sh can10
 启动前让机器人可靠固定，移除风扇周围的人员和松散物体，并先断开风扇动力电池。
 
 ```bash
-cd ~/WindArmor
+cd ~/workspace/WindArmor
 source /opt/ros/jazzy/setup.bash
 source install/setup.bash
 ros2 launch windarmor_bringup windarmor.launch.py
@@ -72,7 +72,7 @@ ros2 launch windarmor_bringup windarmor.launch.py
 同一个终端输入：
 
 ```bash
-cd ~/WindArmor
+cd ~/workspace/WindArmor
 source /opt/ros/jazzy/setup.bash
 source install/setup.bash
 ros2 run windarmor_fan_controller fan_keyboard
