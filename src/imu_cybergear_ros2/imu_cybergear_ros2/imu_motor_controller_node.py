@@ -25,10 +25,13 @@ ROS2 生命周期状态：
 订阅话题：
   /imu/data_raw (sensor_msgs/Imu) — IMU 姿态数据
   /e_stop (std_msgs/Bool) — 急停指令
+  /motors/manual_targets (std_msgs/Float64MultiArray) — MANUAL 模式绝对目标
 
 服务：
   /e_stop        (std_srvs/Trigger) — 急停服务
   /enable_motor  (std_srvs/SetBool) — 远程启停服务
+  /imu/set_zero  (std_srvs/Trigger) — 将当前 IMU 姿态设为零点
+  /motors/set_zero (std_srvs/Trigger) — 将全部电机当前位置设为机械零点
 
 键盘控制（需 enable_keyboard=True）：
   [m] 切换 AUTO/MANUAL          [z] IMU 姿态归零
@@ -49,7 +52,7 @@ from typing import Dict, List, Tuple
 import rclpy
 from rclpy.lifecycle import LifecycleNode, TransitionCallbackReturn, State
 from sensor_msgs.msg import Imu
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Bool, Float64MultiArray, String
 from std_srvs.srv import Trigger, SetBool
 
 from .controller_state import ControllerState, StateManager
@@ -171,6 +174,7 @@ class ImuMotorControllerNode(LifecycleNode):
         self.declare_parameter("motor_temp_critical_degC", 90.0)
         self.declare_parameter("motor_current_limit_a", 5.0)
         self.declare_parameter("position_error_threshold_rad", 0.3)
+        self.declare_parameter("warning_throttle_sec", 2.0)
         self.declare_parameter("reconnect_on_disconnect", True)
         self.declare_parameter("motor_status_topic", "/motor/status")
 
@@ -187,8 +191,11 @@ class ImuMotorControllerNode(LifecycleNode):
         self._system_e_stop_pub = None
         self._sub = None
         self._e_stop_sub = None
+        self._manual_targets_sub = None
         self._e_stop_srv = None
         self._enable_motor_srv = None
+        self._imu_zero_srv = None
+        self._motor_zero_srv = None
 
         # 子模块
         self._state_mgr: StateManager = None
@@ -310,6 +317,10 @@ class ImuMotorControllerNode(LifecycleNode):
         self._position_error_threshold = (
             self.get_parameter("position_error_threshold_rad").get_parameter_value().double_value
         )
+        self._warning_throttle_sec = max(
+            0.0,
+            self.get_parameter("warning_throttle_sec").get_parameter_value().double_value,
+        )
         self._roll_axis_sign = self.get_parameter("roll_axis_sign").get_parameter_value().double_value
         self._pitch_axis_sign = self.get_parameter("pitch_axis_sign").get_parameter_value().double_value
         motor_status_topic = self.get_parameter("motor_status_topic").get_parameter_value().string_value
@@ -356,11 +367,23 @@ class ImuMotorControllerNode(LifecycleNode):
         self._e_stop_sub = self.create_subscription(
             Bool, "/e_stop", self._safety.on_e_stop_topic, 10
         )
+        self._manual_targets_sub = self.create_subscription(
+            Float64MultiArray,
+            "/motors/manual_targets",
+            self._on_manual_targets,
+            10,
+        )
         self._e_stop_srv = self.create_service(
             Trigger, "/e_stop", self._safety.on_e_stop_service
         )
         self._enable_motor_srv = self.create_service(
             SetBool, "/enable_motor", self._safety.on_enable_motor_service
+        )
+        self._imu_zero_srv = self.create_service(
+            Trigger, "/imu/set_zero", self._on_imu_zero_service
+        )
+        self._motor_zero_srv = self.create_service(
+            Trigger, "/motors/set_zero", self._on_motor_zero_service
         )
 
         # ---- 连接电机并初始化 ----
@@ -429,10 +452,15 @@ class ImuMotorControllerNode(LifecycleNode):
         for pub in [self._motor_status_pub, self._system_e_stop_pub]:
             if pub is not None:
                 self.destroy_publisher(pub)
-        for sub in [self._sub, self._e_stop_sub]:
+        for sub in [self._sub, self._e_stop_sub, self._manual_targets_sub]:
             if sub is not None:
                 self.destroy_subscription(sub)
-        for srv in [self._e_stop_srv, self._enable_motor_srv]:
+        for srv in [
+            self._e_stop_srv,
+            self._enable_motor_srv,
+            self._imu_zero_srv,
+            self._motor_zero_srv,
+        ]:
             if srv is not None:
                 self.destroy_service(srv)
 
@@ -440,8 +468,11 @@ class ImuMotorControllerNode(LifecycleNode):
         self._system_e_stop_pub = None
         self._sub = None
         self._e_stop_sub = None
+        self._manual_targets_sub = None
         self._e_stop_srv = None
         self._enable_motor_srv = None
+        self._imu_zero_srv = None
+        self._motor_zero_srv = None
 
         # 重置内部状态
         self._motor_configs = []
@@ -457,6 +488,77 @@ class ImuMotorControllerNode(LifecycleNode):
 
         self.get_logger().info("控制节点清理完成")
         return TransitionCallbackReturn.SUCCESS
+
+    def _on_imu_zero_service(
+        self, _request: Trigger.Request, response: Trigger.Response
+    ) -> Trigger.Response:
+        """将当前实时 IMU 姿态设为控制零点。"""
+        if not self._is_active:
+            response.success = False
+            response.message = "控制节点未激活"
+            return response
+        if time.monotonic() - self._last_imu_time > 1.0:
+            response.success = False
+            response.message = "IMU 数据已超时，未执行归零"
+            return response
+        with self._lock:
+            self._imu_zero_roll = self._latest_roll
+            self._imu_zero_pitch = self._latest_pitch
+            roll_deg = math.degrees(self._imu_zero_roll)
+            pitch_deg = math.degrees(self._imu_zero_pitch)
+        self.get_logger().info(
+            f"IMU 姿态归零已完成: roll={roll_deg:.2f}°, pitch={pitch_deg:.2f}°"
+        )
+        response.success = True
+        response.message = (
+            f"IMU 已归零: roll={roll_deg:.2f}°, pitch={pitch_deg:.2f}°"
+        )
+        return response
+
+    def _on_motor_zero_service(
+        self, _request: Trigger.Request, response: Trigger.Response
+    ) -> Trigger.Response:
+        """将全部电机的当前位置设为机械零点。"""
+        if not self._is_active:
+            response.success = False
+            response.message = "控制节点未激活"
+            return response
+        if not self._state_mgr.is_manual_running():
+            response.success = False
+            response.message = "请先切换到 MANUAL 模式再设置电机零点"
+            return response
+        response.success = self._motor_mgr.set_all_motor_zero_reference()
+        response.message = (
+            "全部电机当前位置已设为零点"
+            if response.success
+            else "部分电机设置零点失败，请检查日志"
+        )
+        return response
+
+    def _on_manual_targets(self, msg: Float64MultiArray) -> None:
+        """在 MANUAL 模式按 motor_ids 顺序接收各电机绝对目标（rad）。"""
+        if not self._is_active or not self._state_mgr.is_manual_running():
+            self.get_logger().warn(
+                "忽略 /motors/manual_targets：控制节点未激活或不在 MANUAL 模式"
+            )
+            return
+        if len(msg.data) != len(self._motor_ids):
+            self.get_logger().error(
+                "/motors/manual_targets 长度必须与 motor_ids 一致："
+                f"期望 {len(self._motor_ids)}，收到 {len(msg.data)}"
+            )
+            return
+        targets = {
+            motor_id: float(msg.data[index])
+            for index, motor_id in enumerate(self._motor_ids)
+        }
+        with self._lock:
+            self._motor_mgr.apply_targets(targets)
+        target_text = ", ".join(
+            f"ID{motor_id}={targets[motor_id]:.3f}"
+            for motor_id in self._motor_ids
+        )
+        self.get_logger().info(f"收到 MANUAL 电机目标(rad): {target_text}")
 
     def publish_system_emergency_stop(self) -> None:
         """发布系统级急停，让电机与风扇使用同一安全通道。"""
@@ -488,19 +590,24 @@ class ImuMotorControllerNode(LifecycleNode):
         if self._keyboard is not None:
             self._keyboard.stop()
 
-        for pub in [self._motor_status_pub]:
+        for pub in [self._motor_status_pub, self._system_e_stop_pub]:
             if pub is not None:
                 try:
                     self.destroy_publisher(pub)
                 except Exception:
                     pass
-        for sub in [self._sub, self._e_stop_sub]:
+        for sub in [self._sub, self._e_stop_sub, self._manual_targets_sub]:
             if sub is not None:
                 try:
                     self.destroy_subscription(sub)
                 except Exception:
                     pass
-        for srv in [self._e_stop_srv, self._enable_motor_srv]:
+        for srv in [
+            self._e_stop_srv,
+            self._enable_motor_srv,
+            self._imu_zero_srv,
+            self._motor_zero_srv,
+        ]:
             if srv is not None:
                 try:
                     self.destroy_service(srv)
@@ -521,13 +628,6 @@ class ImuMotorControllerNode(LifecycleNode):
         if not self._is_active or not self._running:
             return
 
-        if not self._state_mgr.is_auto_running():
-            return
-
-        now = time.monotonic()
-        if now - self._last_command_time < self._command_interval:
-            return
-
         try:
             from .imu_protocol import euler_from_quaternion
 
@@ -542,6 +642,15 @@ class ImuMotorControllerNode(LifecycleNode):
         pitch *= self._pitch_axis_sign
         self._latest_roll = roll
         self._latest_pitch = pitch
+
+        # MANUAL 模式也持续更新实时姿态，确保键盘 z 和 /imu/set_zero
+        # 使用的是真实当前姿态，而不是启动时的默认 0。
+        if not self._state_mgr.is_auto_running():
+            return
+
+        now = time.monotonic()
+        if now - self._last_command_time < self._command_interval:
+            return
 
         with self._lock:
             roll_rel = roll - self._imu_zero_roll

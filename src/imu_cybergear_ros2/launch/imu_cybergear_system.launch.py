@@ -9,8 +9,8 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, EmitEvent, RegisterEventHandler
 from launch.conditions import IfCondition
-from launch.event_handlers import OnProcessStart
-from launch.events import matches_action
+from launch.event_handlers import OnProcessExit, OnProcessStart
+from launch.events import Shutdown, matches_action
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import LifecycleNode
 from launch_ros.event_handlers import OnStateTransition
@@ -121,6 +121,20 @@ def generate_launch_description():
         condition=IfCondition(start_controller),
     )
 
+    # 控制节点负责系统级键盘输入和电机安全停止。它在收到 q 或异常退出时，
+    # 关闭整个 LaunchService，确保 IMU 与风扇节点不会继续留在后台运行。
+    controller_exit_handler = RegisterEventHandler(
+        event_handler=OnProcessExit(
+            target_action=controller_node,
+            on_exit=[
+                EmitEvent(
+                    event=Shutdown(reason="电机控制节点已退出，正在关闭整套系统")
+                ),
+            ],
+        ),
+        condition=IfCondition(start_controller),
+    )
+
     # ---- RViz 节点（普通 Node，非 Lifecycle） ----
     from launch_ros.actions import Node as RegularNode
 
@@ -176,6 +190,7 @@ def generate_launch_description():
             imu_activate_handler,
             controller_configure_handler,
             controller_activate_handler,
+            controller_exit_handler,
             # 节点
             imu_node,
             controller_node,

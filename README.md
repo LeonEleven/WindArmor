@@ -68,6 +68,7 @@ ros2 launch windarmor_bringup windarmor.launch.py
 
 节点开始输出 800 μs 最低油门后，再按电调的正常解锁顺序接通风扇动力。
 该终端用于原电机控制键盘；其中空格键现在会同时急停电机和风扇。
+按 `q` 会先停止全部电机，再关闭整套系统中的电机、IMU 和风扇节点。
 双风扇键盘应在第二个终端运行，避免两个程序争用
 同一个终端输入：
 
@@ -107,6 +108,21 @@ ros2 topic pub -r 10 /fans/pwm std_msgs/msg/Int32MultiArray \
 
 ```bash
 ros2 topic pub --once /e_stop std_msgs/msg/Bool "{data: true}"
+```
+
+MANUAL 模式下可按 `motor_ids` 的配置顺序（默认 `[4, 3, 2, 1]`）发送
+电机绝对目标，单位为弧度。节点仍会应用已有软限位与单步变化限制：
+
+```bash
+ros2 topic pub --once /motors/manual_targets \
+  std_msgs/msg/Float64MultiArray "{data: [0.0, 0.0, 0.0, 0.0]}"
+```
+
+IMU 与电机归零服务：
+
+```bash
+ros2 service call /imu/set_zero std_srvs/srv/Trigger "{}"
+ros2 service call /motors/set_zero std_srvs/srv/Trigger "{}"
 ```
 
 急停后分别恢复电机与风扇（恢复时风扇仍保持最低油门）：

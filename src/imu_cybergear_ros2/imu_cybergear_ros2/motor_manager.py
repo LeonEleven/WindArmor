@@ -199,13 +199,15 @@ class MotorManager:
     # 零点与复位
     # ------------------------------------------------------------------
 
-    def set_all_motor_zero_reference(self) -> None:
-        """将全部电机的当前位置设为机械零点。"""
+    def set_all_motor_zero_reference(self) -> bool:
+        """将全部电机的当前位置设为机械零点，返回是否全部成功。"""
+        success = True
         with self._node._lock:
             for mid in self._node._motor_ids:
                 try:
                     self._node._driver.stop_motor(mid)
                 except Exception as exc:
+                    success = False
                     self._node.get_logger().error(f"停止电机 ID{mid} 以设零点时发生异常: {exc}")
             time.sleep(0.2)
             for mid in self._node._motor_ids:
@@ -213,6 +215,7 @@ class MotorManager:
                     self._node._driver.set_zero(mid)
                     time.sleep(0.05)
                 except Exception as exc:
+                    success = False
                     self._node.get_logger().error(f"设置电机 ID{mid} 零点时发生异常: {exc}")
             time.sleep(0.3)
             for mid in self._node._motor_ids:
@@ -224,8 +227,11 @@ class MotorManager:
                     self._node._last_target_change_time[mid] = time.monotonic()
                     time.sleep(0.03)
                 except Exception as exc:
+                    success = False
                     self._node.get_logger().error(f"恢复电机 ID{mid} 运控模式时发生异常: {exc}")
-        self._node.get_logger().info("全部电机机械零点已设置")
+        if success:
+            self._node.get_logger().info("全部电机机械零点已设置")
+        return success
 
     def go_all_to_zero(self) -> None:
         """启动自动归零过程。"""

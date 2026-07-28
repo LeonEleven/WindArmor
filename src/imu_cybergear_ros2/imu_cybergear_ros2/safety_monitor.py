@@ -29,6 +29,15 @@ class SafetyMonitor:
         self._state = state_mgr
         self._motor_mgr = motor_mgr
         self._watchdog_timer = None
+        self._last_warning_time: Dict[str, float] = {}
+
+    def _warn_throttled(self, key: str, message: str) -> None:
+        """按告警类型限频，避免高频电机反馈导致日志刷屏。"""
+        now = time.monotonic()
+        previous = self._last_warning_time.get(key, 0.0)
+        if now - previous >= self._node._warning_throttle_sec:
+            self._node.get_logger().warn(message)
+            self._last_warning_time[key] = now
 
     # ------------------------------------------------------------------
     # 看门狗
@@ -97,9 +106,10 @@ class SafetyMonitor:
 
             # 故障检查
             if status.has_fault:
-                self._node.get_logger().warn(
+                self._warn_throttled(
+                    f"fault:{mid}",
                     f"电机 ID{mid} 故障: {status.fault_names}, "
-                    f"温度={status.temperature:.1f}°C"
+                    f"温度={status.temperature:.1f}°C",
                 )
                 self._node._motor_protection_flags[mid] = True
             else:
@@ -121,9 +131,10 @@ class SafetyMonitor:
                     if elapsed > 0.5:
                         error = abs(target - actual)
                         if error > self._node._position_error_threshold:
-                            self._node.get_logger().warn(
+                            self._warn_throttled(
+                                f"position:{mid}",
                                 f"电机 ID{mid} 位置偏差过大: 目标={target:.3f} rad, "
-                                f"实际={actual:.3f} rad, 偏差={error:.3f} rad"
+                                f"实际={actual:.3f} rad, 偏差={error:.3f} rad",
                             )
 
         except Exception as exc:
@@ -138,6 +149,11 @@ class SafetyMonitor:
         if not self._node._is_active:
             return
         if msg.data:
+            if self._state.state in (
+                ControllerState.EMERGENCY_STOP,
+                ControllerState.SHUTTING_DOWN,
+            ):
+                return
             self._node.get_logger().warn("收到 /e_stop 话题急停指令！")
             self.emergency_stop()
 

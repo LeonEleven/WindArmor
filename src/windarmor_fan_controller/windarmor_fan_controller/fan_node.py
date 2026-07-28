@@ -25,6 +25,7 @@ class DualFanController(Node):
         self.declare_parameter("frame_width_sec", 0.020)
         self.declare_parameter("arm_delay_sec", 3.0)
         self.declare_parameter("command_timeout_sec", 1.0)
+        self.declare_parameter("warning_throttle_sec", 5.0)
 
         self._left_gpio = self.get_parameter("left_gpio").value
         self._right_gpio = self.get_parameter("right_gpio").value
@@ -40,6 +41,9 @@ class DualFanController(Node):
         self._command_timeout = max(
             0.0, float(self.get_parameter("command_timeout_sec").value)
         )
+        self._warning_throttle = max(
+            0.0, float(self.get_parameter("warning_throttle_sec").value)
+        )
 
         if self._left_gpio == self._right_gpio:
             raise ValueError("left_gpio 与 right_gpio 不能相同")
@@ -48,6 +52,7 @@ class DualFanController(Node):
 
         self._enabled = True
         self._timed_out = False
+        self._last_disabled_warning_time = 0.0
         self._last_command_time = time.monotonic()
         self._current_pwm = [self._stop_pwm, self._stop_pwm]
         self._left_esc = None
@@ -136,7 +141,12 @@ class DualFanController(Node):
             self._last_command_time = time.monotonic()
             self._timed_out = False
             return True
-        self.get_logger().warn("风扇处于停用状态；请调用 /fans/enable 后再发送油门")
+        now = time.monotonic()
+        if now - self._last_disabled_warning_time >= self._warning_throttle:
+            self.get_logger().warn(
+                "风扇处于停用状态；请调用 /fans/enable 后再发送油门"
+            )
+            self._last_disabled_warning_time = now
         return False
 
     def _on_left_pwm(self, msg: Int32) -> None:
@@ -161,7 +171,7 @@ class DualFanController(Node):
         self._publish_status()
 
     def _on_e_stop(self, msg: Bool) -> None:
-        if msg.data:
+        if msg.data and self._enabled:
             self.get_logger().warn("收到系统 /e_stop，立即停止并停用两个风扇")
             self._enabled = False
             self._safe_stop()
@@ -174,6 +184,7 @@ class DualFanController(Node):
             self._enabled = True
             self._last_command_time = time.monotonic()
             self._timed_out = False
+            self._last_disabled_warning_time = 0.0
             response.message = "风扇控制已启用，当前仍保持最低油门"
         else:
             self._enabled = False
@@ -252,7 +263,10 @@ def main(args: Optional[list[str]] = None) -> None:
         pass
     finally:
         if node is not None:
-            node.get_logger().info("正在停止两个涵道风扇并释放 GPIO")
+            # Launch 关闭时 ROS 上下文可能已经失效，此时继续向 rosout
+            # 发布会产生 “publisher's context is invalid” 噪声。
+            if rclpy.ok():
+                node.get_logger().info("正在停止两个涵道风扇并释放 GPIO")
             node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

@@ -145,7 +145,7 @@ ros2 launch imu_cybergear_ros2 imu_motor_controller.launch.py \
 | `p` | 发布当前状态汇总（含各电机位置/力矩/温度/故障） |
 | `空格` | **急停全部电机**（进入 EMERGENCY_STOP 状态） |
 | `r` | 从急停恢复（保持当前位置） |
-| `q` | 退出节点 |
+| `q` | 停止全部电机并退出；通过整套系统 launch 启动时，同时关闭 IMU 和风扇节点 |
 
 ### 3.2 MANUAL 模式步进控制
 

@@ -15,6 +15,9 @@ fan_controller:
     # fan_keyboard 会以 10 Hz 持续发送心跳；设为 0 可禁用。
     command_timeout_sec: 1.0
 
+    # 急停后键盘仍发送心跳时，最多每 5 秒提示一次“风扇已停用”。
+    warning_throttle_sec: 5.0
+
 fan_keyboard:
   ros__parameters:
     min_pwm_us: 800

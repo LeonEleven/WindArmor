@@ -1,8 +1,10 @@
 """双涵道风扇键盘控制节点；应在独立终端运行。"""
 
+import os
 import select
 import sys
 import termios
+import time
 import tty
 from typing import Optional
 
@@ -12,16 +14,71 @@ from std_msgs.msg import Bool, Int32MultiArray
 from std_srvs.srv import SetBool
 
 
-def _get_key(timeout: float = 0.1) -> str:
-    ready, _, _ = select.select([sys.stdin], [], [], timeout)
-    if not ready:
-        return ""
-    key = sys.stdin.read(1)
-    if key == "\x1b" and select.select([sys.stdin], [], [], 0.02)[0]:
-        key += sys.stdin.read(1)
-        if select.select([sys.stdin], [], [], 0.02)[0]:
-            key += sys.stdin.read(1)
-    return key
+class _KeyReader:
+    """非阻塞地组装终端按键序列，同时允许主循环持续发送心跳。"""
+
+    _ARROW_KEYS = {
+        "A": "\x1b[A",
+        "B": "\x1b[B",
+        "C": "\x1b[C",
+        "D": "\x1b[D",
+    }
+
+    def __init__(self, escape_timeout: float = 3.0) -> None:
+        self._buffer = ""
+        self._escape_started_at: Optional[float] = None
+        self._escape_timeout = max(0.1, escape_timeout)
+
+    def _pop_key(self) -> str:
+        if not self._buffer:
+            return ""
+
+        if self._buffer[0] != "\x1b":
+            key, self._buffer = self._buffer[0], self._buffer[1:]
+            return key
+
+        now = time.monotonic()
+        if self._escape_started_at is None:
+            self._escape_started_at = now
+
+        if len(self._buffer) == 1:
+            if now - self._escape_started_at < self._escape_timeout:
+                return ""
+            self._buffer = self._buffer[1:]
+            self._escape_started_at = None
+            return "\x1b"
+
+        introducer = self._buffer[1]
+        if introducer not in ("[", "O"):
+            self._buffer = self._buffer[1:]
+            self._escape_started_at = None
+            return "\x1b"
+
+        # 支持普通 CSI（ESC [ A）及应用光标模式（ESC O A）。
+        # CSI 还可能带参数，例如 ESC [ 1 ; 2 A，因此按终止字符解析。
+        end_index = None
+        for index, char in enumerate(self._buffer[2:16], start=2):
+            if "@" <= char <= "~":
+                end_index = index
+                break
+        if end_index is None:
+            return ""
+
+        sequence = self._buffer[: end_index + 1]
+        self._buffer = self._buffer[end_index + 1 :]
+        self._escape_started_at = None
+        return self._ARROW_KEYS.get(sequence[-1], sequence)
+
+    def get_key(self, timeout: float = 0.1) -> str:
+        key = self._pop_key()
+        if key:
+            return key
+
+        ready, _, _ = select.select([sys.stdin], [], [], timeout)
+        if ready:
+            chunk = os.read(sys.stdin.fileno(), 64)
+            self._buffer += chunk.decode("latin-1")
+        return self._pop_key()
 
 
 class FanKeyboard(Node):
@@ -87,6 +144,7 @@ def main(args: Optional[list[str]] = None) -> None:
 
     rclpy.init(args=args)
     node = FanKeyboard()
+    key_reader = _KeyReader()
     old_settings = termios.tcgetattr(sys.stdin)
 
     print(
@@ -98,28 +156,38 @@ def main(args: Optional[list[str]] = None) -> None:
     try:
         tty.setraw(sys.stdin.fileno())
         while rclpy.ok():
-            key = _get_key()
+            key = key_reader.get_key()
+            display_changed = False
             if key == "1":
                 node._selection = (0,)
+                display_changed = True
             elif key == "2":
                 node._selection = (1,)
+                display_changed = True
             elif key == "3":
                 node._selection = (0, 1)
+                display_changed = True
             elif key in ("\x1b[A", "+", "="):
                 node.adjust(node._step)
+                display_changed = True
             elif key in ("\x1b[B", "-", "_"):
                 node.adjust(-node._step)
+                display_changed = True
             elif key.lower() == "s":
                 node.stop()
+                display_changed = True
             elif key == " ":
                 node.system_emergency_stop()
+                display_changed = True
             elif key.lower() == "r":
                 node.enable_fans()
+                display_changed = True
             elif key.lower() == "q" or key == "\x03":
                 break
             node.publish()
             rclpy.spin_once(node, timeout_sec=0.0)
-            print(node.display, end="", flush=True)
+            if display_changed:
+                print(node.display, end="", flush=True)
     finally:
         node.stop()
         rclpy.spin_once(node, timeout_sec=0.05)
