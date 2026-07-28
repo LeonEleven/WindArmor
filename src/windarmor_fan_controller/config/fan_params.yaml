@@ -1,0 +1,22 @@
+fan_controller:
+  ros__parameters:
+    # BCM GPIO 编号。GPIO12=物理 32 脚，GPIO13=物理 33 脚。
+    left_gpio: 12
+    right_gpio: 13
+
+    # 已通过前置项目实机验证的电调脉宽范围。
+    min_pwm_us: 800
+    max_pwm_us: 2200
+    stop_pwm_us: 800
+    frame_width_sec: 0.020
+    arm_delay_sec: 3.0
+
+    # 超过该时间未收到 /fans/* 指令时自动回到最低油门。
+    # fan_keyboard 会以 10 Hz 持续发送心跳；设为 0 可禁用。
+    command_timeout_sec: 1.0
+
+fan_keyboard:
+  ros__parameters:
+    min_pwm_us: 800
+    max_pwm_us: 2200
+    step_pwm_us: 20

@@ -1,0 +1,262 @@
+"""双涵道风扇 ROS 2 控制节点。"""
+
+import time
+from typing import Optional
+
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import Bool, Int32, Int32MultiArray
+from std_srvs.srv import SetBool, Trigger
+
+from .pwm import PwmRange
+
+
+class DualFanController(Node):
+    """通过两个 BCM GPIO 输出 ESC PWM，并提供安全停止接口。"""
+
+    def __init__(self) -> None:
+        super().__init__("fan_controller")
+
+        self.declare_parameter("left_gpio", 12)
+        self.declare_parameter("right_gpio", 13)
+        self.declare_parameter("min_pwm_us", 800)
+        self.declare_parameter("max_pwm_us", 2200)
+        self.declare_parameter("stop_pwm_us", 800)
+        self.declare_parameter("frame_width_sec", 0.020)
+        self.declare_parameter("arm_delay_sec", 3.0)
+        self.declare_parameter("command_timeout_sec", 1.0)
+
+        self._left_gpio = self.get_parameter("left_gpio").value
+        self._right_gpio = self.get_parameter("right_gpio").value
+        self._range = PwmRange(
+            self.get_parameter("min_pwm_us").value,
+            self.get_parameter("max_pwm_us").value,
+        )
+        self._stop_pwm = self._range.clamp(
+            self.get_parameter("stop_pwm_us").value
+        )
+        self._frame_width = float(self.get_parameter("frame_width_sec").value)
+        self._arm_delay = max(0.0, float(self.get_parameter("arm_delay_sec").value))
+        self._command_timeout = max(
+            0.0, float(self.get_parameter("command_timeout_sec").value)
+        )
+
+        if self._left_gpio == self._right_gpio:
+            raise ValueError("left_gpio 与 right_gpio 不能相同")
+        if self._frame_width <= 0.0:
+            raise ValueError("frame_width_sec 必须大于 0")
+
+        self._enabled = True
+        self._timed_out = False
+        self._last_command_time = time.monotonic()
+        self._current_pwm = [self._stop_pwm, self._stop_pwm]
+        self._left_esc = None
+        self._right_esc = None
+        self._pin_factory = None
+
+        self._initialize_gpio()
+
+        self._left_sub = self.create_subscription(
+            Int32, "/fans/left/pwm", self._on_left_pwm, 10
+        )
+        self._right_sub = self.create_subscription(
+            Int32, "/fans/right/pwm", self._on_right_pwm, 10
+        )
+        self._pair_sub = self.create_subscription(
+            Int32MultiArray, "/fans/pwm", self._on_pair_pwm, 10
+        )
+        self._e_stop_sub = self.create_subscription(
+            Bool, "/e_stop", self._on_e_stop, 10
+        )
+        self._enable_srv = self.create_service(
+            SetBool, "/fans/enable", self._on_enable
+        )
+        self._stop_srv = self.create_service(
+            Trigger, "/fans/stop", self._on_stop
+        )
+        self._status_pub = self.create_publisher(
+            Int32MultiArray, "/fans/status_pwm", 10
+        )
+
+        timer_period = (
+            max(0.05, self._command_timeout / 2.0)
+            if self._command_timeout > 0.0
+            else 1.0
+        )
+        self._watchdog_timer = self.create_timer(timer_period, self._watchdog)
+        self._publish_status()
+        self.get_logger().info(
+            "双风扇控制已启动: "
+            f"left=GPIO{self._left_gpio}, right=GPIO{self._right_gpio}, "
+            f"PWM={self._range.minimum_us}-{self._range.maximum_us} us"
+        )
+
+    def _initialize_gpio(self) -> None:
+        """初始化 lgpio 后端，并以最低脉宽同时解锁两个电调。"""
+        from gpiozero import Servo
+        from gpiozero.pins.lgpio import LGPIOFactory
+
+        self._pin_factory = LGPIOFactory()
+        servo_kwargs = {
+            "initial_value": -1.0,
+            "min_pulse_width": self._range.minimum_us / 1_000_000.0,
+            "max_pulse_width": self._range.maximum_us / 1_000_000.0,
+            "frame_width": self._frame_width,
+            "pin_factory": self._pin_factory,
+        }
+
+        try:
+            self._left_esc = Servo(self._left_gpio, **servo_kwargs)
+            self._right_esc = Servo(self._right_gpio, **servo_kwargs)
+            self._apply_pair(self._stop_pwm, self._stop_pwm)
+        except Exception:
+            self.close()
+            raise
+
+        self.get_logger().info(
+            f"正在以 {self._stop_pwm} us 解锁两个电调，请确认风扇区域无人和杂物"
+        )
+        if self._arm_delay:
+            time.sleep(self._arm_delay)
+
+    def _set_output(self, index: int, pwm_us: int) -> None:
+        safe_pwm = self._range.clamp(pwm_us)
+        esc = self._left_esc if index == 0 else self._right_esc
+        if esc is None:
+            raise RuntimeError("风扇 GPIO 尚未初始化")
+        esc.value = self._range.to_servo_value(safe_pwm)
+        self._current_pwm[index] = safe_pwm
+
+    def _apply_pair(self, left_pwm: int, right_pwm: int) -> None:
+        self._set_output(0, left_pwm)
+        self._set_output(1, right_pwm)
+
+    def _accept_command(self) -> bool:
+        if self._enabled:
+            self._last_command_time = time.monotonic()
+            self._timed_out = False
+            return True
+        self.get_logger().warn("风扇处于停用状态；请调用 /fans/enable 后再发送油门")
+        return False
+
+    def _on_left_pwm(self, msg: Int32) -> None:
+        if not self._accept_command():
+            return
+        self._set_output(0, msg.data)
+        self._publish_status()
+
+    def _on_right_pwm(self, msg: Int32) -> None:
+        if not self._accept_command():
+            return
+        self._set_output(1, msg.data)
+        self._publish_status()
+
+    def _on_pair_pwm(self, msg: Int32MultiArray) -> None:
+        if len(msg.data) != 2:
+            self.get_logger().error("/fans/pwm 必须包含 [left_pwm, right_pwm] 两个整数")
+            return
+        if not self._accept_command():
+            return
+        self._apply_pair(msg.data[0], msg.data[1])
+        self._publish_status()
+
+    def _on_e_stop(self, msg: Bool) -> None:
+        if msg.data:
+            self.get_logger().warn("收到系统 /e_stop，立即停止并停用两个风扇")
+            self._enabled = False
+            self._safe_stop()
+
+    def _on_enable(
+        self, request: SetBool.Request, response: SetBool.Response
+    ) -> SetBool.Response:
+        if request.data:
+            self._safe_stop()
+            self._enabled = True
+            self._last_command_time = time.monotonic()
+            self._timed_out = False
+            response.message = "风扇控制已启用，当前仍保持最低油门"
+        else:
+            self._enabled = False
+            self._safe_stop()
+            response.message = "两个风扇已停止并停用"
+        response.success = True
+        return response
+
+    def _on_stop(
+        self, _request: Trigger.Request, response: Trigger.Response
+    ) -> Trigger.Response:
+        self._safe_stop()
+        response.success = True
+        response.message = "两个风扇已回到最低油门"
+        return response
+
+    def _watchdog(self) -> None:
+        if (
+            self._enabled
+            and self._command_timeout > 0.0
+            and time.monotonic() - self._last_command_time > self._command_timeout
+        ):
+            self._safe_stop()
+            if not self._timed_out:
+                self.get_logger().warn("风扇指令超时，已自动回到最低油门")
+                self._timed_out = True
+
+    def _safe_stop(self) -> None:
+        try:
+            self._apply_pair(self._stop_pwm, self._stop_pwm)
+            self._publish_status()
+        except Exception as exc:
+            self.get_logger().error(f"风扇安全停止失败: {exc}")
+
+    def _publish_status(self) -> None:
+        if not hasattr(self, "_status_pub"):
+            return
+        msg = Int32MultiArray()
+        msg.data = list(self._current_pwm)
+        self._status_pub.publish(msg)
+
+    def close(self) -> None:
+        """关闭节点持有的硬件资源。"""
+        try:
+            if self._left_esc is not None and self._right_esc is not None:
+                self._apply_pair(self._stop_pwm, self._stop_pwm)
+        except Exception:
+            pass
+        for esc_name in ("_left_esc", "_right_esc"):
+            esc = getattr(self, esc_name, None)
+            if esc is not None:
+                try:
+                    esc.close()
+                except Exception:
+                    pass
+                setattr(self, esc_name, None)
+        if self._pin_factory is not None:
+            try:
+                self._pin_factory.close()
+            except Exception:
+                pass
+            self._pin_factory = None
+
+    def destroy_node(self) -> None:
+        self.close()
+        super().destroy_node()
+
+
+def main(args: Optional[list[str]] = None) -> None:
+    rclpy.init(args=args)
+    node = None
+    try:
+        node = DualFanController()
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if node is not None:
+            node.get_logger().info("正在停止两个涵道风扇并释放 GPIO")
+            node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()
