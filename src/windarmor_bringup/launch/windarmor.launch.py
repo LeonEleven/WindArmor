@@ -5,7 +5,6 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
 
@@ -39,12 +38,20 @@ def generate_launch_description():
         }.items(),
     )
 
-    fan_controller = Node(
-        package="windarmor_fan_controller",
-        executable="fan_controller",
-        name="fan_controller",
-        parameters=[fan_params_file],
-        output="screen",
+    fan_system = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution(
+                [
+                    FindPackageShare("windarmor_fan_controller"),
+                    "launch",
+                    "fans.launch.py",
+                ]
+            )
+        ),
+        launch_arguments={
+            "params_file": fan_params_file,
+            "require_motor_mode_for_manual": "true",
+        }.items(),
         condition=IfCondition(start_fans),
     )
 
@@ -98,6 +105,6 @@ def generate_launch_description():
                 description="微雪 CAN HAT+ 的 SocketCAN 通道",
             ),
             imu_and_motors,
-            fan_controller,
+            fan_system,
         ]
     )

@@ -186,10 +186,11 @@ class KeyboardHandler:
 
                 # ---- z: IMU 姿态归零 ----
                 if key == "z":
-                    with self._node._lock:
-                        self._node._imu_zero_roll = self._node._latest_roll
-                        self._node._imu_zero_pitch = self._node._latest_pitch
-                    self._node.get_logger().info("IMU 姿态归零已完成")
+                    success, message = self._node.set_imu_zero()
+                    if success:
+                        self._node.get_logger().info(message)
+                    else:
+                        self._node.get_logger().warn(message)
                     continue
 
                 # ---- x: 全部电机机械零点 ----
@@ -216,8 +217,8 @@ class KeyboardHandler:
                 # ---- r: 从急停恢复 ----
                 if key == "r":
                     if self._state.state == ControllerState.EMERGENCY_STOP:
-                        self._motor_mgr.hold_current_targets_and_recover()
-                        self._state.transition_to(ControllerState.MANUAL_RUNNING)
+                        if self._motor_mgr.hold_current_targets_and_recover():
+                            self._state.transition_to(ControllerState.MANUAL_RUNNING)
                     else:
                         self._motor_mgr.hold_current_targets_and_recover()
                     continue

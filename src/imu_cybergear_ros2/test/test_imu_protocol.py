@@ -33,8 +33,12 @@ from imu_protocol import (
     GRAVITY,
     GYRO_FULL_SCALE,
     INT16_MAX,
+    MIN_QUATERNION_NORM,
     WitImuFrameParser,
+    corrected_relative_roll_pitch,
     euler_from_quaternion,
+    normalize_angle_rad,
+    normalize_quaternion,
     quaternion_from_euler,
 )
 
@@ -449,3 +453,56 @@ class TestRoundtrip:
         assert r2 == pytest.approx(roll, abs=1e-9)
         assert p2 == pytest.approx(pitch, abs=1e-9)
         assert y2 == pytest.approx(yaw, abs=1e-9)
+
+
+class TestValidatedRelativeAttitude:
+
+    def test_non_unit_quaternion_is_normalized(self):
+        q = quaternion_from_euler(0.4, -0.2, 0.1)
+        scaled = tuple(value * 3.0 for value in q)
+        normalized = normalize_quaternion(*scaled)
+        assert normalized == pytest.approx(q)
+
+    @pytest.mark.parametrize(
+        "quaternion",
+        [
+            (0.0, 0.0, 0.0, 0.0),
+            (MIN_QUATERNION_NORM / 10.0, 0.0, 0.0, 0.0),
+            (math.nan, 0.0, 0.0, 1.0),
+            (math.inf, 0.0, 0.0, 1.0),
+            (-math.inf, 0.0, 0.0, 1.0),
+        ],
+    )
+    def test_invalid_quaternion_is_rejected(self, quaternion):
+        with pytest.raises(ValueError):
+            normalize_quaternion(*quaternion)
+
+    def test_axis_sign_and_zero_are_applied_before_relative_output(self):
+        q = quaternion_from_euler(math.radians(20.0), math.radians(-10.0), 0.0)
+        roll, pitch, relative_roll, relative_pitch = corrected_relative_roll_pitch(
+            *q,
+            roll_axis_sign=-1.0,
+            pitch_axis_sign=1.0,
+            zero_roll=math.radians(-5.0),
+            zero_pitch=math.radians(-2.0),
+        )
+        assert math.degrees(roll) == pytest.approx(-20.0)
+        assert math.degrees(pitch) == pytest.approx(-10.0)
+        assert math.degrees(relative_roll) == pytest.approx(-15.0)
+        assert math.degrees(relative_pitch) == pytest.approx(-8.0)
+
+    def test_relative_angle_wraps_across_pi(self):
+        q = quaternion_from_euler(math.radians(-179.0), 0.0, 0.0)
+        _, _, relative_roll, _ = corrected_relative_roll_pitch(
+            *q,
+            roll_axis_sign=1.0,
+            pitch_axis_sign=1.0,
+            zero_roll=math.radians(179.0),
+            zero_pitch=0.0,
+        )
+        assert math.degrees(relative_roll) == pytest.approx(2.0)
+
+    @pytest.mark.parametrize("angle", [math.nan, math.inf, -math.inf])
+    def test_invalid_angle_is_rejected(self, angle):
+        with pytest.raises(ValueError):
+            normalize_angle_rad(angle)

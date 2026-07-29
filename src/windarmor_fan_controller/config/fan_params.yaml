@@ -15,8 +15,37 @@ fan_controller:
     # fan_keyboard 会以 10 Hz 持续发送心跳；设为 0 可禁用。
     command_timeout_sec: 1.0
 
+    # enabled 状态使用可靠、transient-local QoS，并以该频率发送心跳。
+    enabled_status_publish_rate_hz: 5.0
+
     # 急停后键盘仍发送心跳时，最多每 5 秒提示一次“风扇已停用”。
     warning_throttle_sec: 5.0
+
+fan_command_manager:
+  ros__parameters:
+    # 管理器不访问 GPIO；公共手动命令和 AUTO 命令都先经过此处仲裁。
+    min_pwm_us: 800
+    max_pwm_us: 2200
+    fan_stop_pwm_us: 800
+    fan_start_pwm_us: 1200
+    fan_auto_max_pwm_us: 1400
+
+    auto_enabled_at_start: false
+    fan_deadband_on_deg: 5.0
+    fan_deadband_off_deg: 3.0
+    fan_full_scale_deg: 45.0
+    control_rate_hz: 20.0
+    status_publish_rate_hz: 5.0
+    rise_step_pwm_us: 10
+    fall_step_pwm_us: 20
+
+    imu_timeout_sec: 0.2
+    manual_command_timeout_sec: 0.5
+    motor_mode_timeout_sec: 1.0
+    fan_enabled_timeout_sec: 1.0
+
+    # fans.launch.py 独立运行时保持 false；统一 bringup 会覆盖为 true。
+    require_motor_mode_for_manual: false
 
 fan_keyboard:
   ros__parameters:

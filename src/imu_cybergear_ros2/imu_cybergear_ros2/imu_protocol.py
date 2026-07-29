@@ -42,6 +42,7 @@ GYRO_FULL_SCALE = 2000.0     # 角速度满量程 ±2000°/s
 ANGLE_FULL_SCALE = 180.0     # 角度满量程 ±180°
 GRAVITY = 9.80665            # 标准重力加速度（m/s²）
 INT16_MAX = 32768.0          # int16 最大值（用于归一化）
+MIN_QUATERNION_NORM = 1e-12  # 拒绝无法可靠归一化的近零四元数
 
 
 def _hex_to_short(raw_data: bytes) -> List[int]:
@@ -216,3 +217,61 @@ def euler_from_quaternion(
     yaw = math.atan2(t3, t4)
 
     return roll, pitch, yaw
+
+
+def normalize_angle_rad(angle: float) -> float:
+    """把有限弧度角归一化到 [-pi, pi]。"""
+    if not math.isfinite(angle):
+        raise ValueError("角度必须是有限值")
+    return math.atan2(math.sin(angle), math.cos(angle))
+
+
+def normalize_quaternion(
+    x: float,
+    y: float,
+    z: float,
+    w: float,
+    minimum_norm: float = MIN_QUATERNION_NORM,
+) -> Tuple[float, float, float, float]:
+    """校验并归一化四元数，返回 (x, y, z, w)。"""
+    values = (x, y, z, w)
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("四元数包含 NaN 或 Inf")
+    if not math.isfinite(minimum_norm) or minimum_norm <= 0.0:
+        raise ValueError("minimum_norm 必须是正有限值")
+
+    norm = math.sqrt(sum(value * value for value in values))
+    if norm < minimum_norm:
+        raise ValueError("四元数范数过小")
+    return tuple(value / norm for value in values)
+
+
+def corrected_relative_roll_pitch(
+    x: float,
+    y: float,
+    z: float,
+    w: float,
+    *,
+    roll_axis_sign: float,
+    pitch_axis_sign: float,
+    zero_roll: float,
+    zero_pitch: float,
+) -> Tuple[float, float, float, float]:
+    """计算修正后的绝对和相对 roll/pitch。
+
+    返回 ``(roll, pitch, relative_roll, relative_pitch)``，单位均为 rad。
+    相对角在轴向修正和统一零点扣除后归一化到 [-pi, pi]。
+    """
+    corrections = (roll_axis_sign, pitch_axis_sign, zero_roll, zero_pitch)
+    if not all(math.isfinite(value) for value in corrections):
+        raise ValueError("轴向修正和零点必须是有限值")
+    if roll_axis_sign == 0.0 or pitch_axis_sign == 0.0:
+        raise ValueError("轴向修正符号不能为零")
+
+    qx, qy, qz, qw = normalize_quaternion(x, y, z, w)
+    raw_roll, raw_pitch, _ = euler_from_quaternion(qx, qy, qz, qw)
+    roll = normalize_angle_rad(raw_roll * roll_axis_sign)
+    pitch = normalize_angle_rad(raw_pitch * pitch_axis_sign)
+    relative_roll = normalize_angle_rad(roll - zero_roll)
+    relative_pitch = normalize_angle_rad(pitch - zero_pitch)
+    return roll, pitch, relative_roll, relative_pitch

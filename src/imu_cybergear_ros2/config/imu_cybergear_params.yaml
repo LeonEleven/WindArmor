@@ -27,6 +27,19 @@ imu_motor_controller_node:
     # 必须与 imu_driver_node.topic_name 对齐。
     imu_topic: "/imu/data_raw"
 
+    # 统一修正和归零后的相对姿态，单位 rad。
+    relative_attitude_topic: "/imu/relative_roll_pitch"
+
+    # 每次成功归零递增，用于让 AUTO 消费方丢弃归零前缓存。
+    imu_zero_generation_topic: "/imu/zero_generation"
+
+    # 对外稳定电机模式及其心跳。
+    motor_mode_topic: "/motors/control_mode"
+    motor_mode_publish_rate_hz: 5.0
+
+    # 键盘 z 与 /imu/set_zero 共用的有效姿态新鲜度上限。
+    imu_zero_timeout_sec: 1.0
+
     # 电机通信后端：
     # - usb_can_serial：USB-CAN 串口 AT 协议
     # - socketcan_hat：SocketCAN（微雪 2-CH CAN HAT+）

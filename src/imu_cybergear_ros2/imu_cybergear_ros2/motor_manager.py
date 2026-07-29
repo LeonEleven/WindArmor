@@ -276,8 +276,9 @@ class MotorManager:
     # 急停恢复
     # ------------------------------------------------------------------
 
-    def hold_current_targets_and_recover(self) -> None:
+    def hold_current_targets_and_recover(self) -> bool:
         """从急停或手动模式恢复运控模式，保持当前位置。"""
+        recovered = True
         with self._node._lock:
             for mid in self._node._motor_ids:
                 try:
@@ -286,8 +287,11 @@ class MotorManager:
                     self._node._driver.enter_control_mode(mid)
                     time.sleep(0.03)
                 except Exception as exc:
+                    recovered = False
                     self._node.get_logger().error(f"恢复电机 ID{mid} 运控模式时发生异常: {exc}")
-        self._node.get_logger().info("全部电机已恢复运控模式（保持当前位置）")
+        if recovered:
+            self._node.get_logger().info("全部电机已恢复运控模式（保持当前位置）")
+        return recovered
 
     # ------------------------------------------------------------------
     # 状态汇总

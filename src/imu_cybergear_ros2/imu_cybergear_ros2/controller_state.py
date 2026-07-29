@@ -31,11 +31,17 @@ class StateManager:
         stop_auto_zero_callback: 从运行态切至非运行态时调用的回调（停止自动归零）。
     """
 
-    def __init__(self, node, stop_auto_zero_callback=None):
+    def __init__(
+        self,
+        node,
+        stop_auto_zero_callback=None,
+        state_change_callback=None,
+    ):
         self._node = node
         self._state = ControllerState.UNINITIALIZED
         self._state_lock = threading.RLock()
         self._stop_auto_zero_callback = stop_auto_zero_callback
+        self._state_change_callback = state_change_callback
 
     @property
     def state(self) -> ControllerState:
@@ -65,6 +71,8 @@ class StateManager:
             ):
                 if self._stop_auto_zero_callback:
                     self._stop_auto_zero_callback()
+            if self._state_change_callback:
+                self._state_change_callback(new_state)
 
     def is_running(self) -> bool:
         """当前是否处于运行态（AUTO 或 MANUAL）。"""
@@ -85,3 +93,18 @@ class StateManager:
         """当前是否处于急停或错误状态。"""
         with self._state_lock:
             return self._state in (ControllerState.EMERGENCY_STOP, ControllerState.ERROR)
+
+
+def public_control_mode(state: ControllerState, *, active: bool) -> str:
+    """把内部状态稳定映射为对外发布的控制模式。"""
+    if not active:
+        return "DISABLED"
+    if state == ControllerState.AUTO_RUNNING:
+        return "AUTO"
+    if state == ControllerState.MANUAL_RUNNING:
+        return "MANUAL"
+    if state == ControllerState.EMERGENCY_STOP:
+        return "EMERGENCY_STOP"
+    if state == ControllerState.ERROR:
+        return "ERROR"
+    return "DISABLED"

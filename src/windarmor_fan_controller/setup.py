@@ -25,6 +25,7 @@ setup(
     entry_points={
         "console_scripts": [
             "fan_controller = windarmor_fan_controller.fan_node:main",
+            "fan_command_manager = windarmor_fan_controller.fan_command_manager:main",
             "fan_keyboard = windarmor_fan_controller.fan_keyboard:main",
         ],
     },

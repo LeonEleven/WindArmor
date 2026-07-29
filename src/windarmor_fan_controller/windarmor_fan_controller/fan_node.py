@@ -5,10 +5,11 @@ from typing import Optional
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Bool, Int32, Int32MultiArray
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from std_msgs.msg import Bool, Int32MultiArray
 from std_srvs.srv import SetBool, Trigger
 
-from .pwm import PwmRange
+from .pwm import FanCommandGate, PwmRange
 
 
 class DualFanController(Node):
@@ -25,6 +26,7 @@ class DualFanController(Node):
         self.declare_parameter("frame_width_sec", 0.020)
         self.declare_parameter("arm_delay_sec", 3.0)
         self.declare_parameter("command_timeout_sec", 1.0)
+        self.declare_parameter("enabled_status_publish_rate_hz", 5.0)
         self.declare_parameter("warning_throttle_sec", 5.0)
 
         self._left_gpio = self.get_parameter("left_gpio").value
@@ -44,16 +46,19 @@ class DualFanController(Node):
         self._warning_throttle = max(
             0.0, float(self.get_parameter("warning_throttle_sec").value)
         )
+        enabled_status_rate = float(
+            self.get_parameter("enabled_status_publish_rate_hz").value
+        )
 
         if self._left_gpio == self._right_gpio:
             raise ValueError("left_gpio 与 right_gpio 不能相同")
         if self._frame_width <= 0.0:
             raise ValueError("frame_width_sec 必须大于 0")
+        if enabled_status_rate <= 0.0:
+            raise ValueError("enabled_status_publish_rate_hz 必须大于 0")
 
-        self._enabled = True
-        self._timed_out = False
+        self._command_gate = FanCommandGate(enabled=True)
         self._last_disabled_warning_time = 0.0
-        self._last_command_time = time.monotonic()
         self._current_pwm = [self._stop_pwm, self._stop_pwm]
         self._left_esc = None
         self._right_esc = None
@@ -61,14 +66,8 @@ class DualFanController(Node):
 
         self._initialize_gpio()
 
-        self._left_sub = self.create_subscription(
-            Int32, "/fans/left/pwm", self._on_left_pwm, 10
-        )
-        self._right_sub = self.create_subscription(
-            Int32, "/fans/right/pwm", self._on_right_pwm, 10
-        )
         self._pair_sub = self.create_subscription(
-            Int32MultiArray, "/fans/pwm", self._on_pair_pwm, 10
+            Int32MultiArray, "/fans/command_pwm", self._on_pair_pwm, 10
         )
         self._e_stop_sub = self.create_subscription(
             Bool, "/e_stop", self._on_e_stop, 10
@@ -82,6 +81,14 @@ class DualFanController(Node):
         self._status_pub = self.create_publisher(
             Int32MultiArray, "/fans/status_pwm", 10
         )
+        state_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self._enabled_pub = self.create_publisher(
+            Bool, "/fans/enabled", state_qos
+        )
 
         timer_period = (
             max(0.05, self._command_timeout / 2.0)
@@ -89,7 +96,11 @@ class DualFanController(Node):
             else 1.0
         )
         self._watchdog_timer = self.create_timer(timer_period, self._watchdog)
+        self._enabled_status_timer = self.create_timer(
+            1.0 / enabled_status_rate, self._publish_enabled
+        )
         self._publish_status()
+        self._publish_enabled()
         self.get_logger().info(
             "双风扇控制已启动: "
             f"left=GPIO{self._left_gpio}, right=GPIO{self._right_gpio}, "
@@ -137,9 +148,7 @@ class DualFanController(Node):
         self._set_output(1, right_pwm)
 
     def _accept_command(self) -> bool:
-        if self._enabled:
-            self._last_command_time = time.monotonic()
-            self._timed_out = False
+        if self._command_gate.accept(time.monotonic()):
             return True
         now = time.monotonic()
         if now - self._last_disabled_warning_time >= self._warning_throttle:
@@ -149,21 +158,11 @@ class DualFanController(Node):
             self._last_disabled_warning_time = now
         return False
 
-    def _on_left_pwm(self, msg: Int32) -> None:
-        if not self._accept_command():
-            return
-        self._set_output(0, msg.data)
-        self._publish_status()
-
-    def _on_right_pwm(self, msg: Int32) -> None:
-        if not self._accept_command():
-            return
-        self._set_output(1, msg.data)
-        self._publish_status()
-
     def _on_pair_pwm(self, msg: Int32MultiArray) -> None:
         if len(msg.data) != 2:
-            self.get_logger().error("/fans/pwm 必须包含 [left_pwm, right_pwm] 两个整数")
+            self.get_logger().error(
+                "/fans/command_pwm 必须包含 [left_pwm, right_pwm] 两个整数"
+            )
             return
         if not self._accept_command():
             return
@@ -171,46 +170,44 @@ class DualFanController(Node):
         self._publish_status()
 
     def _on_e_stop(self, msg: Bool) -> None:
-        if msg.data and self._enabled:
+        if msg.data:
             self.get_logger().warn("收到系统 /e_stop，立即停止并停用两个风扇")
-            self._enabled = False
+            self._command_gate.disable()
             self._safe_stop()
+            self._publish_enabled()
 
     def _on_enable(
         self, request: SetBool.Request, response: SetBool.Response
     ) -> SetBool.Response:
         if request.data:
             self._safe_stop()
-            self._enabled = True
-            self._last_command_time = time.monotonic()
-            self._timed_out = False
+            self._command_gate.enable()
             self._last_disabled_warning_time = 0.0
             response.message = "风扇控制已启用，当前仍保持最低油门"
         else:
-            self._enabled = False
+            self._command_gate.disable()
             self._safe_stop()
             response.message = "两个风扇已停止并停用"
+        self._publish_enabled()
         response.success = True
         return response
 
     def _on_stop(
         self, _request: Trigger.Request, response: Trigger.Response
     ) -> Trigger.Response:
+        self._command_gate.disable()
         self._safe_stop()
+        self._publish_enabled()
         response.success = True
-        response.message = "两个风扇已回到最低油门"
+        response.message = "两个风扇已回到最低油门并锁存停用"
         return response
 
     def _watchdog(self) -> None:
-        if (
-            self._enabled
-            and self._command_timeout > 0.0
-            and time.monotonic() - self._last_command_time > self._command_timeout
+        if self._command_gate.check_timeout(
+            time.monotonic(), self._command_timeout
         ):
             self._safe_stop()
-            if not self._timed_out:
-                self.get_logger().warn("风扇指令超时，已自动回到最低油门")
-                self._timed_out = True
+            self.get_logger().warn("风扇指令超时，已自动回到最低油门")
 
     def _safe_stop(self) -> None:
         try:
@@ -225,6 +222,13 @@ class DualFanController(Node):
         msg = Int32MultiArray()
         msg.data = list(self._current_pwm)
         self._status_pub.publish(msg)
+
+    def _publish_enabled(self) -> None:
+        if not hasattr(self, "_enabled_pub"):
+            return
+        msg = Bool()
+        msg.data = self._command_gate.enabled
+        self._enabled_pub.publish(msg)
 
     def close(self) -> None:
         """关闭节点持有的硬件资源。"""

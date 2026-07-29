@@ -50,13 +50,16 @@ from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
 import rclpy
+from geometry_msgs.msg import Vector3Stamped
 from rclpy.lifecycle import LifecycleNode, TransitionCallbackReturn, State
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Imu
-from std_msgs.msg import Bool, Float64MultiArray, String
+from std_msgs.msg import Bool, Float64MultiArray, String, UInt64
 from std_srvs.srv import Trigger, SetBool
 
-from .controller_state import ControllerState, StateManager
+from .controller_state import ControllerState, StateManager, public_control_mode
 from .cybergear_driver import CyberGearDriver
+from .imu_protocol import corrected_relative_roll_pitch
 from .keyboard_handler import KeyboardHandler
 from .motor_manager import MotorManager, clamp, deg_to_rad
 from .safety_monitor import SafetyMonitor
@@ -101,6 +104,11 @@ class ImuMotorControllerNode(LifecycleNode):
 
         # ROS 与通信后端参数
         self.declare_parameter("imu_topic", "/imu/data_raw")
+        self.declare_parameter("relative_attitude_topic", "/imu/relative_roll_pitch")
+        self.declare_parameter("imu_zero_generation_topic", "/imu/zero_generation")
+        self.declare_parameter("motor_mode_topic", "/motors/control_mode")
+        self.declare_parameter("motor_mode_publish_rate_hz", 5.0)
+        self.declare_parameter("imu_zero_timeout_sec", 1.0)
         self.declare_parameter("control_backend", "socketcan_hat")
         self.declare_parameter("master_id", 253)
 
@@ -189,6 +197,10 @@ class ImuMotorControllerNode(LifecycleNode):
         self._driver = None
         self._motor_status_pub = None
         self._system_e_stop_pub = None
+        self._relative_attitude_pub = None
+        self._imu_zero_generation_pub = None
+        self._motor_mode_pub = None
+        self._motor_mode_timer = None
         self._sub = None
         self._e_stop_sub = None
         self._manual_targets_sub = None
@@ -226,11 +238,15 @@ class ImuMotorControllerNode(LifecycleNode):
         self._latest_pitch = 0.0
         self._last_imu_time = 0.0
         self._last_command_time = 0.0
+        self._imu_sequence = 0
+        self._imu_zero_generation = 0
+        self._imu_zero_sequence = 0
 
         # 控制参数（在 on_configure 中赋值）
         self._command_interval = 0.02
         self._roll_axis_sign = 1.0
         self._pitch_axis_sign = 1.0
+        self._imu_zero_timeout = 1.0
 
         self.get_logger().info("控制节点已创建（等待 configure）")
 
@@ -244,6 +260,20 @@ class ImuMotorControllerNode(LifecycleNode):
 
         # ---- 读取全部参数 ----
         imu_topic = self.get_parameter("imu_topic").get_parameter_value().string_value
+        relative_attitude_topic = (
+            self.get_parameter("relative_attitude_topic").get_parameter_value().string_value
+        )
+        imu_zero_generation_topic = (
+            self.get_parameter("imu_zero_generation_topic").get_parameter_value().string_value
+        )
+        motor_mode_topic = (
+            self.get_parameter("motor_mode_topic").get_parameter_value().string_value
+        )
+        motor_mode_publish_rate_hz = (
+            self.get_parameter("motor_mode_publish_rate_hz")
+            .get_parameter_value()
+            .double_value
+        )
         backend = self.get_parameter("control_backend").get_parameter_value().string_value
         master_id = self.get_parameter("master_id").get_parameter_value().integer_value
 
@@ -323,7 +353,15 @@ class ImuMotorControllerNode(LifecycleNode):
         )
         self._roll_axis_sign = self.get_parameter("roll_axis_sign").get_parameter_value().double_value
         self._pitch_axis_sign = self.get_parameter("pitch_axis_sign").get_parameter_value().double_value
+        self._imu_zero_timeout = (
+            self.get_parameter("imu_zero_timeout_sec").get_parameter_value().double_value
+        )
         motor_status_topic = self.get_parameter("motor_status_topic").get_parameter_value().string_value
+        if motor_mode_publish_rate_hz <= 0.0 or self._imu_zero_timeout <= 0.0:
+            self.get_logger().error(
+                "motor_mode_publish_rate_hz 和 imu_zero_timeout_sec 必须大于 0"
+            )
+            return TransitionCallbackReturn.FAILURE
 
         # ---- 初始化电机运行时状态 ----
         self._lock = threading.Lock()
@@ -335,6 +373,9 @@ class ImuMotorControllerNode(LifecycleNode):
         self._init_complete = False
         self._last_target_change_time = {mid: 0.0 for mid in self._motor_ids}
         self._last_command_time = 0.0
+        self._last_imu_time = 0.0
+        self._imu_sequence = 0
+        self._imu_zero_sequence = 0
 
         # ---- 创建驱动 ----
         self._driver = CyberGearDriver(
@@ -347,7 +388,10 @@ class ImuMotorControllerNode(LifecycleNode):
         )
 
         # ---- 创建子模块 ----
-        self._state_mgr = StateManager(self)
+        self._state_mgr = StateManager(
+            self,
+            state_change_callback=self._on_control_state_changed,
+        )
         self._motor_mgr = MotorManager(self, self._state_mgr)
         self._safety = SafetyMonitor(self, self._state_mgr, self._motor_mgr)
         self._keyboard = KeyboardHandler(
@@ -363,6 +407,24 @@ class ImuMotorControllerNode(LifecycleNode):
         # ---- 创建 ROS 资源 ----
         self._motor_status_pub = self.create_publisher(String, motor_status_topic, 10)
         self._system_e_stop_pub = self.create_publisher(Bool, "/e_stop", 10)
+        state_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self._relative_attitude_pub = self.create_publisher(
+            Vector3Stamped, relative_attitude_topic, 20
+        )
+        self._imu_zero_generation_pub = self.create_publisher(
+            UInt64, imu_zero_generation_topic, state_qos
+        )
+        self._motor_mode_pub = self.create_publisher(
+            String, motor_mode_topic, state_qos
+        )
+        self._motor_mode_timer = self.create_timer(
+            1.0 / motor_mode_publish_rate_hz,
+            self._publish_control_mode,
+        )
         self._sub = self.create_subscription(Imu, imu_topic, self._imu_callback, 20)
         self._e_stop_sub = self.create_subscription(
             Bool, "/e_stop", self._safety.on_e_stop_topic, 10
@@ -407,6 +469,8 @@ class ImuMotorControllerNode(LifecycleNode):
         self.get_logger().info("控制节点正在激活...")
         self._is_active = True
         self._running = True
+        self._publish_control_mode()
+        self._publish_imu_zero_generation()
 
         if self.get_parameter("enable_keyboard").get_parameter_value().bool_value:
             self._keyboard.start()
@@ -423,6 +487,7 @@ class ImuMotorControllerNode(LifecycleNode):
         self.get_logger().info("控制节点正在停用...")
         self._is_active = False
         self._running = False
+        self._publish_control_mode()
         self._motor_mgr.stop_auto_zero()
         self._keyboard.stop()
         self.get_logger().info("控制节点已停用")
@@ -449,7 +514,15 @@ class ImuMotorControllerNode(LifecycleNode):
         self._safety.stop_watchdog()
 
         # 销毁 ROS 资源
-        for pub in [self._motor_status_pub, self._system_e_stop_pub]:
+        if self._motor_mode_timer is not None:
+            self.destroy_timer(self._motor_mode_timer)
+        for pub in [
+            self._motor_status_pub,
+            self._system_e_stop_pub,
+            self._relative_attitude_pub,
+            self._imu_zero_generation_pub,
+            self._motor_mode_pub,
+        ]:
             if pub is not None:
                 self.destroy_publisher(pub)
         for sub in [self._sub, self._e_stop_sub, self._manual_targets_sub]:
@@ -466,6 +539,10 @@ class ImuMotorControllerNode(LifecycleNode):
 
         self._motor_status_pub = None
         self._system_e_stop_pub = None
+        self._relative_attitude_pub = None
+        self._imu_zero_generation_pub = None
+        self._motor_mode_pub = None
+        self._motor_mode_timer = None
         self._sub = None
         self._e_stop_sub = None
         self._manual_targets_sub = None
@@ -493,27 +570,52 @@ class ImuMotorControllerNode(LifecycleNode):
         self, _request: Trigger.Request, response: Trigger.Response
     ) -> Trigger.Response:
         """将当前实时 IMU 姿态设为控制零点。"""
+        response.success, response.message = self.set_imu_zero()
+        if response.success:
+            self.get_logger().info(response.message)
+        else:
+            self.get_logger().warn(response.message)
+        return response
+
+    def set_imu_zero(self) -> Tuple[bool, str]:
+        """以最近一帧有效姿态设置统一零点，并发布零点代次。"""
         if not self._is_active:
-            response.success = False
-            response.message = "控制节点未激活"
-            return response
-        if time.monotonic() - self._last_imu_time > 1.0:
-            response.success = False
-            response.message = "IMU 数据已超时，未执行归零"
-            return response
+            return False, "控制节点未激活，未执行 IMU 归零"
+        now = time.monotonic()
         with self._lock:
+            if self._last_imu_time <= 0.0 or now - self._last_imu_time > self._imu_zero_timeout:
+                return False, "IMU 数据无效或已超时，未执行归零"
             self._imu_zero_roll = self._latest_roll
             self._imu_zero_pitch = self._latest_pitch
+            self._imu_zero_generation += 1
+            self._imu_zero_sequence = self._imu_sequence
             roll_deg = math.degrees(self._imu_zero_roll)
             pitch_deg = math.degrees(self._imu_zero_pitch)
-        self.get_logger().info(
-            f"IMU 姿态归零已完成: roll={roll_deg:.2f}°, pitch={pitch_deg:.2f}°"
+        self._publish_imu_zero_generation()
+        return (
+            True,
+            f"IMU 已归零: roll={roll_deg:.2f}°, pitch={pitch_deg:.2f}°",
         )
-        response.success = True
-        response.message = (
-            f"IMU 已归零: roll={roll_deg:.2f}°, pitch={pitch_deg:.2f}°"
+
+    def _publish_imu_zero_generation(self) -> None:
+        if self._imu_zero_generation_pub is None:
+            return
+        msg = UInt64()
+        msg.data = self._imu_zero_generation
+        self._imu_zero_generation_pub.publish(msg)
+
+    def _on_control_state_changed(self, _state: ControllerState) -> None:
+        self._publish_control_mode()
+
+    def _publish_control_mode(self) -> None:
+        if self._motor_mode_pub is None or self._state_mgr is None:
+            return
+        msg = String()
+        msg.data = public_control_mode(
+            self._state_mgr.state,
+            active=self._is_active,
         )
-        return response
+        self._motor_mode_pub.publish(msg)
 
     def _on_motor_zero_service(
         self, _request: Trigger.Request, response: Trigger.Response
@@ -573,6 +675,7 @@ class ImuMotorControllerNode(LifecycleNode):
         self.get_logger().info("控制节点正在关闭...")
         self._is_active = False
         self._running = False
+        self._publish_control_mode()
 
         if self._motor_mgr is not None:
             self._motor_mgr.stop_auto_zero()
@@ -590,7 +693,18 @@ class ImuMotorControllerNode(LifecycleNode):
         if self._keyboard is not None:
             self._keyboard.stop()
 
-        for pub in [self._motor_status_pub, self._system_e_stop_pub]:
+        if self._motor_mode_timer is not None:
+            try:
+                self.destroy_timer(self._motor_mode_timer)
+            except Exception:
+                pass
+        for pub in [
+            self._motor_status_pub,
+            self._system_e_stop_pub,
+            self._relative_attitude_pub,
+            self._imu_zero_generation_pub,
+            self._motor_mode_pub,
+        ]:
             if pub is not None:
                 try:
                     self.destroy_publisher(pub)
@@ -623,39 +737,46 @@ class ImuMotorControllerNode(LifecycleNode):
 
     def _imu_callback(self, msg: Imu) -> None:
         """IMU 数据订阅回调：解析姿态、计算目标位置、写入电机。"""
-        self._last_imu_time = time.monotonic()
-
         if not self._is_active or not self._running:
             return
 
+        now = time.monotonic()
         try:
-            from .imu_protocol import euler_from_quaternion
-
-            roll, pitch, _ = euler_from_quaternion(
-                msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w
-            )
-        except Exception as exc:
-            self.get_logger().error(f"解析 IMU 四元数时发生异常: {exc}")
+            with self._lock:
+                roll, pitch, roll_rel, pitch_rel = corrected_relative_roll_pitch(
+                    msg.orientation.x,
+                    msg.orientation.y,
+                    msg.orientation.z,
+                    msg.orientation.w,
+                    roll_axis_sign=self._roll_axis_sign,
+                    pitch_axis_sign=self._pitch_axis_sign,
+                    zero_roll=self._imu_zero_roll,
+                    zero_pitch=self._imu_zero_pitch,
+                )
+                self._latest_roll = roll
+                self._latest_pitch = pitch
+                self._last_imu_time = now
+                self._imu_sequence += 1
+        except ValueError as exc:
+            self.get_logger().warn(f"忽略无效 IMU 四元数: {exc}")
             return
 
-        roll *= self._roll_axis_sign
-        pitch *= self._pitch_axis_sign
-        self._latest_roll = roll
-        self._latest_pitch = pitch
+        relative_msg = Vector3Stamped()
+        relative_msg.header = msg.header
+        relative_msg.vector.x = roll_rel
+        relative_msg.vector.y = pitch_rel
+        relative_msg.vector.z = 0.0
+        self._relative_attitude_pub.publish(relative_msg)
 
         # MANUAL 模式也持续更新实时姿态，确保键盘 z 和 /imu/set_zero
         # 使用的是真实当前姿态，而不是启动时的默认 0。
         if not self._state_mgr.is_auto_running():
             return
 
-        now = time.monotonic()
         if now - self._last_command_time < self._command_interval:
             return
 
         with self._lock:
-            roll_rel = roll - self._imu_zero_roll
-            pitch_rel = pitch - self._imu_zero_pitch
-
             if abs(roll_rel) < self._deadband:
                 roll_rel = 0.0
             if abs(pitch_rel) < self._deadband:

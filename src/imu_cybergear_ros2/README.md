@@ -19,6 +19,8 @@
 | **断线重连** | IMU 串口 / CAN 总线断开后自动指数退避重连 |
 | **低 CPU** | 空闲时不空转，CPU 占用率接近 0% |
 | **状态机** | 统一生命周期管理（7 状态：AUTO/MANUAL/急停/错误等） |
+| **统一相对姿态** | `/imu/relative_roll_pitch` 发布归一化、轴向修正和统一归零后的 roll/pitch（rad） |
+| **公开控制模式** | `/motors/control_mode` 可靠、transient-local 发布稳定状态并发送心跳 |
 
 ## 系统架构
 
@@ -188,9 +190,13 @@ ros2 service call /e_stop std_srvs/srv/Trigger
 # 启用电机关闭
 ros2 service call /enable_motor std_srvs/srv/SetBool "data: false"
 
-# 恢复运控模式
+# 恢复运控模式；成功后固定进入 MANUAL，不直接恢复 AUTO
 ros2 service call /enable_motor std_srvs/srv/SetBool "data: true"
 ```
+
+键盘 `z` 与 `/imu/set_zero` 使用同一归零方法和相同的新鲜度检查。归零成功
+会递增 `/imu/zero_generation`，让风扇管理器丢弃归零前姿态并清除已有 AUTO
+请求。无效、零范数、NaN/Inf 或过旧的姿态不会刷新有效 IMU 时间。
 
 ### 4.3 动态修改参数
 
@@ -217,6 +223,20 @@ ros2 topic echo /motor/status
 # 示例: "1,0.5234,-0.1000,1.200,35.0,运行,0x00"
 # 含义: 电机ID,位置(rad),速度(rad/s),力矩(Nm),温度(°C),模式,故障码(hex)
 ```
+
+控制协调接口：
+
+```text
+/imu/relative_roll_pitch  geometry_msgs/msg/Vector3Stamped
+/imu/zero_generation      std_msgs/msg/UInt64
+/motors/control_mode      std_msgs/msg/String
+```
+
+相对姿态的 `vector.x/y` 为 roll/pitch（rad），`vector.z=0`，并保留原始
+IMU header；即使电机处于 MANUAL，也会继续发布有效姿态。公开模式只使用
+`MANUAL`、`AUTO`、`EMERGENCY_STOP`、`DISABLED`、`ERROR`。
+
+当前这些候选接口仅完成纯软件验证，未访问真实 IMU、CAN 或电机。
 
 ## 5. 文档导航
 

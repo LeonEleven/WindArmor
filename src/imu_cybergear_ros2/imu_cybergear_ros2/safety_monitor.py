@@ -178,9 +178,13 @@ class SafetyMonitor:
             return response
         if request.data:
             self._node.get_logger().info("收到 /enable_motor 启用指令，尝试恢复运控模式")
-            self._motor_mgr.hold_current_targets_and_recover()
-            response.success = True
-            response.message = "电机已恢复运控模式"
+            response.success = self._motor_mgr.hold_current_targets_and_recover()
+            if response.success:
+                self._state.transition_to(ControllerState.MANUAL_RUNNING)
+                response.message = "电机已恢复至 MANUAL 运控模式"
+            else:
+                response.message = "部分电机恢复失败，控制状态未恢复"
+                self._node.get_logger().error(response.message)
         else:
             self._node.get_logger().warn("收到 /enable_motor 停用指令，执行急停")
             self.emergency_stop()

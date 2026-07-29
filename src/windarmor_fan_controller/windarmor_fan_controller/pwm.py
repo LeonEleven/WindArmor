@@ -1,6 +1,8 @@
 """与硬件无关的 PWM 换算与限幅逻辑。"""
 
+import math
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -23,3 +25,42 @@ class PwmRange:
         safe_pwm = self.clamp(pwm_us)
         span = self.maximum_us - self.minimum_us
         return ((safe_pwm - self.minimum_us) / span) * 2.0 - 1.0
+
+
+class FanCommandGate:
+    """底层 enabled 锁存和命令看门狗的纯状态逻辑。"""
+
+    def __init__(self, *, enabled: bool = True) -> None:
+        self.enabled = bool(enabled)
+        self.last_command_time: Optional[float] = None
+        self.timed_out = False
+
+    def accept(self, now: float) -> bool:
+        if not self.enabled or not math.isfinite(now):
+            return False
+        self.last_command_time = now
+        self.timed_out = False
+        return True
+
+    def disable(self) -> None:
+        self.enabled = False
+        self.last_command_time = None
+        self.timed_out = False
+
+    def enable(self) -> None:
+        self.enabled = True
+        self.last_command_time = None
+        self.timed_out = False
+
+    def check_timeout(self, now: float, timeout: float) -> bool:
+        if (
+            not self.enabled
+            or timeout <= 0.0
+            or self.last_command_time is None
+        ):
+            return False
+        if now - self.last_command_time <= timeout:
+            return False
+        self.last_command_time = None
+        self.timed_out = True
+        return True
