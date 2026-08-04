@@ -176,6 +176,14 @@ def test_auto_callbacks_only_replace_desired_and_frequency_does_not_advance(syst
     assert node._current_targets == pytest.approx({1: 0.08, 2: -0.08})
 
 
+def test_auto_targets_remain_subject_to_motor_soft_limits(system) -> None:
+    node, state, manager = system
+    state.transition_to(ControllerState.AUTO_RUNNING)
+    assert manager.set_auto_targets({1: 2.0, 2: -2.0})
+    assert node._desired_targets == {1: 1.0, 2: -1.0}
+    assert position_writes(node) == []
+
+
 @pytest.mark.parametrize("message_count", [1, 2, 5])
 def test_10_20_50_hz_auto_input_has_same_100ms_progress(message_count) -> None:
     node, state, manager = build_system()

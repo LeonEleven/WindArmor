@@ -13,6 +13,7 @@ ALLOWED_MOTOR_MODES = {
     "DISABLED",
     "ERROR",
 }
+ALLOWED_RESPONSE_CURVES = {"linear", "smoothstep", "quadratic"}
 
 
 class FanControlState(str, Enum):
@@ -35,6 +36,7 @@ class FanControlConfig:
     fan_deadband_on_deg: float = 5.0
     fan_deadband_off_deg: float = 3.0
     fan_full_scale_deg: float = 45.0
+    fan_response_curve: str = "smoothstep"
     rise_step_pwm_us: int = 10
     fall_step_pwm_us: int = 20
     imu_timeout_sec: float = 0.2
@@ -45,16 +47,27 @@ class FanControlConfig:
 
     def validate(self) -> None:
         values = (
+            self.min_pwm_us,
+            self.max_pwm_us,
+            self.fan_stop_pwm_us,
+            self.fan_start_pwm_us,
+            self.fan_auto_max_pwm_us,
             self.fan_deadband_on_deg,
             self.fan_deadband_off_deg,
             self.fan_full_scale_deg,
+            self.rise_step_pwm_us,
+            self.fall_step_pwm_us,
             self.imu_timeout_sec,
             self.manual_command_timeout_sec,
             self.motor_mode_timeout_sec,
             self.fan_enabled_timeout_sec,
         )
         if not all(math.isfinite(value) for value in values):
-            raise ValueError("风扇控制浮点参数必须为有限值")
+            raise ValueError("风扇控制数值参数必须为有限值")
+        if self.fan_response_curve not in ALLOWED_RESPONSE_CURVES:
+            raise ValueError(
+                "fan_response_curve 必须是 linear、smoothstep 或 quadratic"
+            )
         if self.min_pwm_us >= self.max_pwm_us:
             raise ValueError("min_pwm_us 必须小于 max_pwm_us")
         if not (
@@ -120,14 +133,30 @@ def update_hysteresis(
     return activity_deg >= on_deg
 
 
+def apply_response_curve(normalized_activity: float, curve_name: str) -> float:
+    """将归一化活动量映射到目标比例；不依赖 ROS 或硬件状态。"""
+    if not math.isfinite(normalized_activity):
+        raise ValueError("归一化风扇活动量必须为有限值")
+    if curve_name not in ALLOWED_RESPONSE_CURVES:
+        raise ValueError(
+            "fan_response_curve 必须是 linear、smoothstep 或 quadratic"
+        )
+    x = max(0.0, min(1.0, normalized_activity))
+    if curve_name == "linear":
+        return x
+    if curve_name == "smoothstep":
+        return x * x * (3.0 - 2.0 * x)
+    return x * x
+
+
 def activity_to_pwm(activity_deg: float, running: bool, config: FanControlConfig) -> int:
     if not running:
         return config.fan_stop_pwm_us
     ratio = (activity_deg - config.fan_deadband_on_deg) / (
         config.fan_full_scale_deg - config.fan_deadband_on_deg
     )
-    ratio = max(0.0, min(1.0, ratio))
-    pwm = config.fan_start_pwm_us + ratio * (
+    curve_value = apply_response_curve(ratio, config.fan_response_curve)
+    pwm = config.fan_start_pwm_us + curve_value * (
         config.fan_auto_max_pwm_us - config.fan_start_pwm_us
     )
     return int(round(pwm))

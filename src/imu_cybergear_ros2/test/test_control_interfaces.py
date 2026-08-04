@@ -16,8 +16,8 @@ def test_relative_attitude_precedes_motor_specific_processing() -> None:
     timestamp_update = callback.index("self._last_imu_time = now")
     publish = callback.index("self._relative_attitude_pub.publish(relative_msg)")
     auto_gate = callback.index("if not self._state_mgr.is_auto_running()")
-    deadband = callback.index("if abs(roll_rel) < self._deadband")
-    assert validated < timestamp_update < publish < auto_gate < deadband
+    gain_application = callback.index("auto_attitude_commands(")
+    assert validated < timestamp_update < publish < auto_gate < gain_application
     assert "relative_msg.header = msg.header" in callback
     assert "relative_msg.vector.z = 0.0" in callback
 
@@ -98,9 +98,45 @@ def test_unified_motion_defaults_and_protected_motor_mapping() -> None:
         "target_reached_tolerance_rad: 0.001",
         "manual_repeat_gap_sec: 0.8",
         "manual_repeat_dt_max_sec: 0.08",
+        "auto_roll_gain: 1.0",
+        "auto_pitch_gain: 1.0",
         "motor_ids: [4, 3, 2, 1]",
         "motor_signs: [-1.0, 1.0, -1.0, 1.0]",
         "motor_limits_min: [-1.57, -1.57, -1.57, 0.0]",
         "motor_limits_max: [0.0, 1.57, 1.57, 1.57]",
     ):
         assert line in config
+
+
+def test_auto_gain_is_confined_to_auto_target_branch() -> None:
+    source = read_source("imu_motor_controller_node.py")
+    callback = source[source.index("    def _imu_callback") :]
+    publish = callback.index("self._relative_attitude_pub.publish(relative_msg)")
+    gain = callback.index("auto_attitude_commands(")
+    targets = callback.index("self._motor_mgr.set_auto_targets(targets)")
+    assert publish < gain < targets
+    assert "relative_msg.vector.x = roll_rel" in callback[:gain]
+    assert "relative_msg.vector.y = pitch_rel" in callback[:gain]
+
+    manager = read_source("motor_manager.py")
+    manual = manager[
+        manager.index("    def manual_step") :
+        manager.index("    def clear_manual_repeat_state")
+    ]
+    home = manager[
+        manager.index("    def go_all_to_zero") :
+        manager.index("    def stop_auto_zero")
+    ]
+    assert "auto_roll_gain" not in manual + home
+    assert "auto_pitch_gain" not in manual + home
+
+
+def test_verified_auto_direction_mapping_remains_unchanged() -> None:
+    source = read_source("imu_motor_controller_node.py")
+    callback = source[source.index("    def _imu_callback") :]
+    assert 'cfg.control_axis == "roll_left"' in callback
+    assert "max(0.0, -alpha_deg)" in callback
+    assert 'cfg.control_axis == "roll_right"' in callback
+    assert "max(0.0, alpha_deg)" in callback
+    assert 'cfg.control_axis == "pitch"' in callback
+    assert "targets[cfg.motor_id] = cfg.sign * deg_to_rad(deg)" in callback

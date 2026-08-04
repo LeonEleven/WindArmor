@@ -62,7 +62,12 @@ from .cybergear_driver import CyberGearDriver
 from .imu_protocol import corrected_relative_roll_pitch
 from .keyboard_handler import KeyboardHandler
 from .motor_manager import MotorManager, clamp, deg_to_rad
-from .motor_motion import MotionParameters, validate_motion_parameters
+from .motor_motion import (
+    MotionParameters,
+    auto_attitude_commands,
+    validate_auto_attitude_gains,
+    validate_motion_parameters,
+)
 from .safety_monitor import SafetyMonitor
 
 
@@ -143,6 +148,8 @@ class ImuMotorControllerNode(LifecycleNode):
         # 控制参数
         self.declare_parameter("default_speed", 10.0)
         self.declare_parameter("deadband_rad", 0.02)
+        self.declare_parameter("auto_roll_gain", 1.0)
+        self.declare_parameter("auto_pitch_gain", 1.0)
         self.declare_parameter("max_position_step", 0.4)
         self.declare_parameter("command_interval_sec", 0.02)
         self.declare_parameter("manual_motion_speed_rad_s", 4.0)
@@ -262,6 +269,8 @@ class ImuMotorControllerNode(LifecycleNode):
         self._motion_params = None
         self._roll_axis_sign = 1.0
         self._pitch_axis_sign = 1.0
+        self._auto_roll_gain = 1.0
+        self._auto_pitch_gain = 1.0
         self._imu_zero_timeout = 1.0
 
         self.get_logger().info("控制节点已创建（等待 configure）")
@@ -349,6 +358,19 @@ class ImuMotorControllerNode(LifecycleNode):
         # 控制参数
         self._default_speed = self.get_parameter("default_speed").get_parameter_value().double_value
         self._deadband = self.get_parameter("deadband_rad").get_parameter_value().double_value
+        self._auto_roll_gain = (
+            self.get_parameter("auto_roll_gain").get_parameter_value().double_value
+        )
+        self._auto_pitch_gain = (
+            self.get_parameter("auto_pitch_gain").get_parameter_value().double_value
+        )
+        try:
+            validate_auto_attitude_gains(
+                self._auto_roll_gain, self._auto_pitch_gain
+            )
+        except ValueError as exc:
+            self.get_logger().error(f"电机 AUTO 姿态增益非法: {exc}")
+            return TransitionCallbackReturn.FAILURE
         self._max_step = self.get_parameter("max_position_step").get_parameter_value().double_value
         self._command_interval = self.get_parameter("command_interval_sec").get_parameter_value().double_value
         self._manual_motion_speed = (
@@ -850,13 +872,15 @@ class ImuMotorControllerNode(LifecycleNode):
         if not self._state_mgr.is_auto_running():
             return
 
-        if abs(roll_rel) < self._deadband:
-            roll_rel = 0.0
-        if abs(pitch_rel) < self._deadband:
-            pitch_rel = 0.0
-
-        alpha_deg = clamp(math.degrees(roll_rel), -90.0, 90.0)
-        beta_deg = clamp(math.degrees(pitch_rel), -90.0, 90.0)
+        roll_command, pitch_command = auto_attitude_commands(
+            roll_rel,
+            pitch_rel,
+            deadband_rad=self._deadband,
+            roll_gain=self._auto_roll_gain,
+            pitch_gain=self._auto_pitch_gain,
+        )
+        alpha_deg = math.degrees(roll_command)
+        beta_deg = math.degrees(pitch_command)
 
         targets = {}
         for cfg in self._motor_configs:

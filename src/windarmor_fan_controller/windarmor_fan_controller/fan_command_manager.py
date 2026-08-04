@@ -44,6 +44,9 @@ class FanCommandManager(Node):
             fan_full_scale_deg=float(
                 self.get_parameter("fan_full_scale_deg").value
             ),
+            fan_response_curve=str(
+                self.get_parameter("fan_response_curve").value
+            ),
             rise_step_pwm_us=int(self.get_parameter("rise_step_pwm_us").value),
             fall_step_pwm_us=int(self.get_parameter("fall_step_pwm_us").value),
             imu_timeout_sec=float(self.get_parameter("imu_timeout_sec").value),
@@ -140,6 +143,7 @@ class FanCommandManager(Node):
         self.declare_parameter("fan_deadband_on_deg", 5.0)
         self.declare_parameter("fan_deadband_off_deg", 3.0)
         self.declare_parameter("fan_full_scale_deg", 45.0)
+        self.declare_parameter("fan_response_curve", "smoothstep")
         self.declare_parameter("auto_enabled_at_start", False)
         self.declare_parameter("control_rate_hz", 20.0)
         self.declare_parameter("status_publish_rate_hz", 5.0)

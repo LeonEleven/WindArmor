@@ -34,6 +34,10 @@ fan_command_manager:
     fan_deadband_on_deg: 5.0
     fan_deadband_off_deg: 3.0
     fan_full_scale_deg: 45.0
+
+    # AUTO 活动角到目标 PWM 的归一化响应曲线。
+    # 支持：linear、smoothstep、quadratic。
+    fan_response_curve: "smoothstep"
     control_rate_hz: 20.0
     status_publish_rate_hz: 5.0
     rise_step_pwm_us: 10

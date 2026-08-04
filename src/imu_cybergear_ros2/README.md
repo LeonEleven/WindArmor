@@ -194,6 +194,8 @@ allowed_step = min(
 manual_motion_speed_rad_s: 4.0
 auto_motion_speed_rad_s: 4.0
 home_motion_speed_rad_s: 4.0
+auto_roll_gain: 1.0
+auto_pitch_gain: 1.0
 ```
 
 这些值是软件目标位置变化率，不等于负载下实测机械角速度，当前
@@ -209,6 +211,13 @@ CyberGear 的位置模式速度上限初值。`+/-` 调整选中电机的这个�
 AUTO 的 IMU 回调只计算和更新最新期望目标，固定推进器可以在两帧新鲜 IMU
 消息之间继续追赶，因此每秒最大推进量不再直接取决于 IMU 回调频率。IMU
 超时退出 AUTO 时会立即丢弃未完成的旧姿态目标并保持最近命令位置。
+
+`auto_roll_gain` 和 `auto_pitch_gain` 在既有姿态死区之后放大或缩小对应轴的
+电机 AUTO 目标幅度，默认 `1.0` 保持原比例，`0.0` 可关闭对应轴。增益后的
+目标仍受正负 90° AUTO 范围、既有方向映射、电机软限位、统一推进器和 AUTO
+速度限制约束。增益控制目标角度幅度；`auto_motion_speed_rad_s` 控制追赶目标
+的最大软件速度。增益不应用于 `/imu/relative_roll_pitch`，因而不会改变风扇
+姿态输入，也不用于 MANUAL、HOME、绝对目标、快捷目标或机械零点流程。
 
 `h` 使用同一个推进器和 `home_motion_speed_rad_s`，不再创建独立快速定时器。
 在 AUTO 中按 `h` 会先显式切回 MANUAL；任意有效 MANUAL 运动、绝对目标、

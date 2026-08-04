@@ -34,6 +34,43 @@ class MotionParameters:
     manual_speed_step: float
 
 
+def validate_auto_attitude_gains(roll_gain: float, pitch_gain: float) -> None:
+    """验证 AUTO 姿态目标增益；负值会反转已确认的机械方向。"""
+    if not math.isfinite(roll_gain) or not math.isfinite(pitch_gain):
+        raise ValueError("AUTO 姿态增益必须为有限值")
+    if roll_gain < 0.0 or pitch_gain < 0.0:
+        raise ValueError("AUTO 姿态增益不得小于 0")
+
+
+def auto_attitude_commands(
+    relative_roll_rad: float,
+    relative_pitch_rad: float,
+    *,
+    deadband_rad: float,
+    roll_gain: float,
+    pitch_gain: float,
+) -> tuple[float, float]:
+    """在现有死区后应用 AUTO 增益，并限制到正负 90 度。"""
+    values = (relative_roll_rad, relative_pitch_rad, deadband_rad)
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("AUTO 姿态计算输入必须为有限值")
+    if deadband_rad < 0.0:
+        raise ValueError("姿态死区不得小于 0")
+    validate_auto_attitude_gains(roll_gain, pitch_gain)
+
+    roll_after_deadband = (
+        0.0 if abs(relative_roll_rad) < deadband_rad else relative_roll_rad
+    )
+    pitch_after_deadband = (
+        0.0 if abs(relative_pitch_rad) < deadband_rad else relative_pitch_rad
+    )
+    limit = math.pi / 2.0
+    return (
+        max(-limit, min(limit, roll_after_deadband * roll_gain)),
+        max(-limit, min(limit, pitch_after_deadband * pitch_gain)),
+    )
+
+
 def validate_motion_parameters(params: MotionParameters) -> None:
     """验证参数有限性和相互关系，非法时抛出 ``ValueError``。"""
     values = {

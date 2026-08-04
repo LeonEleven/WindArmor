@@ -1,4 +1,5 @@
 import math
+from pathlib import Path
 
 import pytest
 
@@ -6,11 +7,19 @@ from windarmor_fan_controller.fan_control import (
     FanControlConfig,
     FanControlCore,
     FanControlState,
+    apply_response_curve,
     activity_to_pwm,
     attitude_activities,
     slew_pwm,
     update_hysteresis,
 )
+
+
+CURVE_EXPECTATIONS = {
+    "linear": (0.0, 0.25, 0.5, 0.75, 1.0),
+    "smoothstep": (0.0, 0.15625, 0.5, 0.84375, 1.0),
+    "quadratic": (0.0, 0.0625, 0.25, 0.5625, 1.0),
+}
 
 
 def enabled_core(*, require_motor: bool = False) -> FanControlCore:
@@ -60,6 +69,79 @@ def test_hysteresis_mapping_and_slew() -> None:
     assert slew_pwm(1200, 800, 10, 20) == 1180
 
 
+@pytest.mark.parametrize("curve_name", CURVE_EXPECTATIONS)
+def test_response_curve_exact_values_clamps_and_is_finite(curve_name) -> None:
+    inputs = (0.0, 0.25, 0.5, 0.75, 1.0)
+    outputs = [apply_response_curve(value, curve_name) for value in inputs]
+    assert outputs == pytest.approx(CURVE_EXPECTATIONS[curve_name])
+    assert apply_response_curve(-1.0, curve_name) == 0.0
+    assert apply_response_curve(2.0, curve_name) == 1.0
+    assert all(math.isfinite(value) and 0.0 <= value <= 1.0 for value in outputs)
+    assert outputs == sorted(outputs)
+
+
+@pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf])
+def test_response_curve_rejects_non_finite_input(bad) -> None:
+    with pytest.raises(ValueError):
+        apply_response_curve(bad, "smoothstep")
+
+
+def test_invalid_response_curve_is_rejected() -> None:
+    with pytest.raises(ValueError):
+        apply_response_curve(0.5, "cubic")
+    with pytest.raises(ValueError):
+        FanControlConfig(fan_response_curve="cubic").validate()
+
+
+def test_response_curve_shapes_relative_to_linear() -> None:
+    assert apply_response_curve(0.25, "smoothstep") < apply_response_curve(
+        0.25, "linear"
+    )
+    assert apply_response_curve(0.5, "smoothstep") == apply_response_curve(
+        0.5, "linear"
+    )
+    assert apply_response_curve(0.75, "smoothstep") > apply_response_curve(
+        0.75, "linear"
+    )
+    for x in (0.01, 0.25, 0.5, 0.75, 0.99):
+        assert apply_response_curve(x, "quadratic") <= apply_response_curve(
+            x, "linear"
+        )
+
+
+@pytest.mark.parametrize(
+    ("curve_name", "activity_deg", "expected_pwm"),
+    [
+        ("linear", 15.0, 1250),
+        ("smoothstep", 15.0, 1231),
+        ("smoothstep", 25.0, 1300),
+        ("smoothstep", 35.0, 1369),
+        ("quadratic", 25.0, 1250),
+    ],
+)
+def test_activity_to_pwm_uses_selected_curve_and_existing_rounding(
+    curve_name, activity_deg, expected_pwm
+) -> None:
+    config = FanControlConfig(fan_response_curve=curve_name)
+    assert activity_to_pwm(activity_deg, True, config) == expected_pwm
+
+
+def test_pwm_mapping_boundaries_and_limits_for_every_curve() -> None:
+    for curve_name in CURVE_EXPECTATIONS:
+        config = FanControlConfig(fan_response_curve=curve_name)
+        assert activity_to_pwm(5.0, True, config) == 1200
+        assert activity_to_pwm(45.0, True, config) == 1400
+        assert activity_to_pwm(90.0, True, config) == 1400
+        assert activity_to_pwm(20.0, False, config) == 800
+
+
+def test_default_config_uses_smoothstep_without_changing_pwm_limits() -> None:
+    config = FanControlConfig()
+    assert config.fan_response_curve == "smoothstep"
+    assert config.fan_auto_max_pwm_us == 1400
+    assert config.max_pwm_us == 2200
+
+
 @pytest.mark.parametrize(
     "overrides",
     [
@@ -70,6 +152,9 @@ def test_hysteresis_mapping_and_slew() -> None:
         {"rise_step_pwm_us": 0},
         {"imu_timeout_sec": 0.0},
         {"manual_command_timeout_sec": math.inf},
+        {"fan_stop_pwm_us": math.inf},
+        {"fan_deadband_on_deg": math.nan},
+        {"fan_response_curve": "LINEAR"},
     ],
 )
 def test_invalid_configuration_is_rejected(overrides) -> None:
@@ -188,6 +273,26 @@ def test_auto_waits_for_post_enable_pose_and_then_slews() -> None:
     assert output.command_pwm == (810, 800)
 
 
+def test_both_fans_use_same_curve_with_independent_hysteresis() -> None:
+    core = FanControlCore(
+        FanControlConfig(
+            require_motor_mode_for_manual=True,
+            fan_response_curve="quadratic",
+        )
+    )
+    core.update_fan_enabled(True, 0.0)
+    core.update_motor_mode("AUTO", 0.0)
+    core.update_pose(0.0, 0.0, 0.0)
+    assert core.request_auto(True, 0.01)[0]
+    core.update_pose(math.radians(-25.0), math.radians(15.0), 0.02)
+    output = core.step(0.03)
+    assert output.auto_target_pwm == (1250, 1212)
+
+    core.update_pose(math.radians(-4.0), 0.0, 0.04)
+    output = core.step(0.05)
+    assert output.auto_target_pwm == (1200, 800)
+
+
 def test_auto_condition_loss_clears_request_and_stops_immediately() -> None:
     core = auto_ready_core()
     assert core.request_auto(True, 0.01)[0]
@@ -298,3 +403,12 @@ def test_unified_manual_stops_when_motor_mode_times_out() -> None:
     output = core.step(1.01)
     assert output.state == FanControlState.SAFE_STOP
     assert output.command_pwm == (800, 800)
+
+
+def test_yaml_defaults_select_smoothstep_and_preserve_pwm_limits() -> None:
+    config = (
+        Path(__file__).parents[1] / "config" / "fan_params.yaml"
+    ).read_text(encoding="utf-8")
+    assert 'fan_response_curve: "smoothstep"' in config
+    assert "fan_auto_max_pwm_us: 1400" in config
+    assert "max_pwm_us: 2200" in config

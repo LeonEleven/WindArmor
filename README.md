@@ -57,6 +57,8 @@ manual_step_deg: 3.0
 manual_repeat_gap_sec: 0.8
 manual_repeat_dt_max_sec: 0.08
 default_speed: 10.0
+auto_roll_gain: 1.0
+auto_pitch_gain: 1.0
 ```
 
 三个 `*_motion_speed_rad_s` 是软件目标位置变化率，不保证等于负载下实测机械
@@ -75,6 +77,13 @@ AUTO 的 IMU 回调只更新最新期望目标，推进速度不再由 IMU 消�
 `auto_motion_speed_rad_s` 限速追赶。`h` 不再使用独立快速定时器；在 AUTO
 中按 `h` 会先退出 AUTO、进入 MANUAL，再由统一推进器按
 `home_motion_speed_rad_s` 回零。
+
+`auto_roll_gain` 和 `auto_pitch_gain` 控制电机 AUTO 目标角度的幅度，默认
+`1.0` 保持原比例。增益在既有姿态死区之后应用，结果仍经过正负 90° AUTO
+范围、既有电机方向映射、软限位和统一推进器；`auto_motion_speed_rad_s`
+控制电机追赶目标的最大软件速度，两者不是同一概念。增益只用于电机 AUTO
+目标，不改变 `/imu/relative_roll_pitch` 的真实相对姿态语义，因此不改变风扇
+姿态输入，也不影响 MANUAL 或 HOME。
 
 ### 双风扇
 
@@ -324,6 +333,29 @@ ros2 service call /fans/auto_enable std_srvs/srv/SetBool "{data: true}"
 AUTO 使用 `max()` 合成姿态活动量：正负 pitch 都同时提高左右目标；左倾只
 增加左侧 roll 分量，右倾只增加右侧 roll 分量。任一姿态、电机模式或底层
 状态超时都会立即停止、清除 AUTO 请求，条件恢复后也不会自动重新启用。
+
+活动角到 AUTO 目标 PWM 的响应曲线由以下参数选择：
+
+```yaml
+fan_response_curve: "smoothstep"
+```
+
+支持 `linear`（线性）、`smoothstep`（`x²(3-2x)`，端点斜率为零）和
+`quadratic`（`x²`，中间区间不高于线性）。默认 `smoothstep` 只改变“当前
+活动角对应多少目标 PWM”；`control_rate_hz`、`rise_step_pwm_us` 和
+`fall_step_pwm_us` 仍决定实际输出以多快速度接近目标。三种曲线均尚未完成
+本轮实机恢复能力验证，不能据此认定某一曲线适合当前机器人。
+
+`fan_full_scale_deg: 45.0` 是活动角达到 `fan_auto_max_pwm_us` 的配置点，45°
+只是当前默认候选值。它不是风扇启动角、机械极限、由质量/重心/推力/力臂模型
+计算出的必然值，也不是已证明可恢复机器人的最大倾角；后续需要结合实测推力
+和结构重新标定。调小会让较小倾角更早达到自动最大目标，调大会让目标在更大
+倾角范围内逐渐增加。
+
+`fan_auto_max_pwm_us` 仍为 `1400`；底层 `max_pwm_us` 仍为 `2200`，后者只是
+软件允许范围上限，不表示 AUTO 已获准或已标定到 2200。本次默认曲线改为
+`smoothstep`，仅完成软件构建和纯软件测试，新增曲线等待单独授权的实机验证；
+这不覆盖此前已经完成的基础联动实机验证记录。
 
 系统急停：
 

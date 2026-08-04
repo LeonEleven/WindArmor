@@ -109,6 +109,11 @@ imu_motor_controller_node:
     # 小于该值的姿态变化会被忽略，避免抖动。
     deadband_rad: 0.02
 
+    # AUTO 模式姿态目标增益。
+    # 1.0 保持真实相对姿态与电机目标之间的当前比例。
+    auto_roll_gain: 1.0
+    auto_pitch_gain: 1.0
+
     # 任何单周期允许的绝对位置变化保护上限（rad/次）。
     max_position_step: 0.4
 

@@ -6,8 +6,10 @@ from imu_cybergear_ros2.motor_motion import (
     MotionParameters,
     MotionSource,
     advance_target,
+    auto_attitude_commands,
     manual_event_increment,
     speed_for_source,
+    validate_auto_attitude_gains,
     validate_motion_parameters,
 )
 
@@ -55,6 +57,80 @@ def test_motion_parameters_and_mode_speeds() -> None:
     assert speed_for_source(MotionSource.AUTO, params) == 4.0
     assert speed_for_source(MotionSource.HOME, params) == 4.0
     assert speed_for_source(MotionSource.IDLE, params) == 0.0
+
+
+def test_default_auto_gains_preserve_both_axes() -> None:
+    roll, pitch = auto_attitude_commands(
+        math.radians(10.0),
+        math.radians(-20.0),
+        deadband_rad=0.02,
+        roll_gain=1.0,
+        pitch_gain=1.0,
+    )
+    assert math.degrees(roll) == pytest.approx(10.0)
+    assert math.degrees(pitch) == pytest.approx(-20.0)
+
+
+def test_auto_gains_scale_only_their_own_axes() -> None:
+    roll_only = auto_attitude_commands(
+        math.radians(20.0),
+        math.radians(20.0),
+        deadband_rad=0.02,
+        roll_gain=1.25,
+        pitch_gain=1.0,
+    )
+    pitch_only = auto_attitude_commands(
+        math.radians(20.0),
+        math.radians(20.0),
+        deadband_rad=0.02,
+        roll_gain=1.0,
+        pitch_gain=1.25,
+    )
+    assert tuple(map(math.degrees, roll_only)) == pytest.approx((25.0, 20.0))
+    assert tuple(map(math.degrees, pitch_only)) == pytest.approx((20.0, 25.0))
+
+
+def test_zero_auto_gain_disables_only_corresponding_axis() -> None:
+    roll, pitch = auto_attitude_commands(
+        0.5,
+        -0.5,
+        deadband_rad=0.02,
+        roll_gain=0.0,
+        pitch_gain=1.0,
+    )
+    assert roll == 0.0
+    assert pitch == pytest.approx(-0.5)
+
+
+def test_auto_gain_is_applied_after_existing_deadband() -> None:
+    roll, pitch = auto_attitude_commands(
+        0.01,
+        -0.019,
+        deadband_rad=0.02,
+        roll_gain=100.0,
+        pitch_gain=100.0,
+    )
+    assert (roll, pitch) == (0.0, 0.0)
+
+
+def test_auto_gain_result_is_limited_to_90_degrees() -> None:
+    roll, pitch = auto_attitude_commands(
+        math.radians(80.0),
+        math.radians(-80.0),
+        deadband_rad=0.02,
+        roll_gain=2.0,
+        pitch_gain=2.0,
+    )
+    assert roll == pytest.approx(math.pi / 2.0)
+    assert pitch == pytest.approx(-math.pi / 2.0)
+
+
+@pytest.mark.parametrize("gain", [-0.1, math.nan, math.inf, -math.inf])
+def test_invalid_auto_gains_are_rejected(gain: float) -> None:
+    with pytest.raises(ValueError):
+        validate_auto_attitude_gains(gain, 1.0)
+    with pytest.raises(ValueError):
+        validate_auto_attitude_gains(1.0, gain)
 
 
 @pytest.mark.parametrize(
