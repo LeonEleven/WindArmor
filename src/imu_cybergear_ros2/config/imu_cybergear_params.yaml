@@ -101,21 +101,31 @@ imu_motor_controller_node:
     # 控制参数
     # ==========================================================================
 
-    # 默认速度（rad/s）。
-    # 节点启动时会给每个电机写入该速度。
+    # CyberGear 位置模式目标速度上限初值（rad/s）。
+    # 节点启动时写给每个电机；普通软件目标推进不会超过该上限。
     default_speed: 10.0
 
     # 姿态死区（rad）。
     # 小于该值的姿态变化会被忽略，避免抖动。
     deadband_rad: 0.02
 
-    # 每次控制更新允许的最大目标位置变化（rad/次）。
-    # 值越大，AUTO 响应越快，但动作更"硬"；值越小更平滑但更慢。
+    # 任何单周期允许的绝对位置变化保护上限（rad/次）。
     max_position_step: 0.4
 
-    # 控制更新最小间隔（秒）。
-    # 值越小更新越快，总线负载更高。
+    # 固定电机目标推进定时器的期望周期（秒）。
     command_interval_sec: 0.02
+
+    # MANUAL、AUTO、HOME 的软件目标位置变化率（rad/s）。
+    # 初始候选值相同，尚未经过本轮实机验证。
+    manual_motion_speed_rad_s: 4.0
+    auto_motion_speed_rad_s: 4.0
+    home_motion_speed_rad_s: 4.0
+
+    # 定时器延迟时允许用于单次推进计算的最大真实 dt（秒）。
+    motion_dt_max_sec: 0.05
+
+    # 软件目标到达判定容差（rad），与姿态死区用途不同。
+    target_reached_tolerance_rad: 0.001
 
     # ==========================================================================
     # 手动调速参数
@@ -151,9 +161,14 @@ imu_motor_controller_node:
     # 本地终端常用 /dev/tty。
     keyboard_device: "/dev/tty"
 
-    # MANUAL 步进控制每次移动角度（度）。
-    # w/s/a/d/i/k/j/l 使用该步长。
+    # 不属于连续重复序列的单次 MANUAL 按键精细步进（度）。
     manual_step_deg: 3.0
+
+    # 同一电机、同一方向字符在此间隔内再次到达时视为连续重复。
+    manual_repeat_gap_sec: 0.8
+
+    # 连续重复字符用于计算目标增量的最大事件间隔。
+    manual_repeat_dt_max_sec: 0.08
 
     # 键盘轮询频率（Hz）。
     # 值越大按键响应越灵敏，CPU 占用略增。

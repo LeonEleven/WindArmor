@@ -2,6 +2,7 @@ from pathlib import Path
 
 
 PACKAGE_ROOT = Path(__file__).parents[1] / "imu_cybergear_ros2"
+CONFIG_FILE = Path(__file__).parents[1] / "config" / "imu_cybergear_params.yaml"
 
 
 def read_source(name: str) -> str:
@@ -53,3 +54,53 @@ def test_control_mode_has_transient_state_qos_and_heartbeat() -> None:
     assert "ReliabilityPolicy.RELIABLE" in source
     assert "DurabilityPolicy.TRANSIENT_LOCAL" in source
     assert "self._motor_mode_timer = self.create_timer(" in source
+
+
+def test_auto_callback_only_sets_desired_targets() -> None:
+    source = read_source("imu_motor_controller_node.py")
+    callback = source[source.index("    def _imu_callback") :]
+    assert "self._motor_mgr.set_auto_targets(targets)" in callback
+    assert "apply_targets" not in callback
+    assert "write_sdo_float" not in callback
+
+
+def test_manual_absolute_target_rejects_non_finite_values_atomically() -> None:
+    source = read_source("imu_motor_controller_node.py")
+    callback = source[
+        source.index("    def _on_manual_targets") :
+        source.index("    def publish_system_emergency_stop")
+    ]
+    finite_check = callback.index("all(math.isfinite(value) for value in values)")
+    update = callback.index("self._motor_mgr.set_manual_targets(targets)")
+    assert finite_check < update
+    assert "apply_targets" not in callback
+
+
+def test_motion_timer_follows_lifecycle() -> None:
+    source = read_source("imu_motor_controller_node.py")
+    activate = source[source.index("    def on_activate") : source.index("    def on_deactivate")]
+    deactivate = source[source.index("    def on_deactivate") : source.index("    def on_cleanup")]
+    cleanup = source[source.index("    def on_cleanup") : source.index("    def _on_imu_zero_service")]
+    shutdown = source[source.index("    def on_shutdown") : source.index("    # ==================================================================\n    # IMU 数据回调")]
+    assert "self._motor_mgr.start_motion_timer()" in activate
+    assert "self._motor_mgr.stop_motion_timer()" in deactivate
+    assert "self._motor_mgr.stop_motion_timer()" in cleanup
+    assert "self._motor_mgr.stop_motion_timer()" in shutdown
+
+
+def test_unified_motion_defaults_and_protected_motor_mapping() -> None:
+    config = CONFIG_FILE.read_text(encoding="utf-8")
+    for line in (
+        "manual_motion_speed_rad_s: 4.0",
+        "auto_motion_speed_rad_s: 4.0",
+        "home_motion_speed_rad_s: 4.0",
+        "motion_dt_max_sec: 0.05",
+        "target_reached_tolerance_rad: 0.001",
+        "manual_repeat_gap_sec: 0.8",
+        "manual_repeat_dt_max_sec: 0.08",
+        "motor_ids: [4, 3, 2, 1]",
+        "motor_signs: [-1.0, 1.0, -1.0, 1.0]",
+        "motor_limits_min: [-1.57, -1.57, -1.57, 0.0]",
+        "motor_limits_max: [0.0, 1.57, 1.57, 1.57]",
+    ):
+        assert line in config

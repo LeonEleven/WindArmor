@@ -62,6 +62,7 @@ from .cybergear_driver import CyberGearDriver
 from .imu_protocol import corrected_relative_roll_pitch
 from .keyboard_handler import KeyboardHandler
 from .motor_manager import MotorManager, clamp, deg_to_rad
+from .motor_motion import MotionParameters, validate_motion_parameters
 from .safety_monitor import SafetyMonitor
 
 
@@ -140,15 +141,20 @@ class ImuMotorControllerNode(LifecycleNode):
         self.declare_parameter("motor_keys_backward", ["a", "s", "i", "j"])
 
         # 控制参数
-        self.declare_parameter("default_speed", 5.0)
+        self.declare_parameter("default_speed", 10.0)
         self.declare_parameter("deadband_rad", 0.02)
-        self.declare_parameter("max_position_step", 0.15)
+        self.declare_parameter("max_position_step", 0.4)
         self.declare_parameter("command_interval_sec", 0.02)
+        self.declare_parameter("manual_motion_speed_rad_s", 4.0)
+        self.declare_parameter("auto_motion_speed_rad_s", 4.0)
+        self.declare_parameter("home_motion_speed_rad_s", 4.0)
+        self.declare_parameter("motion_dt_max_sec", 0.05)
+        self.declare_parameter("target_reached_tolerance_rad", 0.001)
 
         # 手动调速参数
-        self.declare_parameter("manual_speed_min", 0.1)
-        self.declare_parameter("manual_speed_max", 5.0)
-        self.declare_parameter("manual_speed_step", 0.1)
+        self.declare_parameter("manual_speed_min", 0.5)
+        self.declare_parameter("manual_speed_max", 20.0)
+        self.declare_parameter("manual_speed_step", 0.5)
 
         # 轴向符号修正
         self.declare_parameter("roll_axis_sign", 1.0)
@@ -164,6 +170,8 @@ class ImuMotorControllerNode(LifecycleNode):
         self.declare_parameter("enable_keyboard", True)
         self.declare_parameter("keyboard_device", "/dev/tty")
         self.declare_parameter("manual_step_deg", 3.0)
+        self.declare_parameter("manual_repeat_gap_sec", 0.8)
+        self.declare_parameter("manual_repeat_dt_max_sec", 0.08)
         self.declare_parameter("manual_loop_hz", 50.0)
 
         # 各电机目标位置限幅（rad）
@@ -222,8 +230,9 @@ class ImuMotorControllerNode(LifecycleNode):
         self._key_to_motor: Dict[str, Tuple[int, float]] = {}
 
         # 电机运行时状态（供子模块通过 self._node.xxx 访问）
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._current_targets: Dict[int, float] = {}
+        self._desired_targets: Dict[int, float] = {}
         self._current_speeds: Dict[int, float] = {}
         self._selected_motor_id = 1
         self._motor_feedback = {}
@@ -237,13 +246,20 @@ class ImuMotorControllerNode(LifecycleNode):
         self._latest_roll = 0.0
         self._latest_pitch = 0.0
         self._last_imu_time = 0.0
-        self._last_command_time = 0.0
         self._imu_sequence = 0
         self._imu_zero_generation = 0
         self._imu_zero_sequence = 0
 
         # 控制参数（在 on_configure 中赋值）
         self._command_interval = 0.02
+        self._motion_dt_max = 0.05
+        self._target_reached_tolerance = 0.001
+        self._manual_motion_speed = 4.0
+        self._auto_motion_speed = 4.0
+        self._home_motion_speed = 4.0
+        self._manual_repeat_gap = 0.8
+        self._manual_repeat_dt_max = 0.08
+        self._motion_params = None
         self._roll_axis_sign = 1.0
         self._pitch_axis_sign = 1.0
         self._imu_zero_timeout = 1.0
@@ -335,13 +351,40 @@ class ImuMotorControllerNode(LifecycleNode):
         self._deadband = self.get_parameter("deadband_rad").get_parameter_value().double_value
         self._max_step = self.get_parameter("max_position_step").get_parameter_value().double_value
         self._command_interval = self.get_parameter("command_interval_sec").get_parameter_value().double_value
+        self._manual_motion_speed = (
+            self.get_parameter("manual_motion_speed_rad_s").get_parameter_value().double_value
+        )
+        self._auto_motion_speed = (
+            self.get_parameter("auto_motion_speed_rad_s").get_parameter_value().double_value
+        )
+        self._home_motion_speed = (
+            self.get_parameter("home_motion_speed_rad_s").get_parameter_value().double_value
+        )
+        self._motion_dt_max = (
+            self.get_parameter("motion_dt_max_sec").get_parameter_value().double_value
+        )
+        self._target_reached_tolerance = (
+            self.get_parameter("target_reached_tolerance_rad")
+            .get_parameter_value()
+            .double_value
+        )
         self._manual_speed_min = self.get_parameter("manual_speed_min").get_parameter_value().double_value
         self._manual_speed_max = self.get_parameter("manual_speed_max").get_parameter_value().double_value
         self._manual_speed_step = self.get_parameter("manual_speed_step").get_parameter_value().double_value
         self._manual_step_rad = deg_to_rad(
             self.get_parameter("manual_step_deg").get_parameter_value().double_value
         )
-        self._manual_period = 1.0 / self.get_parameter("manual_loop_hz").get_parameter_value().double_value
+        self._manual_repeat_gap = (
+            self.get_parameter("manual_repeat_gap_sec").get_parameter_value().double_value
+        )
+        self._manual_repeat_dt_max = (
+            self.get_parameter("manual_repeat_dt_max_sec").get_parameter_value().double_value
+        )
+        manual_loop_hz = self.get_parameter("manual_loop_hz").get_parameter_value().double_value
+        if not math.isfinite(manual_loop_hz) or manual_loop_hz <= 0.0:
+            self.get_logger().error("manual_loop_hz 必须是大于 0 的有限值")
+            return TransitionCallbackReturn.FAILURE
+        self._manual_period = 1.0 / manual_loop_hz
         self._keyboard_device = self.get_parameter("keyboard_device").get_parameter_value().string_value
         self._watchdog_timeout_s = self.get_parameter("watchdog_timeout_ms").get_parameter_value().integer_value / 1000.0
         self._position_error_threshold = (
@@ -363,16 +406,38 @@ class ImuMotorControllerNode(LifecycleNode):
             )
             return TransitionCallbackReturn.FAILURE
 
+        self._motion_params = MotionParameters(
+            command_interval_sec=self._command_interval,
+            motion_dt_max_sec=self._motion_dt_max,
+            target_reached_tolerance_rad=self._target_reached_tolerance,
+            manual_motion_speed_rad_s=self._manual_motion_speed,
+            auto_motion_speed_rad_s=self._auto_motion_speed,
+            home_motion_speed_rad_s=self._home_motion_speed,
+            manual_step_rad=self._manual_step_rad,
+            manual_repeat_gap_sec=self._manual_repeat_gap,
+            manual_repeat_dt_max_sec=self._manual_repeat_dt_max,
+            max_position_step=self._max_step,
+            default_speed=self._default_speed,
+            manual_speed_min=self._manual_speed_min,
+            manual_speed_max=self._manual_speed_max,
+            manual_speed_step=self._manual_speed_step,
+        )
+        try:
+            validate_motion_parameters(self._motion_params)
+        except ValueError as exc:
+            self.get_logger().error(f"电机运动参数非法: {exc}")
+            return TransitionCallbackReturn.FAILURE
+
         # ---- 初始化电机运行时状态 ----
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._current_targets = {mid: 0.0 for mid in self._motor_ids}
+        self._desired_targets = dict(self._current_targets)
         self._current_speeds = {mid: self._default_speed for mid in self._motor_ids}
         self._selected_motor_id = 1 if 1 in self._motor_ids else self._motor_ids[0]
         self._motor_feedback = {}
         self._motor_protection_flags = {mid: False for mid in self._motor_ids}
         self._init_complete = False
         self._last_target_change_time = {mid: 0.0 for mid in self._motor_ids}
-        self._last_command_time = 0.0
         self._last_imu_time = 0.0
         self._imu_sequence = 0
         self._imu_zero_sequence = 0
@@ -471,6 +536,7 @@ class ImuMotorControllerNode(LifecycleNode):
         self._running = True
         self._publish_control_mode()
         self._publish_imu_zero_generation()
+        self._motor_mgr.start_motion_timer()
 
         if self.get_parameter("enable_keyboard").get_parameter_value().bool_value:
             self._keyboard.start()
@@ -488,7 +554,7 @@ class ImuMotorControllerNode(LifecycleNode):
         self._is_active = False
         self._running = False
         self._publish_control_mode()
-        self._motor_mgr.stop_auto_zero()
+        self._motor_mgr.stop_motion_timer()
         self._keyboard.stop()
         self.get_logger().info("控制节点已停用")
         return TransitionCallbackReturn.SUCCESS
@@ -496,6 +562,9 @@ class ImuMotorControllerNode(LifecycleNode):
     def on_cleanup(self, state: State) -> TransitionCallbackReturn:
         """清理阶段：停止电机、关闭驱动、销毁 ROS 资源。"""
         self.get_logger().info("控制节点正在清理...")
+
+        if self._motor_mgr is not None:
+            self._motor_mgr.stop_motion_timer()
 
         # 停止电机并关闭驱动
         if self._driver is not None:
@@ -605,6 +674,8 @@ class ImuMotorControllerNode(LifecycleNode):
         self._imu_zero_generation_pub.publish(msg)
 
     def _on_control_state_changed(self, _state: ControllerState) -> None:
+        if self._motor_mgr is not None:
+            self._motor_mgr.on_control_state_changed(_state)
         self._publish_control_mode()
 
     def _publish_control_mode(self) -> None:
@@ -650,12 +721,18 @@ class ImuMotorControllerNode(LifecycleNode):
                 f"期望 {len(self._motor_ids)}，收到 {len(msg.data)}"
             )
             return
-        targets = {
-            motor_id: float(msg.data[index])
-            for index, motor_id in enumerate(self._motor_ids)
-        }
-        with self._lock:
-            self._motor_mgr.apply_targets(targets)
+        values = [float(value) for value in msg.data]
+        if not all(math.isfinite(value) for value in values):
+            self.get_logger().error(
+                "/motors/manual_targets 所有元素都必须是有限值，整条消息已拒绝"
+            )
+            return
+        targets = dict(zip(self._motor_ids, values))
+        try:
+            targets = self._motor_mgr.set_manual_targets(targets)
+        except ValueError as exc:
+            self.get_logger().error(f"拒绝 /motors/manual_targets: {exc}")
+            return
         target_text = ", ".join(
             f"ID{motor_id}={targets[motor_id]:.3f}"
             for motor_id in self._motor_ids
@@ -678,7 +755,7 @@ class ImuMotorControllerNode(LifecycleNode):
         self._publish_control_mode()
 
         if self._motor_mgr is not None:
-            self._motor_mgr.stop_auto_zero()
+            self._motor_mgr.stop_motion_timer()
 
         if self._safety is not None:
             self._safety.emergency_stop()
@@ -736,7 +813,7 @@ class ImuMotorControllerNode(LifecycleNode):
     # ==================================================================
 
     def _imu_callback(self, msg: Imu) -> None:
-        """IMU 数据订阅回调：解析姿态、计算目标位置、写入电机。"""
+        """IMU 数据订阅回调：解析姿态并更新 AUTO 期望目标。"""
         if not self._is_active or not self._running:
             return
 
@@ -773,32 +850,27 @@ class ImuMotorControllerNode(LifecycleNode):
         if not self._state_mgr.is_auto_running():
             return
 
-        if now - self._last_command_time < self._command_interval:
-            return
+        if abs(roll_rel) < self._deadband:
+            roll_rel = 0.0
+        if abs(pitch_rel) < self._deadband:
+            pitch_rel = 0.0
 
-        with self._lock:
-            if abs(roll_rel) < self._deadband:
-                roll_rel = 0.0
-            if abs(pitch_rel) < self._deadband:
-                pitch_rel = 0.0
+        alpha_deg = clamp(math.degrees(roll_rel), -90.0, 90.0)
+        beta_deg = clamp(math.degrees(pitch_rel), -90.0, 90.0)
 
-            alpha_deg = clamp(math.degrees(roll_rel), -90.0, 90.0)
-            beta_deg = clamp(math.degrees(pitch_rel), -90.0, 90.0)
+        targets = {}
+        for cfg in self._motor_configs:
+            if cfg.control_axis == "roll_left":
+                deg = clamp(max(0.0, -alpha_deg), 0.0, 90.0)
+            elif cfg.control_axis == "roll_right":
+                deg = clamp(max(0.0, alpha_deg), 0.0, 90.0)
+            elif cfg.control_axis == "pitch":
+                deg = beta_deg
+            else:
+                deg = 0.0
+            targets[cfg.motor_id] = cfg.sign * deg_to_rad(deg)
 
-            targets = {}
-            for cfg in self._motor_configs:
-                if cfg.control_axis == "roll_left":
-                    deg = clamp(max(0.0, -alpha_deg), 0.0, 90.0)
-                elif cfg.control_axis == "roll_right":
-                    deg = clamp(max(0.0, alpha_deg), 0.0, 90.0)
-                elif cfg.control_axis == "pitch":
-                    deg = beta_deg
-                else:
-                    deg = 0.0
-                targets[cfg.motor_id] = cfg.sign * deg_to_rad(deg)
-
-            self._motor_mgr.apply_targets(targets)
-            self._last_command_time = now
+        self._motor_mgr.set_auto_targets(targets)
 
 
 # ======================================================================

@@ -11,9 +11,29 @@
   - keyboard_handler: 终端键盘控制
   - cybergear_driver: CyberGear CAN 协议驱动
   - imu_protocol: WIT IMU 串口协议解析
+  - motor_motion: 不依赖 ROS/硬件的统一目标推进计算
 """
 
-from .controller_state import ControllerState, StateManager
-from .motor_manager import MotorManager
-from .safety_monitor import SafetyMonitor
-from .keyboard_handler import KeyboardHandler
+from importlib import import_module
+
+
+_LAZY_EXPORTS = {
+    "ControllerState": (".controller_state", "ControllerState"),
+    "StateManager": (".controller_state", "StateManager"),
+    "MotorManager": (".motor_manager", "MotorManager"),
+    "SafetyMonitor": (".safety_monitor", "SafetyMonitor"),
+    "KeyboardHandler": (".keyboard_handler", "KeyboardHandler"),
+}
+
+
+def __getattr__(name):
+    """延迟导入 ROS 子模块，使纯计算模块可在无 ROS 环境下单独测试。"""
+    if name not in _LAZY_EXPORTS:
+        raise AttributeError(name)
+    module_name, attribute_name = _LAZY_EXPORTS[name]
+    value = getattr(import_module(module_name, __name__), attribute_name)
+    globals()[name] = value
+    return value
+
+
+__all__ = list(_LAZY_EXPORTS)

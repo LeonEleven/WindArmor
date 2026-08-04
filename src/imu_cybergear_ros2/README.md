@@ -21,6 +21,7 @@
 | **状态机** | 统一生命周期管理（7 状态：AUTO/MANUAL/急停/错误等） |
 | **统一相对姿态** | `/imu/relative_roll_pitch` 发布归一化、轴向修正和统一归零后的 roll/pitch（rad） |
 | **公开控制模式** | `/motors/control_mode` 可靠、transient-local 发布稳定状态并发送心跳 |
+| **统一目标推进** | MANUAL、AUTO、HOME 共用固定周期和真实 dt 的位置目标推进器 |
 
 ## 系统架构
 
@@ -143,7 +144,7 @@ ros2 launch imu_cybergear_ros2 imu_motor_controller.launch.py \
 | `m` | 切换 AUTO / MANUAL 模式 |
 | `z` | IMU 姿态归零（当前姿态设为零点） |
 | `x` | 设置全部电机当前位置为零点 |
-| `h` | 自动归零（按一次即可，到达自动停止） |
+| `h` | 自动归零；AUTO 中会先切到 MANUAL，再按 HOME 速度回零 |
 | `p` | 发布当前状态汇总（含各电机位置/力矩/温度/故障） |
 | `空格` | **急停全部电机**（进入 EMERGENCY_STOP 状态） |
 | `r` | 从急停恢复（保持当前位置） |
@@ -165,10 +166,56 @@ ros2 launch imu_cybergear_ros2 imu_motor_controller.launch.py \
 | 按键 | 功能 |
 |------|------|
 | `1` ~ `N` | 按 CAN ID 选中电机（按 `1` 选中 CAN ID=1 的电机） |
-| `+` / `=` | 当前选中电机加速 |
-| `-` / `_` | 当前选中电机减速 |
-| `[` | 当前选中电机转 +90° |
-| `]` | 当前选中电机转 -90° |
+| `+` / `=` | 提高当前选中电机的 CyberGear 速度上限 |
+| `-` / `_` | 降低当前选中电机的 CyberGear 速度上限 |
+| `[` | 设置当前选中电机的 +90° 期望目标（MANUAL） |
+| `]` | 设置当前选中电机的 -90° 期望目标（MANUAL） |
+
+### 3.4 MANUAL、AUTO 与 HOME 的速度语义
+
+控制器维护两组位置：
+
+- `desired_targets`：键盘、绝对目标话题、IMU 或 HOME 希望最终到达的位置；
+- `current_targets`：最近一次实际发送给 CyberGear 的软件位置命令。
+
+正常运动输入只更新 `desired_targets`。节点激活后的唯一固定周期推进器使用
+真实单调时间差推进：
+
+```text
+allowed_step = min(
+    max_position_step,
+    min(mode_speed, motor_speed_limit) × min(real_dt, motion_dt_max_sec)
+)
+```
+
+默认速度参数：
+
+```yaml
+manual_motion_speed_rad_s: 4.0
+auto_motion_speed_rad_s: 4.0
+home_motion_speed_rad_s: 4.0
+```
+
+这些值是软件目标位置变化率，不等于负载下实测机械角速度，当前
+`4.0 rad/s` 只是尚未实机验证的候选值。`default_speed: 10.0` 是启动时写给
+CyberGear 的位置模式速度上限初值。`+/-` 调整选中电机的这个上限；低于模式
+速度时会限制该电机，高于模式速度后继续增加也不会突破模式速度参数。
+
+轻按一次 `w/s/a/d/i/k/j/l` 使用 `manual_step_deg` 增加有限期望目标。连续
+重复字符按实际接收间隔换算增量，稳定重复阶段尽量接近 MANUAL 模式速度；
+单个字符不会被当成永久按住。`[`、`]` 和 `/motors/manual_targets` 同样只
+设置期望目标，不会一次性跳写完整角度。
+
+AUTO 的 IMU 回调只计算和更新最新期望目标，固定推进器可以在两帧新鲜 IMU
+消息之间继续追赶，因此每秒最大推进量不再直接取决于 IMU 回调频率。IMU
+超时退出 AUTO 时会立即丢弃未完成的旧姿态目标并保持最近命令位置。
+
+`h` 使用同一个推进器和 `home_motion_speed_rad_s`，不再创建独立快速定时器。
+在 AUTO 中按 `h` 会先显式切回 MANUAL；任意有效 MANUAL 运动、绝对目标、
+`[`/`]`、切换 AUTO、急停或生命周期停止都会取消 HOME。
+
+本次速度统一改进位于 `v0.3.0` 标签之后，只完成纯软件验证；后续需要固定
+机器人并从低速逐电机复验，未经明确授权不得启动硬件验证。
 
 ## 4. 远程控制接口
 
@@ -236,7 +283,9 @@ ros2 topic echo /motor/status
 IMU header；即使电机处于 MANUAL，也会继续发布有效姿态。公开模式只使用
 `MANUAL`、`AUTO`、`EMERGENCY_STOP`、`DISABLED`、`ERROR`。
 
-当前这些候选接口仅完成纯软件验证，未访问真实 IMU、CAN 或电机。
+这些协调接口属于 `v0.3.0`，其整机功能已由用户按根 README 验证。本次统一
+速度改进位于标签之后，只完成纯软件验证，未因本次任务访问真实 IMU、CAN
+或电机。
 
 ## 5. 文档导航
 

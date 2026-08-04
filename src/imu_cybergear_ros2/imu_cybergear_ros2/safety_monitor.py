@@ -201,6 +201,8 @@ class SafetyMonitor:
                 return
 
         self._node.get_logger().error("【急停】正在停止全部电机！")
+        # 普通推进必须先停，不能让速度限制或并发定时器延迟急停。
+        self._motor_mgr.halt_motion()
         with self._node._lock:
             for mid in self._node._motor_ids:
                 try:

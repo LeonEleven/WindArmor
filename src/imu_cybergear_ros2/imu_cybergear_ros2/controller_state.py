@@ -61,6 +61,8 @@ class StateManager:
         从运行态（AUTO_RUNNING/MANUAL_RUNNING）切至非运行态时，
         自动调用 stop_auto_zero_callback。
         """
+        stop_auto_zero = None
+        state_change_callback = None
         with self._state_lock:
             old_name = self._state.name
             self._state = new_state
@@ -69,10 +71,14 @@ class StateManager:
             if old_name in ("AUTO_RUNNING", "MANUAL_RUNNING") and new_name not in (
                 "AUTO_RUNNING", "MANUAL_RUNNING"
             ):
-                if self._stop_auto_zero_callback:
-                    self._stop_auto_zero_callback()
-            if self._state_change_callback:
-                self._state_change_callback(new_state)
+                stop_auto_zero = self._stop_auto_zero_callback
+            state_change_callback = self._state_change_callback
+
+        # 回调可能获取节点锁；在状态锁外执行以避免与推进定时器形成锁顺序反转。
+        if stop_auto_zero:
+            stop_auto_zero()
+        if state_change_callback:
+            state_change_callback(new_state)
 
     def is_running(self) -> bool:
         """当前是否处于运行态（AUTO 或 MANUAL）。"""

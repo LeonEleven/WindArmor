@@ -1,117 +1,281 @@
-# 最新反馈：阶段 2 软件实现与纯软件验证
+# 最新反馈：统一电机运动速度的软件实现
 
 > 本文件只保留最近一次反馈。
 >
-> 日期：2026-07-29
+> 日期：2026-08-04
 
 ## 1. 结论
 
-已按 `docs/NEXT_COMMAND.md` 完成阶段 2 的软件实现和纯软件验证：
+已按 `docs/NEXT_COMMAND.md` 完成 MANUAL、AUTO 与 HOME 电机运动速度统一的
+软件实现和纯软件验证：
 
-- 新增统一相对姿态与电机公开模式；
-- 键盘和服务使用同一 IMU 归零方法；
-- 新增无硬件 I/O 的风扇命令管理器和纯 Python 状态机；
-- 公共手动命令不再直接进入 GPIO 底层节点；
-- 补齐风扇 AUTO、双通道新鲜度、急停锁存和恢复条件；
-- 正式风扇 launch 只有一个管理器和一个底层控制器；
-- 三个包构建成功；
-- 最终共 100 项测试，全部通过。
+- MANUAL、AUTO、HOME、`/motors/manual_targets` 和 `[`/`]` 的普通位置运动
+  全部改为先更新 `desired_targets`；
+- 激活后的唯一固定周期推进器根据真实单调时间差更新 `current_targets` 并发送
+  普通 CyberGear 位置命令；
+- HOME 删除独立快速定时器，AUTO 不再在 IMU 回调中推进位置，MANUAL 不再按
+  每个字符直接写位置；
+- 三种模式默认软件目标速度都为 `4.0 rad/s`；
+- MANUAL 连续重复字符根据实际事件间隔生成有限目标增量；
+- 急停、IMU 超时、模式切换和 Lifecycle 停止均丢弃未完成旧目标；
+- 三包构建成功，最终 `153` 项测试全部通过。
 
-当前稳定发布仍为 `v0.2.1`；本次实现是 `v0.3.0` 候选功能，未修改包版本号、
-Git 标签或受保护硬件参数。
-
-本次没有运行任何 ROS 2 节点或 launch。
+本次没有运行 ROS 2 节点或 launch。
 本次没有访问 IMU、CAN、GPIO、PWM 或真实串口。
-4 个微电机和 2 个风扇均未通电、未控制、未影响。
+4 个微电机和 2 个风扇均未因本任务被控制。
 本次完成的是软件实现和纯软件验证，不是实机验证。
+`v0.3.0` 标签未被修改。
 
-## 2. Git 基线和用户已有修改
+## 2. Git 基线与标签关系
 
-- 分支：`master`
-- HEAD：`bce019bfeab25e5b04c1fdfa39734aba49b7e4c1`
-- HEAD 上的稳定标签：`v0.2.1`
-- 任务开始时：
+- 当前分支：`master`
+- 当前 HEAD：`c3b3c3989674c2c1c902e940953da87fd5812db5`
+- `origin/master`：任务开始时与当前 HEAD 相同
+- 当前 HEAD 上的标签：`v0.3.0`
+- 任务开始时用户已有修改：`docs/NEXT_COMMAND.md`
+
+任务开始状态：
 
 ```text
 ## master...origin/master
  M docs/NEXT_COMMAND.md
-?? docs/LATEST_FEEDBACK.md
 ```
 
-`docs/NEXT_COMMAND.md` 是用户在任务开始前已有的修改，本次只读取、未修改。
-`docs/LATEST_FEEDBACK.md` 是用户指定的反馈文件，本次已覆盖，旧反馈未保留。
-未 checkout、reset、clean 或覆盖用户已有修改。
+`docs/NEXT_COMMAND.md` 只读取、未修改。当前 HEAD 仍是 `v0.3.0` 的提交，但
+本次尚未提交的工作区改进不在该标签内。未 checkout、reset、clean、commit、
+push，也未创建、移动、删除或覆盖任何标签。
 
-## 3. 实际修改文件与目的
+## 3. 修改前的三条速度路径
 
-### 项目文档
+### MANUAL
+
+每收到一个 `w/s/a/d/i/k/j/l` 字符就调用一次 `manual_step()`，近似关系为：
+
+```text
+每字符目标增量 = manual_step_deg
+平均目标速度 ≈ manual_step_deg × 操作系统字符重复频率
+```
+
+`manual_loop_hz` 只是键盘线程轮询频率，并不是终端实际字符重复频率。
+
+### AUTO
+
+每次有效 IMU 回调直接调用 `apply_targets()`；旧 `write_target()` 使用
+`current_motor_speed × command_interval_sec` 限制该次变化。因此近似为：
+
+```text
+AUTO 目标推进速度 ≈ 单次允许变化量 × 实际接受的 IMU 回调频率
+```
+
+### HOME
+
+`h` 创建独立的 `command_interval_sec` 固定定时器，并在每次回调反复调用旧
+`write_target()`。它稳定地按固定周期推进，不依赖键盘字符或 IMU 消息到达
+频率，所以此前通常明显快于 MANUAL，也可能快于 AUTO。
+
+另外，`/motors/manual_targets` 旧行为直接进入 `apply_targets()`，`[`/`]`
+则直接向 CyberGear 写入经过软限位的完整 ±90° 目标，二者也不是同一路径。
+
+## 4. 最终统一架构
+
+```text
+MANUAL 字符 / 绝对目标 / ±90° ─┐
+AUTO 新鲜 IMU 姿态 ────────────┼──> desired_targets
+h HOME 零目标 ─────────────────┘
+                                      ↓
+                         固定周期统一目标推进器
+                         真实 dt + dt 延迟上限
+                                      ↓
+              模式速度 ∩ 当前电机速度上限 ∩ 单周期位置上限
+                                      ↓
+                 current_targets + CyberGear 位置命令
+```
+
+内部运动源为 `IDLE`、`MANUAL`、`AUTO`、`HOME`，只用于选择推进语义和模式
+速度；公开 `/motors/control_mode` 仍只使用 `MANUAL`、`AUTO`、
+`EMERGENCY_STOP`、`DISABLED`、`ERROR`，没有破坏公共接口。
+
+### `desired_targets`
+
+输入源希望各电机最终到达的位置。输入有限值检查后立即应用软限位，但普通输入
+不访问 CAN，不直接改变最近已发送命令。
+
+### `current_targets`
+
+最近一次实际尝试发送给 CyberGear 的软件位置命令。初始化时与
+`desired_targets` 均为零，模式切换、急停、停用和恢复时两者重新同步，避免
+旧目标在以后突然恢复。
+
+## 5. 固定推进器和真实 dt
+
+节点激活时只创建一个周期为 `command_interval_sec=0.02 s` 的推进定时器；
+重复激活不会创建多个。第一帧仅初始化单调时间，不产生大步。以后每帧使用：
+
+```text
+dt_used = clamp(real_monotonic_dt, 0, motion_dt_max_sec)
+effective_speed = min(mode_motion_speed, current_motor_speed_limit)
+allowed_step = min(max_position_step, effective_speed × dt_used)
+new_target = current + clamp(desired - current, -allowed_step, allowed_step)
+```
+
+默认 `motion_dt_max_sec=0.05`，防止线程暂停或调度延迟后出现巨大一步；
+`target_reached_tolerance_rad=0.001` 用于位置到达判定，不复用姿态死区。
+发送前再次检查有限值并应用软限位。
+
+底层写入失败时保持原有软件状态更新顺序：先更新 `current_targets` 和命令时间，
+再尝试驱动写入并记录错误。该语义已增加替身测试并在此明确记录。
+
+## 6. 三种模式速度与 `default_speed`
+
+新增参数：
+
+```yaml
+manual_motion_speed_rad_s: 4.0
+auto_motion_speed_rad_s: 4.0
+home_motion_speed_rad_s: 4.0
+motion_dt_max_sec: 0.05
+target_reached_tolerance_rad: 0.001
+manual_repeat_gap_sec: 0.8
+manual_repeat_dt_max_sec: 0.08
+```
+
+三种 `4.0 rad/s` 是软件目标位置变化率的初始候选值，目的是让相同距离下三种
+模式具有相同的软件推进上限。它们不等于负载下实测机械角速度，尚未进行本轮
+实机验证，不得表述为已验证安全速度。
+
+`default_speed: 10.0` 的最终语义是：启动时写给 CyberGear 的位置模式目标
+速度上限，也是每台电机当前底层速度上限的初值。它不再直接决定三种模式的
+软件目标推进速度，实际普通推进不超过 `min(模式速度, 当前电机速度上限)`。
+
+`+/-` 仍调整选中电机的速度上限，保留
+`manual_speed_min`、`manual_speed_max`、`manual_speed_step`：
+
+- 电机速度上限低于模式速度时，`+/-` 会直接影响该电机推进速度；
+- 上限高于模式速度后，继续提高不会突破模式速度参数；
+- 新日志同时显示电机速度上限、当前模式速度和最终有效推进上限。
+
+## 7. MANUAL 最终行为
+
+单次轻按 `w/s/a/d/i/k/j/l` 仍使用 `manual_step_deg=3.0°` 对对应电机的
+`desired_target` 做有限精细调整，不直接写位置。
+
+同一电机、同一方向字符在 `manual_repeat_gap_sec=0.8 s` 内重复时：
+
+```text
+event_dt = 当前事件时间 - 上一相同运动事件时间
+repeat_dt = clamp(event_dt, 0, manual_repeat_dt_max_sec)
+increment = min(
+    max_position_step,
+    min(manual_motion_speed_rad_s, current_motor_speed_limit) × repeat_dt
+)
+```
+
+稳定重复阶段的平均期望目标变化率因此接近 MANUAL 模式速度，而不是固定角度
+乘以字符频率。字符停止后不再增加 `desired_target`；推进器只把
+`current_target` 追到最后一个有限目标后停止。
+
+反向第一字符按单次精细步进处理，上一方向时间不会用于反向大步；不同电机分别
+记录时间。模式切换、绝对目标、HOME、急停、停用和退出都会清除重复状态，
+错误或非运动按键不会刷新运动时间。
+
+## 8. AUTO 最终行为
+
+IMU 回调继续完成四元数校验、统一相对姿态、死区、±90°、方向映射和软限位，
+但最终只调用 `set_auto_targets()` 更新期望目标，不再发送普通位置命令。
+
+固定推进器在两帧新鲜 IMU 消息之间继续按
+`auto_motion_speed_rad_s` 追赶最新目标。快速倾斜时受 AUTO 速度限制，缓慢
+倾斜时仍会因目标本身变化慢而自然缓慢运动；IMU 消息数量不再直接增加单周期
+允许位置变化。
+
+从 MANUAL 切换到 AUTO 时立即同步 desired/current 并等待切换后的新 IMU
+回调。IMU 看门狗退出 AUTO 时，状态变化回调同步 desired/current、内部运动源
+回到 IDLE，未完成旧姿态目标不会继续运动；现有风扇模式联动和 AUTO 清除语义
+保持不变。
+
+## 9. HOME、绝对目标和快捷目标
+
+`h` 不再创建独立定时器：
+
+1. AUTO 中先显式切为 MANUAL；
+2. 清除手动重复状态；
+3. 全部 `desired_targets` 设为经过软限位的零目标；
+4. 内部运动源设为 HOME；
+5. 唯一推进器按 `home_motion_speed_rad_s` 回零；
+6. 全部到达后内部转为 IDLE，公开模式保持 MANUAL。
+
+有效 MANUAL 字符、`/motors/manual_targets`、`[`/`]`、切换 AUTO、急停和
+Lifecycle 停止都会取消 HOME，不会额外跳写位置。
+
+`/motors/manual_targets` 名称、类型和 `motor_ids` 顺序不变。现在只在 MANUAL
+接受，先检查长度和全部元素有限性；任一错误整条拒绝且不部分更新。有效消息
+一次更新全部期望目标、应用软限位、取消 HOME、清除重复状态，再按 MANUAL
+速度渐进运动。
+
+`[` 和 `]` 只在 MANUAL 设置选中电机经过软限位的 ±90° 期望目标，取消 HOME
+并由统一推进器运动。日志使用“设置期望目标”，不再暗示已经到达，也不再一次
+跳写完整位置。
+
+## 10. Lifecycle、急停和恢复
+
+- activate：创建唯一推进定时器并安全初始化时间；
+- deactivate：销毁推进定时器，清除重复状态，desired 同步 current；
+- cleanup/shutdown：重复安全销毁推进资源，不保留重新激活后会执行的旧目标；
+- 急停：先冻结普通推进和未完成目标，再执行既有直接电机停止，不受速度限制
+  延迟；
+- 恢复：直接保持最近软件命令位置，成功后只进入 MANUAL，内部为 IDLE，不恢复
+  急停前 MANUAL、AUTO 或 HOME 目标；
+- 机械零点和初始化仍保留必要的特殊直接硬件流程，没有复用普通运动路径。
+
+状态管理回调改为在状态锁外执行，避免统一推进器持有节点锁时与状态转换形成
+锁顺序反转。
+
+## 11. 实际修改文件和目的
+
+### 文档
 
 - `README.md`
-  - 说明 `v0.3.0` 候选状态、正式控制路径、AUTO、急停恢复和未实机验证事项。
+  - 更新 `v0.3.0` 稳定基线、统一推进公式、模式速度、按键和绝对目标语义。
+- `docs/MANUAL_VERIFICATION.md`
+  - 覆盖为本次速度改动的最新分级人工验证方案，包含低速临时参数、逐电机、
+    AUTO/HOME、急停及最终双风扇回归步骤。
 - `docs/LATEST_FEEDBACK.md`
-  - 覆盖写入本次阶段 2 反馈。
-
-### IMU 与电机包
-
+  - 覆盖为本次实现与验证反馈。
 - `src/imu_cybergear_ros2/README.md`
-  - 补充统一姿态、零点代次、电机模式和 MANUAL 恢复语义。
-- `src/imu_cybergear_ros2/config/imu_cybergear_params.yaml`
-  - 增加姿态、零点代次、电机模式话题和心跳/归零超时参数。
-- `src/imu_cybergear_ros2/imu_cybergear_ros2/imu_protocol.py`
-  - 增加四元数校验/归一化、角度归一化和统一相对姿态纯函数。
-- `src/imu_cybergear_ros2/imu_cybergear_ros2/controller_state.py`
-  - 增加状态变化回调和稳定公开模式映射。
-- `src/imu_cybergear_ros2/imu_cybergear_ros2/imu_motor_controller_node.py`
-  - 发布统一相对姿态、零点代次、电机模式及心跳；统一归零入口。
-- `src/imu_cybergear_ros2/imu_cybergear_ros2/keyboard_handler.py`
-  - 键盘 `z` 改用统一归零；恢复成功后才进入 MANUAL。
+  - 说明 desired/current、三种速度、`default_speed`、`+/-`、字符重复和 HOME。
+
+### 实现与配置
+
+- `src/imu_cybergear_ros2/imu_cybergear_ros2/motor_motion.py`
+  - 新增完全不依赖 ROS/硬件的参数校验、模式速度、单周期推进和重复字符计算。
 - `src/imu_cybergear_ros2/imu_cybergear_ros2/motor_manager.py`
-  - 恢复方法返回真实成功/失败结果。
+  - 实现统一推进器、运动源、desired/current、MANUAL/AUTO/HOME 和安全同步。
+- `src/imu_cybergear_ros2/imu_cybergear_ros2/imu_motor_controller_node.py`
+  - 声明/读取/校验新参数，接入生命周期定时器，迁移 IMU 和绝对目标输入。
+- `src/imu_cybergear_ros2/imu_cybergear_ros2/keyboard_handler.py`
+  - 更新键盘帮助；原键位继续调用迁移后的管理器语义。
+- `src/imu_cybergear_ros2/imu_cybergear_ros2/controller_state.py`
+  - 在状态锁外执行回调，避免推进器与模式切换死锁。
 - `src/imu_cybergear_ros2/imu_cybergear_ros2/safety_monitor.py`
-  - `/enable_motor=true` 仅在恢复成功后进入 MANUAL，失败时保持原安全状态。
-- `src/imu_cybergear_ros2/package.xml`
-  - 增加 `geometry_msgs` 依赖；版本号未变。
-- `src/imu_cybergear_ros2/test/test_imu_protocol.py`
-  - 覆盖有效/无效四元数、方向、零点和 ±π 跨越。
+  - 急停直接操作前先冻结普通运动目标。
+- `src/imu_cybergear_ros2/imu_cybergear_ros2/__init__.py`
+  - 保留包根导出兼容并改为延迟导入，使纯计算模块可在无 ROS 环境测试。
+- `src/imu_cybergear_ros2/config/imu_cybergear_params.yaml`
+  - 增加三模式速度、dt 上限、到达容差和字符重复参数；明确默认速度语义。
+
+### 测试
+
+- `src/imu_cybergear_ros2/test/test_motor_motion.py`
+  - 31 项纯函数测试：正反推进、三模式同速、真实 dt、步长/速度上限、容差、
+    软限位、NaN/Inf、非法关系及 20/25 Hz 重复字符。
+- `src/imu_cybergear_ros2/test/test_motor_manager.py`
+  - 18 项替身测试：输入不直写、10/20/50 Hz AUTO 等速、HOME、快捷目标、
+    模式切换、Lifecycle、保护、急停及写失败语义。
 - `src/imu_cybergear_ros2/test/test_control_interfaces.py`
-  - 静态覆盖统一姿态处理顺序、header、归零入口、QoS 和心跳结构。
-- `src/imu_cybergear_ros2/test/test_controller_state.py`
-  - 纯替身覆盖公开模式映射和电机恢复成功/失败。
+  - 增加静态检查：AUTO/绝对目标路由、Lifecycle 定时器、新默认值和受保护映射。
 
-### 风扇包
-
-- `src/windarmor_fan_controller/windarmor_fan_controller/fan_control.py`
-  - 新增无 ROS、无硬件依赖的配置校验、公式、迟滞、限速和完整状态机。
-- `src/windarmor_fan_controller/windarmor_fan_controller/fan_command_manager.py`
-  - 新增无 GPIO/CAN/串口的公共命令仲裁 ROS 节点。
-- `src/windarmor_fan_controller/windarmor_fan_controller/fan_node.py`
-  - 底层只接收内部命令；增加 enabled 状态、stop/enable/e-stop 锁存。
-- `src/windarmor_fan_controller/windarmor_fan_controller/pwm.py`
-  - 增加可独立测试的底层命令门和看门狗状态。
-- `src/windarmor_fan_controller/config/fan_params.yaml`
-  - 增加管理器参数和 enabled 状态心跳参数；GPIO 映射未变。
-- `src/windarmor_fan_controller/launch/fans.launch.py`
-  - 正式启动一个管理器和一个底层控制器。
-- `src/windarmor_fan_controller/setup.py`
-  - 注册 `fan_command_manager` 入口；版本号未变。
-- `src/windarmor_fan_controller/package.xml`
-  - 增加 `geometry_msgs` 依赖；版本号未变。
-- `src/windarmor_fan_controller/test/test_fan_control.py`
-  - 覆盖公式、状态机、超时、AUTO、急停和恢复。
-- `src/windarmor_fan_controller/test/test_pwm.py`
-  - 覆盖底层命令门、重新启用和看门狗。
-- `src/windarmor_fan_controller/test/test_interface_routing.py`
-  - 静态确认单一内部命令发布者、底层路由、最终限幅和清理路径。
-
-### Bringup
-
-- `src/windarmor_bringup/launch/windarmor.launch.py`
-  - 统一系统复用 `fans.launch.py`，并覆盖统一手动安全参数。
-- `src/windarmor_bringup/test/test_launch_syntax.py`
-  - 检查 launch 语法、复用关系和不重复创建底层节点。
-
-未修改 `AGENTS.md`、`docs/FIRST_COMMAND.md`、`docs/NEXT_COMMAND.md`、包版本号、
-标签、GPIO12/13 用途或以下受保护参数：
+未修改风扇算法、风扇状态机、launch、包版本号、CAN 配置、IMU 安装方向、
+GPIO12/13 用途，也未改变受保护电机参数：
 
 ```yaml
 motor_ids: [4, 3, 2, 1]
@@ -122,288 +286,58 @@ left_gpio: 12
 right_gpio: 13
 ```
 
-## 4. 最终架构
+## 12. 已执行命令与结果
 
-```text
-imu_motor_controller_node
-  ├─ /imu/relative_roll_pitch
-  ├─ /imu/zero_generation
-  └─ /motors/control_mode
+### 启动前与静态检查
 
-/fans/pwm
-/fans/left/pwm
-/fans/right/pwm
-/imu/relative_roll_pitch
-/imu/zero_generation
-/motors/control_mode
-/fans/enabled
-/e_stop
-        ↓
-fan_command_manager（无硬件 I/O）
-        ↓
-/fans/command_pwm（内部唯一正常命令）
-        ↓
-fan_controller（最终限幅、底层看门狗、锁存、GPIO 清理）
-        ↓
-GPIO12 / GPIO13
-```
-
-`fan_controller` 不再订阅三个公共手动话题。正式 launch 中只有
-`fan_command_manager` 发布内部命令，且只有一个 `fan_controller`。
-
-## 5. 新增或改变的接口
-
-### 新增
-
-| 接口 | 类型 | 语义 |
-|---|---|---|
-| `/imu/relative_roll_pitch` | `geometry_msgs/Vector3Stamped` | x/y 为相对 roll/pitch（rad），z=0，保留原 header |
-| `/imu/zero_generation` | `std_msgs/UInt64` | 每次成功统一归零递增 |
-| `/motors/control_mode` | `std_msgs/String` | MANUAL/AUTO/EMERGENCY_STOP/DISABLED/ERROR |
-| `/fans/command_pwm` | `std_msgs/Int32MultiArray` | 管理器到硬件底层的内部双路命令 |
-| `/fans/enabled` | `std_msgs/Bool` | 底层是否接受新命令 |
-| `/fans/auto_enable` | `std_srvs/SetBool` | 显式启停风扇 AUTO |
-| `/fans/auto_enabled` | `std_msgs/Bool` | AUTO 请求是否仍被保留 |
-| `/fans/auto_active` | `std_msgs/Bool` | AUTO 条件成立且已有启用后新姿态 |
-| `/fans/auto_target_pwm` | `std_msgs/Int32MultiArray` | 变化率限制前的自动目标 |
-| `/fans/control_state` | `std_msgs/String` | 风扇管理器稳定状态 |
-
-状态话题使用 `RELIABLE + TRANSIENT_LOCAL + KEEP_LAST(1)`；姿态和命令使用可靠、
-volatile、小队列 QoS。新鲜度使用 `time.monotonic()`。
-
-### 保持兼容但路由或语义强化
-
-- `/fans/pwm`、`/fans/left/pwm`、`/fans/right/pwm`
-  - 名称和消息类型不变，只进入管理器，不再直达 GPIO 节点。
-- `/fans/stop`
-  - 仍归底层所有；现在立即停止并锁存 disabled。
-- `/fans/enable`
-  - `false` 立即停止并锁存；`true` 保持停止、清除旧命令并等待新命令。
-- `/enable_motor=true`
-  - 恢复成功后进入 MANUAL；失败不离开原安全状态；不直接进入 AUTO。
-- `/imu/set_zero` 和键盘 `z`
-  - 现在共用同一方法、有效性和新鲜度规则。
-
-## 6. 新增和修改的参数
-
-### IMU/电机控制器
-
-```yaml
-relative_attitude_topic: "/imu/relative_roll_pitch"
-imu_zero_generation_topic: "/imu/zero_generation"
-motor_mode_topic: "/motors/control_mode"
-motor_mode_publish_rate_hz: 5.0
-imu_zero_timeout_sec: 1.0
-```
-
-### 风扇管理器
-
-```yaml
-min_pwm_us: 800
-max_pwm_us: 2200
-fan_stop_pwm_us: 800
-fan_start_pwm_us: 1200
-fan_auto_max_pwm_us: 1400
-auto_enabled_at_start: false
-fan_deadband_on_deg: 5.0
-fan_deadband_off_deg: 3.0
-fan_full_scale_deg: 45.0
-control_rate_hz: 20.0
-status_publish_rate_hz: 5.0
-rise_step_pwm_us: 10
-fall_step_pwm_us: 20
-imu_timeout_sec: 0.2
-manual_command_timeout_sec: 0.5
-motor_mode_timeout_sec: 1.0
-fan_enabled_timeout_sec: 1.0
-require_motor_mode_for_manual: false
-```
-
-### 风扇底层
-
-```yaml
-enabled_status_publish_rate_hz: 5.0
-```
-
-`fans.launch.py` 默认 `require_motor_mode_for_manual=false`；
-`windarmor.launch.py` 覆盖为 `true`。
-
-## 7. 相对姿态和统一归零
-
-有效 IMU 姿态依次经过：
-
-1. 检查 x/y/z/w 均为有限值；
-2. 拒绝零范数或小于阈值的范数；
-3. 归一化四元数；
-4. 转换 roll/pitch；
-5. 应用 roll/pitch axis sign；
-6. 更新最新有效绝对姿态和本地单调时间；
-7. 扣除统一零点；
-8. 把相对差归一化到 `[-π, π]`；
-9. 保留原 IMU header，发布 rad 单位相对姿态；
-10. 仅在电机 AUTO 时继续死区、±90°、方向、软限位和变化率处理。
-
-MANUAL 下仍发布相同的统一相对姿态，但不产生电机 AUTO 目标。无效四元数不会
-更新最新有效姿态、有效时间或发布消息。
-
-归零成功会记录当前有效姿态、序列号并递增零点代次。风扇管理器收到任何新的
-零点代次（包括启动后首次可信代次）都会丢弃此前姿态、清除 AUTO 并立即停止；
-必须收到归零后的新姿态且由用户重新显式启用 AUTO。
-
-## 8. 电机模式状态
-
-内部状态映射：
-
-```text
-MANUAL_RUNNING   -> MANUAL
-AUTO_RUNNING     -> AUTO
-EMERGENCY_STOP   -> EMERGENCY_STOP
-ERROR            -> ERROR
-其他内部状态或 Lifecycle inactive -> DISABLED
-```
-
-状态变化立即发布，并以默认 5 Hz 心跳发布。QoS 为 reliable、
-transient-local、depth 1。风扇管理器不无限信任缓存消息，默认 1 秒超时。
-
-## 9. 手动和自动仲裁
-
-- pair 消息必须恰好两个值，任一越界则整条拒绝且不刷新时间。
-- left/right 分别更新各自缓存和本地单调时间，一侧不会为另一侧续期。
-- 默认 0.5 秒超时；新鲜侧输出对应手动值，超时侧立即输出 800。
-- 至少一侧新鲜为 `MANUAL_ACTIVE`；两侧均无新鲜命令为 `MANUAL_WAITING`。
-- AUTO 默认关闭，且必须通过 `/fans/auto_enable=true` 显式申请。
-- 申请时要求新鲜电机 AUTO、新鲜 enabled=true、新鲜有效姿态且无急停锁存。
-- 成功后进入 `AUTO_WAITING`，清除手动和自动旧缓存并等待服务后的新姿态。
-- 服务后新姿态到达才进入 `AUTO_ACTIVE`。
-- AUTO 任一条件失效会立即停止并清除请求；条件恢复不会自动重新启用。
-
-## 10. 控制公式、迟滞和变化率
-
-```text
-pitch_activity = abs(pitch_deg)
-left_roll_activity = max(0, -roll_deg)
-right_roll_activity = max(0, roll_deg)
-left_activity = max(pitch_activity, left_roll_activity)
-right_activity = max(pitch_activity, right_roll_activity)
-```
-
-左右分别以 5° 启动、低于 3° 停止，在两阈值之间保持各自迟滞状态。运行状态从
-1200 μs 线性映射到 45° 时的 1400 μs；正常每周期最多上升 10 μs、下降
-20 μs。急停、disabled、状态/姿态超时、离开 AUTO 或关闭 AUTO 都绕过限速，
-立即回到 800 μs。
-
-## 11. 急停锁存和恢复
-
-管理器收到 `/e_stop=true` 后：
-
-- 立即输出双路停止；
-- 锁存 `e_stop_latched=true`；
-- 清除手动值/时间、姿态值/时间、迟滞、平滑值和 AUTO 请求；
-- 进入 `EMERGENCY_STOP`。
-
-底层同时停止、清除命令时间、锁存 disabled 并发布
-`/fans/enabled=false`。普通命令不能解除底层锁存。
-
-独立风扇模式要求急停事件之后收到新的 `/fans/enabled=true` 才解除本地锁存。
-统一模式还必须在急停事件之后收到新的、新鲜的电机 `MANUAL` 或 `AUTO`；
-仅调用 `/fans/enable=true`、电机仍为急停/禁用/错误，或使用急停前旧状态都
-不能恢复。恢复后不使用任何旧手动命令、旧姿态或旧 AUTO 请求。
-
-## 12. 风扇状态机
-
-实现以下稳定状态：
-
-- `SAFE_STOP`
-- `MANUAL_WAITING`
-- `MANUAL_ACTIVE`
-- `AUTO_WAITING`
-- `AUTO_ACTIVE`
-- `DISABLED`
-- `EMERGENCY_STOP`
-
-参数非法时节点初始化明确失败；消息非法、状态未知/超时或条件不一致时拒绝
-输入或进入停止状态，不产生非停止硬件命令。
-
-## 13. 参数校验
-
-纯配置类检查：
-
-- 所有相关浮点值必须有限；
-- `min_pwm_us < max_pwm_us`；
-- `0 <= off < on < full_scale`；
-- `min <= stop <= start <= auto_max <= max`；
-- 上升/下降步长均大于 0；
-- IMU、手动、电机模式和 enabled 超时均大于 0。
-
-ROS 管理器还检查控制频率和状态频率大于 0；底层检查 GPIO 不重复、帧宽和
-enabled 心跳频率大于 0。底层继续对最终 PWM 做范围限幅。
-
-## 14. 已执行命令与结果
-
-### 只读检查
-
-任务开始及结束期间执行了以下类别的只读命令：
+执行了以下只读检查：
 
 ```bash
 git status --short --branch
 git rev-parse HEAD
-git branch --show-current
-git describe --tags --exact-match HEAD
-git diff
-git diff --stat
+git tag --points-at HEAD
 git diff --check
-git diff --name-status
-rg --files
-rg -n <相关接口、硬件访问、参数和版本模式> <仓库文件>
-sed -n <分段范围> <AGENTS.md、FIRST_COMMAND.md、README、NEXT_COMMAND 及源码>
-wc -l docs/NEXT_COMMAND.md
+git diff --stat
+git diff --name-only
+rg --files ...
+rg -n <速度路径、普通位置写入、参数、受保护映射> ...
+sed -n <分段范围> <文档、源码、配置、测试、launch、package.xml、setup.py>
+wc -l ...
+sha256sum docs/NEXT_COMMAND.md
 ```
 
-这些命令只读取仓库和 Git 元数据。
+确认任务开始时八项旧路径与命令描述一致，且测试导入链只使用纯函数、替身和
+静态源码检查，不实例化硬件节点。
 
-### 静态语法
+### Python 语法与兼容导入
 
 ```bash
-python3 -m py_compile \
-  <本次修改的 Python 模块和 launch 文件>
+python3 -m py_compile <本次修改的 Python 文件>
+source /opt/ros/jazzy/setup.bash
+PYTHONPATH=src/imu_cybergear_ros2:${PYTHONPATH} \
+python3 -c 'from imu_cybergear_ros2 import ...'
 ```
 
-结果：成功，无输出。该命令没有导入或实例化硬件节点。
+结果：成功；延迟导出的原包根符号可以正常导入。
 
 ### 定向 pytest
 
-首次定向命令错误地用新 `PYTHONPATH` 覆盖了 ROS 2 已设置的路径，在测试收集
-阶段因找不到 `std_msgs/rclpy` 停止，未执行测试。修正为保留原
-`${PYTHONPATH}` 后：
+第一次只给纯模块设置源码 `PYTHONPATH` 时，测试收集因旧包
+`__init__.py` 会立即导入 `motor_manager`，进而需要 `std_msgs`，出现
+`ModuleNotFoundError: std_msgs`。没有执行任何测试或硬件代码。随后把包根
+兼容导出改为延迟导入，纯模块测试在不加载 ROS 子模块的情况下通过。
 
-```bash
-source /opt/ros/jazzy/setup.bash
-PYTHONPATH=src/imu_cybergear_ros2:src/windarmor_fan_controller:${PYTHONPATH} \
-python3 -m pytest \
-  src/imu_cybergear_ros2/test/test_imu_protocol.py \
-  src/imu_cybergear_ros2/test/test_controller_state.py \
-  src/imu_cybergear_ros2/test/test_control_interfaces.py \
-  src/windarmor_fan_controller/test/test_fan_control.py \
-  src/windarmor_fan_controller/test/test_pwm.py \
-  src/windarmor_fan_controller/test/test_fan_keyboard.py \
-  src/windarmor_fan_controller/test/test_interface_routing.py \
-  src/windarmor_bringup/test/test_launch_syntax.py -v
+后续定向结果依次为：
+
+```text
+31 passed
+42 passed
+142 passed
+149 passed
+56 passed（最终速度相关定向集合）
 ```
 
-阶段结果：
-
-- 84 项通过；
-- 扩展最低覆盖后 99 项通过；
-- 再扩展零点首次代次和失败日志测试时，测试替身缺少 `logger.error()`，
-  出现 1 项替身失败、99 项通过；
-- 补齐替身后最终为 100 项通过。
-
-上述测试只运行纯函数、状态替身、伪终端解析和静态源码/launch AST 检查。
-没有构造 `DualFanController`、IMU 驱动节点或电机控制节点。
-
-### 构建与三包回归
-
-执行两轮，最终轮命令为：
+### 三包构建与完整回归
 
 ```bash
 source /opt/ros/jazzy/setup.bash
@@ -420,146 +354,102 @@ colcon test-result --verbose
 
 ```text
 Summary: 3 packages finished
-Summary: 100 tests, 0 errors, 0 failures, 0 skipped
+Summary: 153 tests, 0 errors, 0 failures, 0 skipped
 ```
 
-构建和测试命令没有启动节点、执行 launch 或访问设备。
+测试分组：
 
-## 15. 测试分组结果
-
-| 分组 | 最终结果 |
+| 分组 | 结果 |
 |---|---:|
-| IMU 协议、四元数和相对姿态纯函数 | 46 项通过 |
-| 电机公开状态、恢复替身和接口静态结构 | 8 项通过 |
-| 风扇公式、配置、缓存、AUTO、状态机和急停 | 32 项通过 |
-| PWM 范围、底层命令门和看门狗 | 5 项通过 |
-| 键盘伪终端解析 | 2 项通过 |
-| 风扇接口路由与底层静态安全结构 | 5 项通过 |
-| Bringup launch AST 与复用结构 | 2 项通过 |
-| **合计** | **100 项通过，0 失败，0 错误，0 跳过** |
+| 新增目标推进纯函数 | 31 项通过 |
+| 新增 MotorManager 替身集成 | 18 项通过 |
+| 电机静态接口（含原有 4 项） | 8 项通过 |
+| 原 IMU、状态、风扇、PWM、键盘与 launch 回归 | 96 项通过 |
+| **总计** | **153 通过，0 失败，0 错误，0 跳过** |
 
-## 16. 未执行的验证
+构建、测试和语法命令均未启动节点或 launch，也未构造真实驱动后端。
 
-以下均未执行：
+## 13. 未执行验证与硬件状态
 
-- 任何 ROS 2 节点、launch、topic、service 或运行时 ROS graph 检查；
-- 真实 IMU 串口读取；
-- SocketCAN/CAN-USB 连接和电机控制；
-- GPIO12/13 占用、PWM 输出、电调解锁或风扇控制；
-- 电机或风扇断电实机测试；
-- 电机或风扇带电测试；
-- 1200/1400 μs 标定；
-- 真实消息时序、QoS、进程退出和 launch 集成验证。
+未执行：
 
-原因：本阶段只授权软件实现与纯软件验证，并明确禁止运行节点、launch 和访问
-硬件。未执行项均等待后续单独授权，不能视为已验证。
+- 任何 `ros2 run`、`ros2 launch`、`ros2 topic` 或 `ros2 service`；
+- 真实 IMU、串口、SocketCAN、CAN HAT+ 或 CyberGear 初始化；
+- GPIO12/13、PWM、电调解锁或风扇控制；
+- 电机或风扇断电/带电实机测试；
+- 新 `4.0 rad/s` 三模式速度的真实机械验证；
+- 真实终端字符重复率、ROS 回调时序和进程级 Lifecycle 验证。
 
-## 17. 硬件影响声明
+原因：本任务只授权软件实现和不访问硬件的测试。
 
-- IMU：未访问。
-- CAN：未访问，未修改系统 CAN 状态。
-- GPIO：未访问，GPIO12/13 映射和用途未改变。
-- PWM：未输出。
-- 真实串口：未访问。
-- 微电机动力：未通电、未控制、未影响。
-- 风扇动力：未通电、未控制、未影响。
-- `sudo`：未使用。
+硬件影响：IMU 未访问；CAN 未连接；GPIO/PWM 未访问；真实串口未打开；4 个
+微电机和 2 个风扇均未因本任务通电、运动或旋转；未使用 `sudo`。
 
-## 18. 剩余风险与等待实机验证
+## 14. 剩余风险与人工验证建议
 
-### 剩余软件风险
+- `4.0 rad/s` 只是软件候选值，负载下真实速度、力矩和机构冲击未知；
+- 自动测试使用替身时钟和驱动，尚未测量 ROS 定时器在树莓派负载下的抖动；
+- 真实终端 20/25 Hz 以外的重复字符行为需要人工感受精细度；
+- IMU 缓慢/快速倾斜、看门狗与推进器的真实并发时序尚未实机观察；
+- `current_targets` 保持原有写失败更新语义，连续 CAN 写失败仍依赖既有错误和
+  安全监控，不代表硬件已经到达软件命令位置；
+- 当前仍没有完整节点级 fake CAN/IMU 集成测试。
 
-- 尚未通过运行时 ROS graph 验证 QoS 匹配、transient-local 初值、回调时序和
-  服务交互；
-- 尚未验证 Lifecycle 状态变化时公开模式的实际发布时序；
-- 尚未验证独立/统一 launch 的真实参数覆盖和进程退出顺序；
-- 相对姿态源时间戳倒退检测尚未在真实 IMU 时间源上观察；
-- 急停后底层 enabled 和电机模式消息的跨进程到达顺序仅由纯状态测试覆盖；
-- 当前没有 GPIO、CAN、真实串口或完整节点的 mock/fake 集成测试。
+最新分级步骤已写入 `docs/MANUAL_VERIFICATION.md`。建议未来另行授权后先使用
+临时 `0.5 rad/s` 参数、固定机器人、逐电机验证，再按 `1.0 → 2.0 → 4.0`
+逐级提高；本反馈不要求用户现在通电。
 
-### 后续实机验证需求
+## 15. 最终 Git 检查
 
-- 在另行授权后验证相对姿态方向、零点和 header；
-- 验证电机模式心跳和恢复后只进入 MANUAL；
-- 验证公共手动命令只能经管理器到达底层；
-- 验证单侧/双侧超时、底层看门狗、stop/enable/e-stop 锁存；
-- 验证统一急停需要风扇和电机双条件恢复；
-- 在满足十项带电授权门槛后，谨慎标定 1200/1400 μs 和 AUTO 方向、迟滞、
-  变化率及停止行为。
+`git diff --check`：无输出，通过。
 
-本反馈不要求用户现在通电。
-
-## 19. 最终 Git 检查
-
-`git diff --check`：
+本文件写入后的 `git diff --stat`（标准命令不统计三个新建未跟踪文件）：
 
 ```text
-无输出，通过
+ README.md                                          |   63 +-
+ docs/LATEST_FEEDBACK.md                            |  748 +++----
+ docs/MANUAL_VERIFICATION.md                        | 1061 ++--------
+ docs/NEXT_COMMAND.md                               | 2195 ++++++++------------
+ src/imu_cybergear_ros2/README.md                   |   61 +-
+ .../config/imu_cybergear_params.yaml               |   31 +-
+ .../imu_cybergear_ros2/__init__.py                 |   28 +-
+ .../imu_cybergear_ros2/controller_state.py         |   14 +-
+ .../imu_motor_controller_node.py                   |  160 +-
+ .../imu_cybergear_ros2/keyboard_handler.py         |   10 +-
+ .../imu_cybergear_ros2/motor_manager.py            |  474 +++--
+ .../imu_cybergear_ros2/safety_monitor.py           |    2 +
+ .../test/test_control_interfaces.py                |   51 +
+ 13 files changed, 2081 insertions(+), 2817 deletions(-)
 ```
 
-`git diff --stat`（标准命令不统计未跟踪文件）：
+其中 `docs/NEXT_COMMAND.md` 的差异是任务开始前用户已有修改。三个新文件为：
 
 ```text
- README.md                                          |   70 +-
- docs/NEXT_COMMAND.md                               | 1768 ++++++++++++++++++++
- src/imu_cybergear_ros2/README.md                   |   22 +-
- .../config/imu_cybergear_params.yaml               |   13 +
- .../imu_cybergear_ros2/controller_state.py         |   25 +-
- .../imu_motor_controller_node.py                   |  191 ++-
- .../imu_cybergear_ros2/imu_protocol.py             |   59 +
- .../imu_cybergear_ros2/keyboard_handler.py         |   13 +-
- .../imu_cybergear_ros2/motor_manager.py            |    8 +-
- .../imu_cybergear_ros2/safety_monitor.py           |   10 +-
- src/imu_cybergear_ros2/package.xml                 |    1 +
- src/imu_cybergear_ros2/test/test_imu_protocol.py   |   57 +
- src/windarmor_bringup/launch/windarmor.launch.py   |   23 +-
- src/windarmor_bringup/test/test_launch_syntax.py   |    8 +
- .../config/fan_params.yaml                         |   29 +
- src/windarmor_fan_controller/launch/fans.launch.py |   21 +
- src/windarmor_fan_controller/package.xml           |    1 +
- src/windarmor_fan_controller/setup.py              |    1 +
- src/windarmor_fan_controller/test/test_pwm.py      |   27 +-
- .../windarmor_fan_controller/fan_node.py           |   88 +-
- .../windarmor_fan_controller/pwm.py                |   41 +
- 21 files changed, 2371 insertions(+), 105 deletions(-)
+src/imu_cybergear_ros2/imu_cybergear_ros2/motor_motion.py
+src/imu_cybergear_ros2/test/test_motor_manager.py
+src/imu_cybergear_ros2/test/test_motor_motion.py
 ```
-
-其中 `docs/NEXT_COMMAND.md` 的大段差异属于任务开始前用户已有修改。
-标准 `git diff --stat` 未显示 7 个未跟踪文件：本反馈文件、两个新增 IMU 测试、
-两个新增风扇测试，以及 `fan_control.py`、`fan_command_manager.py`。
 
 最终 `git status --short --branch`：
 
 ```text
 ## master...origin/master
  M README.md
+ M docs/LATEST_FEEDBACK.md
+ M docs/MANUAL_VERIFICATION.md
  M docs/NEXT_COMMAND.md
  M src/imu_cybergear_ros2/README.md
  M src/imu_cybergear_ros2/config/imu_cybergear_params.yaml
+ M src/imu_cybergear_ros2/imu_cybergear_ros2/__init__.py
  M src/imu_cybergear_ros2/imu_cybergear_ros2/controller_state.py
  M src/imu_cybergear_ros2/imu_cybergear_ros2/imu_motor_controller_node.py
- M src/imu_cybergear_ros2/imu_cybergear_ros2/imu_protocol.py
  M src/imu_cybergear_ros2/imu_cybergear_ros2/keyboard_handler.py
  M src/imu_cybergear_ros2/imu_cybergear_ros2/motor_manager.py
  M src/imu_cybergear_ros2/imu_cybergear_ros2/safety_monitor.py
- M src/imu_cybergear_ros2/package.xml
- M src/imu_cybergear_ros2/test/test_imu_protocol.py
- M src/windarmor_bringup/launch/windarmor.launch.py
- M src/windarmor_bringup/test/test_launch_syntax.py
- M src/windarmor_fan_controller/config/fan_params.yaml
- M src/windarmor_fan_controller/launch/fans.launch.py
- M src/windarmor_fan_controller/package.xml
- M src/windarmor_fan_controller/setup.py
- M src/windarmor_fan_controller/test/test_pwm.py
- M src/windarmor_fan_controller/windarmor_fan_controller/fan_node.py
- M src/windarmor_fan_controller/windarmor_fan_controller/pwm.py
-?? docs/LATEST_FEEDBACK.md
-?? src/imu_cybergear_ros2/test/test_control_interfaces.py
-?? src/imu_cybergear_ros2/test/test_controller_state.py
-?? src/windarmor_fan_controller/test/test_fan_control.py
-?? src/windarmor_fan_controller/test/test_interface_routing.py
-?? src/windarmor_fan_controller/windarmor_fan_controller/fan_command_manager.py
-?? src/windarmor_fan_controller/windarmor_fan_controller/fan_control.py
+ M src/imu_cybergear_ros2/test/test_control_interfaces.py
+?? src/imu_cybergear_ros2/imu_cybergear_ros2/motor_motion.py
+?? src/imu_cybergear_ros2/test/test_motor_manager.py
+?? src/imu_cybergear_ros2/test/test_motor_motion.py
 ```
 
-未 commit、push、创建或修改标签。阶段 2 到此停止，等待用户审查。
+未创建 commit，未 push，未创建或修改 tag，`v0.3.0` 保持不变。

@@ -7,10 +7,12 @@ WindArmor 当前把两个已经过实机测试的前置项目整合为一个 ROS
 - 4 个小米 CyberGear 电机；
 - 2 个涵道风扇。
 
-当前稳定发布仍为 `v0.2.1`。本分支包含 `v0.3.0` 候选的软件实现：统一相对
-姿态、电机模式状态、风扇手动/自动仲裁和强化急停恢复。该候选目前只完成
-纯软件构建、纯函数/替身测试和静态路由检查；电机与风扇均未通电验证，
-自动风扇默认关闭。`1200 μs` 启动值和 `1400 μs` 自动上限也尚未实机标定。
+当前稳定发布为 `v0.3.0`：统一相对姿态、电机模式状态、风扇手动/自动仲裁
+和强化急停恢复已经实现，并已由用户按 README 完成机器人功能验证。当前工作
+分支还包含 `v0.3.0` 标签之后的电机速度统一改进；该改进只完成软件实现和
+纯软件测试，新的三模式 `4.0 rad/s` 候选速度尚未实机验证，且不属于
+`v0.3.0` 标签内容。自动风扇仍默认关闭，`1200 μs` 起转值和 `1400 μs`
+自动上限也仍需按实际设备标定。
 
 ## 硬件默认配置
 
@@ -27,6 +29,52 @@ motor_signs: [-1.0, 1.0, -1.0, 1.0]
 motor_limits_min: [-1.57, -1.57, -1.57, 0.0]
 motor_limits_max: [0.0, 1.57, 1.57, 1.57]
 ```
+
+### 电机统一运动速度
+
+MANUAL 键盘、AUTO IMU 跟随和 `h` HOME 回零现在只更新各电机的
+`desired_targets`。激活后的唯一固定周期推进器根据真实单调时间差，把最近
+已发送的 `current_targets` 逐步逼近期望目标：
+
+```text
+allowed_step = min(
+    max_position_step,
+    min(mode_speed, motor_speed_limit) × min(real_dt, motion_dt_max_sec)
+)
+```
+
+默认参数为：
+
+```yaml
+command_interval_sec: 0.02
+max_position_step: 0.4
+manual_motion_speed_rad_s: 4.0
+auto_motion_speed_rad_s: 4.0
+home_motion_speed_rad_s: 4.0
+motion_dt_max_sec: 0.05
+target_reached_tolerance_rad: 0.001
+manual_step_deg: 3.0
+manual_repeat_gap_sec: 0.8
+manual_repeat_dt_max_sec: 0.08
+default_speed: 10.0
+```
+
+三个 `*_motion_speed_rad_s` 是软件目标位置变化率，不保证等于负载下实测机械
+角速度。`default_speed` 是启动时写给 CyberGear 的位置模式速度上限初值；
+它不再直接决定三种模式的软件推进速度。`+/-` 调整选中电机的该速度上限：
+当上限低于当前模式速度时会限制运动，高于模式速度后继续增加也不会突破模式
+速度参数。
+
+MANUAL 轻按一次仍使用 `manual_step_deg` 作精细目标增量；同一电机、同一方向
+的连续重复字符按实际事件间隔换算有限增量，使稳定长按阶段尽量接近
+`manual_motion_speed_rad_s`。终端没有可靠 key-up 事件，因此每个字符只产生
+有限目标变化，松开后不会继续无限增加目标。
+
+AUTO 的 IMU 回调只更新最新期望目标，推进速度不再由 IMU 消息频率直接决定；
+缓慢倾斜时目标本身仍会缓慢变化，快速倾斜时由
+`auto_motion_speed_rad_s` 限速追赶。`h` 不再使用独立快速定时器；在 AUTO
+中按 `h` 会先退出 AUTO、进入 MANUAL，再由统一推进器按
+`home_motion_speed_rad_s` 回零。
 
 ### 双风扇
 
@@ -83,8 +131,8 @@ ros2 launch windarmor_bringup windarmor.launch.py
 > 本节是完成单设备方向、零点、软限位、风扇起转值和急停验证后的正常运行
 > 流程，不是首次带电调试流程。当前候选值 `1200 μs` 和 `1400 μs` 尚未实机
 > 标定；标定完成并获得硬件运行授权前，不得直接按本节给全部动力设备通电。
-> 完整的首次实机验证和十项授权要求见
-> [人工验证指南的 D3 节](docs/MANUAL_VERIFICATION.md#d3-最终目标imu-倾斜联动四电机与双风扇)。
+> 完整的分阶段实机验证和十项授权要求见
+> [最新人工验证指南](docs/MANUAL_VERIFICATION.md)。
 
 仅执行 `windarmor.launch.py` 不会立即进入最终联动：电机初始化后默认处于
 MANUAL，风扇 AUTO 也默认关闭。启动后按以下顺序操作。
@@ -284,7 +332,8 @@ ros2 topic pub --once /e_stop std_msgs/msg/Bool "{data: true}"
 ```
 
 MANUAL 模式下可按 `motor_ids` 的配置顺序（默认 `[4, 3, 2, 1]`）发送
-电机绝对目标，单位为弧度。节点仍会应用已有软限位与单步变化限制：
+电机绝对期望目标，单位为弧度。整条消息通过长度和有限值校验后才会更新，
+节点应用软限位并由统一推进器按 MANUAL 速度逐步逼近，不会直接跳写完整目标：
 
 ```bash
 ros2 topic pub --once /motors/manual_targets \

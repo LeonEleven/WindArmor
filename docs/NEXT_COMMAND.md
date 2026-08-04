@@ -1,1594 +1,1162 @@
-# WindArmor v0.3.0：阶段 2 软件实现与纯软件验证
+# WindArmor：统一 MANUAL、AUTO 与 HOME 电机运动速度
 
-## 1. 阶段状态与实施授权
+## 1. 当前任务目标
 
-此前的阶段 1 架构分析和补充澄清已经完成，最新方案位于：
+当前稳定里程碑已经创建 `v0.3.0` 标签，IMU 驱动电机和双风扇联动的主要功能
+已经实现并经过用户手动验证。
+
+本次任务不修改 `v0.3.0` 标签，而是在当前分支和当前 `HEAD` 基础上改进电机
+目标位置的推进方式，使以下三种运动路径具有统一、可预测、可配置的速度控制：
+
+1. MANUAL 模式下通过 `w/s/a/d/i/k/j/l` 控制电机；
+2. AUTO 模式下电机跟随 IMU 相对姿态；
+3. 按 `h` 后全部电机回到零目标。
+
+当前观测到：
+
+- `h` 自动回零明显快于手动按键；
+- `h` 自动回零也可能快于 AUTO 跟随 IMU；
+- 手动速度受键盘字符重复频率影响；
+- AUTO 目标推进受 IMU 消息到达频率影响；
+- `h` 使用固定定时器，因此能够稳定、连续地推进目标。
+
+本次目标不是简单增大某个步长，而是建立统一的固定周期电机目标推进器：
 
 ```text
-docs/LATEST_FEEDBACK.md
+手动按键 ─────────┐
+IMU AUTO 目标 ────┼──> desired_targets
+h 回零目标 ───────┘
+                         ↓
+               固定周期目标推进器
+                         ↓
+       根据模式速度和真实 dt 逐步逼近目标
+                         ↓
+                  CyberGear 位置命令
 ```
 
-现批准进入：
+完成后：
 
-```text
-阶段 2：软件实现与纯软件验证
-```
-
-本次批准仅允许：
-
-- 修改仓库中的产品代码、配置、测试和文档；
-- 执行确认不会访问真实硬件的构建；
-- 执行纯函数、mock、fake、静态结构和其他硬件隔离测试。
-
-本次批准不包含：
-
-- 真实 IMU 访问；
-- CAN 访问；
-- GPIO12 或 GPIO13 访问；
-- PWM 输出；
-- 电调初始化；
-- 微电机控制；
-- 风扇控制；
-- 任何带电测试；
-- 任何 ROS 2 硬件节点或 launch 的运行；
-- commit、push 或 tag。
-
-本任务必须遵守根目录 `AGENTS.md`。
+- MANUAL、AUTO 和 HOME 都通过同一个推进器写入电机目标；
+- 三种模式分别具有明确的速度参数；
+- 初始值设置为相同，使三种运动速度大致一致；
+- AUTO 运动速度不再直接依赖 IMU 消息频率；
+- HOME 不再拥有一条独立且更快的目标写入路径；
+- 手动长按时的平均目标速度尽量不依赖具体键盘重复频率；
+- 单次轻按仍保留较小角度的精细控制能力。
 
 ---
 
-## 2. 当前开发基线
+## 2. 强制遵守的规则
 
-当前实际开发基线为：
+本任务必须遵守：
 
-```text
-分支：master
-HEAD：bce019bfeab25e5b04c1fdfa39734aba49b7e4c1
-稳定标签：v0.2.1
-```
+- 根目录 `AGENTS.md`
+- `docs/FIRST_COMMAND.md`
+- 当前 `README.md`
+- 当前代码和配置
+- 用户已有工作区修改
 
-`v0.2.1` 已确认是本地和远程均存在、指向当前 HEAD 的附注标签。
+`v0.3.0` 标签已经存在，本次不得：
 
-`AGENTS.md` 当前仍记录 `v0.2.0`，这是已知的文档维护事项。本次不要修改
-`AGENTS.md`，也不要因为该差异切换、重置或清理工作区。
+- 移动、删除或覆盖 `v0.3.0` 标签；
+- 为现有提交重新创建同名标签；
+- 自动创建新标签；
+- 自动 commit；
+- 自动 push。
 
-实际实现必须基于当前分支、当前 HEAD 和用户已有工作区修改。
+本次只允许软件实现和不访问硬件的测试。
 
-不得执行：
+未经用户另行明确授权，不得：
 
-```bash
-git checkout
-git switch
-git reset
-git clean
-git restore
-git stash
-```
-
-除非用户之后明确授权。
-
----
-
-## 3. 反馈文件约定
-
-每次任务完成后的正式反馈必须覆盖：
-
-```text
-docs/LATEST_FEEDBACK.md
-```
-
-该文件只保留最新一次反馈。
-
-本次允许修改产品文件，因此最终反馈必须分别列出：
-
-1. 产品代码、配置、测试和文档的修改；
-2. 过程反馈文件 `docs/LATEST_FEEDBACK.md`；
-3. 用户在任务开始前已经存在的修改。
-
-不得把任务开始前已有的 `docs/NEXT_COMMAND.md` 描述为本次 Codex 修改。
-
-不得修改 `docs/NEXT_COMMAND.md`。
-
----
-
-## 4. 当前硬件状态与绝对禁令
-
-当前硬件状态没有变化：
-
-- 4 个 CyberGear 微电机没有动力供电；
-- 2 个涵道风扇没有动力供电；
-- 当前不授权任何带电测试；
-- 当前不授权访问真实 IMU；
-- 当前不授权访问 CAN；
-- 当前不授权访问 GPIO；
-- 当前不授权访问真实串口。
-
-本次绝对禁止：
-
-```bash
-ros2 run ...
-ros2 launch ...
-sudo ...
-./scripts/setup_can.sh ...
-```
-
-也不得：
-
-- 打开 `/dev/imu_usb`；
-- 启动 IMU LifecycleNode；
-- 创建真实 CAN 后端；
+- 启动 ROS 2 节点或 launch；
+- 访问真实 IMU；
+- 打开真实串口；
+- 连接 CAN；
+- 运行 `scripts/setup_can.sh`；
 - 初始化 CyberGear；
-- 实例化 `fan_controller`；
-- 初始化 `lgpio`、Servo 或其他 GPIO 后端；
-- 输出真实 PWM；
-- 使电调解锁；
-- 启动统一硬件 launch；
-- 通过 Python 导入并构造会访问真实硬件的节点；
-- 因为硬件未通电就启动硬件输出节点；
-- 把软件测试描述为实机验证。
+- 访问 GPIO12 或 GPIO13；
+- 输出 PWM；
+- 使电机运动；
+- 使风扇旋转；
+- 进行任何带电测试；
+- 使用 `sudo` 运行硬件程序。
 
-如果无法确定某项命令或测试是否会访问硬件，必须停止并询问用户。
+本次完成的是软件实现和纯软件验证，不是实机验证。
 
 ---
 
-## 5. 开始实施前的检查
+## 3. 本次明确不处理的事项
+
+此前代码审核中提出的其他风扇或安全问题，本次暂不修复，也不得借本任务扩大
+修改范围。
+
+本次不要主动修改：
+
+- 风扇 PWM 缓升缓降的回调频率问题；
+- 风扇急停恢复消息乱序问题；
+- 风扇 AUTO 故障后回落到手动心跳的问题；
+- 风扇未知电机模式处理问题；
+- 风扇底层看门狗参数问题；
+- 其他与电机运动速度统一无直接关系的重构。
+
+如果本次修改不可避免地触及这些区域，应停止并在
+`docs/LATEST_FEEDBACK.md` 中说明，不得自行扩大任务。
+
+---
+
+## 4. 开始前检查
 
 首先执行：
 
 ```bash
 git status --short --branch
+git rev-parse HEAD
+git tag --points-at HEAD
 git diff --check
 ```
 
-随后重新阅读：
+记录：
+
+- 当前分支；
+- 当前 HEAD；
+- 当前 HEAD 是否带标签；
+- 用户任务开始前已有修改；
+- `docs/NEXT_COMMAND.md` 的状态。
+
+随后阅读：
 
 - `AGENTS.md`
 - `docs/FIRST_COMMAND.md`
 - `docs/NEXT_COMMAND.md`
 - `docs/LATEST_FEEDBACK.md`
 - `README.md`
-- `src/imu_cybergear_ros2`
-- `src/windarmor_fan_controller`
-- `src/windarmor_bringup`
-- 相关配置、launch、测试、`package.xml` 和 `setup.py`
+- `src/imu_cybergear_ros2/README.md`
+- `src/imu_cybergear_ros2/config/imu_cybergear_params.yaml`
+- `imu_motor_controller_node.py`
+- `motor_manager.py`
+- `keyboard_handler.py`
+- `controller_state.py`
+- `safety_monitor.py`
+- 相关测试
+- 相关 launch
+- `package.xml`
+- `setup.py`
 
-在修改前必须确认：
+必须先核对当前代码是否仍符合以下情况：
 
-- 用户已有修改不会被覆盖；
-- 新增和现有测试不会实例化硬件节点；
-- Python 模块导入不会在模块级初始化硬件；
-- 构建命令不会启动节点或访问设备；
-- 当前接口类型与阶段 1 反馈一致。
+1. `write_target()` 根据 `_current_speeds × command_interval_sec` 限制单次变化；
+2. MANUAL 按键每收到一个字符调用一次 `manual_step()`；
+3. AUTO 在 IMU 回调中直接调用 `apply_targets()`；
+4. `h` 通过周期为 `command_interval_sec` 的定时器反复调用目标写入；
+5. `/motors/manual_targets` 当前直接调用 `apply_targets()`；
+6. `[` 和 `]` 当前可能直接写入 ±90° 目标；
+7. `default_speed` 当前同时用于 CyberGear 目标速度配置和软件步进计算；
+8. `manual_step_deg` 当前为每个按键字符的固定角度增量。
 
-如果代码与阶段 1 反馈存在实质差异，应先停止并写入
-`docs/LATEST_FEEDBACK.md` 报告，不得在未经说明的情况下改变架构。
-
----
-
-# 6. 已批准的总体架构
-
-采用以下架构：
-
-```text
-imu_motor_controller_node
-  ├─ 现有电机目标计算
-  ├─ /imu/relative_roll_pitch
-  └─ /motors/control_mode
-
-/fans/pwm
-/fans/left/pwm
-/fans/right/pwm
-/imu/relative_roll_pitch
-/motors/control_mode
-/fans/enabled
-/e_stop
-        ↓
-fan_command_manager
-        ↓
-/fans/command_pwm
-        ↓
-fan_controller
-        ↓
-GPIO12 / GPIO13
-```
-
-核心原则：
-
-1. 电机与风扇共享同一组修正和归零后的相对姿态；
-2. 不在风扇包中复制另一套 IMU 零点；
-3. `fan_command_manager` 完成手动/自动仲裁；
-4. 正式运行时只有管理器发布 `/fans/command_pwm`；
-5. `fan_controller` 只负责硬件 I/O、最终限幅、底层看门狗、急停和资源清理；
-6. 公共手动接口名称和消息类型保持兼容；
-7. 外部普通控制源不得绕过管理器直接进入硬件节点；
-8. 自动控制启动时默认关闭。
+如果当前代码与以上描述存在实质差异，先停止实施，将差异写入
+`docs/LATEST_FEEDBACK.md`，等待用户确认。
 
 ---
 
-# 7. 相对姿态唯一权威来源
+## 5. 当前速度差异的原因必须保留在文档中
 
-## 7.1 新增接口
+实现和 README 更新中应准确说明当前差异原因。
 
-新增：
+### MANUAL
 
-```text
-/imu/relative_roll_pitch
-geometry_msgs/msg/Vector3Stamped
-```
-
-消息语义：
+当前手动目标变化近似为：
 
 ```text
-header = 原始 sensor_msgs/Imu.header
-vector.x = relative roll，单位 rad
-vector.y = relative pitch，单位 rad
-vector.z = 0.0
+每个字符的目标增量 = manual_step_deg
+平均目标速度 ≈ manual_step_deg × 键盘字符重复频率
 ```
 
-不得把单位改成度。
+因此 `manual_loop_hz` 只是键盘读取线程的轮询频率，不等于操作系统实际产生
+字符的频率。
 
-## 7.2 处理顺序
+### AUTO
 
-相对姿态必须按照以下顺序产生：
+当前 AUTO 只有在收到并接受 IMU 消息时才推进一次目标。
 
-1. 检查四元数四个分量均为有限值；
-2. 拒绝 `NaN` 和 `Inf`；
-3. 拒绝零范数或过小范数；
-4. 归一化四元数；
-5. 转换为 roll 和 pitch；
-6. 应用 `roll_axis_sign` 和 `pitch_axis_sign`；
-7. 更新当前有效绝对姿态；
-8. 扣除统一 `_imu_zero_roll` 和 `_imu_zero_pitch`；
-9. 把相对差值归一化到 `[-π, π]`；
-10. 发布统一相对姿态；
-11. 只有电机处于 AUTO 时，才继续进行电机专用控制处理。
-
-统一相对姿态必须在以下电机专用步骤之前产生：
-
-- 电机姿态死区；
-- ±90° 电机控制限制；
-- 电机目标正负方向变换；
-- 电机软限位；
-- 电机变化率限制。
-
-## 7.3 MANUAL 模式行为
-
-即使电机处于 MANUAL，仍必须持续发布有效相对姿态。
-
-不得因为电机不在 AUTO 就提前返回并停止发布姿态。
-
-但 MANUAL 模式不得发送新的电机自动目标。
-
-## 7.4 无效姿态行为
-
-无效四元数：
-
-- 不更新最新有效姿态；
-- 不更新有效 IMU 时间；
-- 不发布相对姿态；
-- 不填充为零；
-- 不产生电机自动目标；
-- 最终由电机和风扇各自的数据超时逻辑进入安全状态。
-
-## 7.5 纯函数位置
-
-优先在现有：
+因此：
 
 ```text
-src/imu_cybergear_ros2/imu_cybergear_ros2/imu_protocol.py
+AUTO 目标推进速度
+≈ 每次允许变化量 × 实际 IMU 控制消息频率
 ```
 
-增加可测试的纯函数，包括：
+### HOME
 
-- 四元数有限值检查；
-- 四元数范数检查；
-- 四元数归一化；
-- 角度归一化；
-- 修正和零点扣除后的相对 roll/pitch 计算。
+当前 `h` 使用固定定时器，每 `command_interval_sec` 推进一步，因此目标推进
+稳定，不依赖键盘或 IMU 消息频率。
 
-本次原则上不新增 `attitude_control.py`，除非实际代码证明继续放入
-`imu_protocol.py` 会导致明显职责混乱。若必须偏离，应先在反馈中说明理由。
+这就是 `h` 目前明显较快的主要原因。
 
 ---
 
-# 8. 统一 IMU 归零
+## 6. 新的统一目标模型
 
-`/imu/set_zero` 和键盘 `z` 必须调用同一个控制节点方法，例如：
-
-```text
-set_imu_zero()
-```
-
-两种入口必须使用完全相同的：
-
-- 最新姿态来源；
-- 数据有效性检查；
-- 数据新鲜度检查；
-- 成功/失败返回语义；
-- 日志语义。
-
-不得再让键盘 `z` 绕过新鲜度检查。
-
-归零成功后：
-
-- 更新统一零点；
-- 记录姿态序列号或接收序号；
-- 后续发布的相对姿态使用新零点；
-- 自动风扇不能使用归零前缓存的数据；
-- 已处于自动状态时，风扇自动请求应被清除并立即停止；
-- 用户需要重新显式启用风扇 AUTO。
-
-不得修改：
-
-- `motor_ids`
-- `motor_signs`
-- `motor_limits_min`
-- `motor_limits_max`
-
----
-
-# 9. 电机模式状态接口
-
-新增：
+新增并明确区分两组目标：
 
 ```text
-/motors/control_mode
-std_msgs/msg/String
+desired_targets
+current_targets
 ```
 
-对外稳定值限定为：
+语义：
 
-```text
-MANUAL
-AUTO
-EMERGENCY_STOP
-DISABLED
-ERROR
-```
-
-内部状态映射：
-
-- `MANUAL_RUNNING` → `MANUAL`
-- `AUTO_RUNNING` → `AUTO`
-- `EMERGENCY_STOP` → `EMERGENCY_STOP`
-- `ERROR` → `ERROR`
-- `UNINITIALIZED` → `DISABLED`
-- `INITIALIZING` → `DISABLED`
-- Lifecycle inactive/cleanup/shutdown → `DISABLED`
-- `SHUTTING_DOWN` → `DISABLED`
+- `desired_targets`：各输入源希望电机最终到达的位置；
+- `current_targets`：最近一次实际发送给 CyberGear 的软件位置命令。
 
 要求：
 
-- 状态变化时立即发布；
-- 周期性发布心跳；
-- 状态心跳频率可通过 YAML 配置；
-- 使用 `RELIABLE + TRANSIENT_LOCAL + KEEP_LAST(1)`；
-- 风扇管理器仍必须使用本地单调时钟判断状态是否超时；
-- 不能无限信任 transient-local 保存的旧消息。
+- 所有普通运动输入只更新 `desired_targets`；
+- 固定周期目标推进器是正常运行时唯一逐步更新 `current_targets` 并发送位置
+  命令的路径；
+- MANUAL、AUTO、HOME、`/motors/manual_targets`、`[` 和 `]` 不得各自拥有
+  不同的正常速度限制路径；
+- 软限位在设置 `desired_targets` 时应用；
+- 发送前仍进行最终软限位防御；
+- 急停、配置、设机械零点和退出等特殊安全/初始化流程可以保留必要的直接硬件
+  操作，但不得被普通运动控制复用。
 
-建议初始参数：
+建议在节点初始化后建立：
 
-```yaml
-motor_mode_publish_rate_hz: 5.0
+```python
+_current_targets: dict[int, float]
+_desired_targets: dict[int, float]
 ```
 
-## 9.1 电机恢复语义修正
-
-当前 `/enable_motor=true` 从急停恢复后没有正确离开
-`EMERGENCY_STOP`。
-
-在不改变现有硬件参数的前提下修正为：
-
-```text
-/enable_motor=true
-  → 执行现有恢复和保持当前位置逻辑
-  → 恢复成功后进入 MANUAL
-  → 不得直接恢复 AUTO
-```
-
-键盘 `r` 和服务恢复最终都应进入 MANUAL。
-
-该变化必须通过纯软件替身或状态测试覆盖，不得连接真实 CAN 或电机。
+初始时两者必须一致，避免激活定时器后出现意外跳变。
 
 ---
 
-# 10. 底层 `fan_controller` 的职责
+## 7. 固定周期电机目标推进器
 
-## 10.1 最终命令入口
+继续使用现有参数：
 
-`fan_controller` 改为只订阅：
-
-```text
-/fans/command_pwm
-std_msgs/msg/Int32MultiArray
+```yaml
+command_interval_sec: 0.02
 ```
 
-正式架构中不得继续直接订阅：
+但重新明确其语义：
+
+> 固定电机目标推进定时器的期望周期，而不是由各输入回调自行使用的时间假设。
+
+在节点激活后创建一个固定周期定时器：
 
 ```text
-/fans/pwm
-/fans/left/pwm
-/fans/right/pwm
+周期 = command_interval_sec
 ```
 
-否则外部发布者可以绕过仲裁。
+在停用、cleanup 和 shutdown 时销毁或停止该定时器。
 
-底层仍必须对命令执行最终 PWM 范围限制。
+输入回调不得直接推进普通电机位置命令。
 
-## 10.2 `/fans/stop`
+### 7.1 使用真实时间差
 
-保留现有接口和所有权：
+每次推进使用：
+
+```python
+now = time.monotonic()
+dt = now - last_motion_tick_time
+```
+
+不能始终假设真实周期恰好等于 `command_interval_sec`。
+
+为避免线程暂停或系统卡顿后产生巨大一步，增加参数：
+
+```yaml
+motion_dt_max_sec: 0.05
+```
+
+计算时：
 
 ```text
-/fans/stop
-std_srvs/srv/Trigger
+dt_used = clamp(dt, 0.0, motion_dt_max_sec)
 ```
 
-仍由 `fan_controller` 提供。
+第一帧定时器回调应安全初始化时间，不产生异常大步进。
 
-调用后必须：
+### 7.2 每周期变化量
 
-1. 立即输出左右停止 PWM；
-2. 把底层锁存为 disabled；
-3. 清除底层最后命令时间；
-4. 清除旧命令接受状态；
-5. 发布停止状态；
-6. 发布 `/fans/enabled=false`；
-7. disabled 状态拒绝普通 `/fans/command_pwm`。
+根据当前运动源选择模式速度：
 
-不得把 `/fans/stop` 改由管理器提供。
+```text
+MANUAL → manual_motion_speed_rad_s
+AUTO   → auto_motion_speed_rad_s
+HOME   → home_motion_speed_rad_s
+```
 
-## 10.3 `/fans/enable`
+每个电机还保留当前 SDO 速度上限：
+
+```text
+effective_speed =
+    min(mode_motion_speed_rad_s, current_motor_speed_limit_rad_s)
+```
+
+本周期允许最大变化：
+
+```text
+time_step = effective_speed × dt_used
+
+allowed_step = min(
+    max_position_step,
+    time_step
+)
+```
+
+新命令：
+
+```text
+new_target = current_target + clamp(
+    desired_target - current_target,
+    -allowed_step,
+    +allowed_step
+)
+```
+
+最终继续应用既有软限位。
+
+### 7.3 到达判定
+
+当：
+
+```text
+abs(desired_target - current_target) <= target_reached_tolerance_rad
+```
+
+可直接令：
+
+```text
+new_target = desired_target
+```
+
+增加参数：
+
+```yaml
+target_reached_tolerance_rad: 0.001
+```
+
+不得使用姿态死区 `deadband_rad` 代替位置推进器的到达容差，因为二者用途不同。
+
+---
+
+## 8. 新增模式速度参数
+
+在 `imu_cybergear_params.yaml` 中增加：
+
+```yaml
+# 固定周期目标推进时使用的模式速度。
+# 这些是软件目标变化率，不等同于真实负载下测得的机械角速度。
+manual_motion_speed_rad_s: 4.0
+auto_motion_speed_rad_s: 4.0
+home_motion_speed_rad_s: 4.0
+
+# 定时器实际周期异常时允许使用的最大 dt。
+motion_dt_max_sec: 0.05
+
+# 软件目标认为已经到达的容差。
+target_reached_tolerance_rad: 0.001
+```
+
+三种模式初始设置为相同的 `4.0 rad/s`，目的是让三种模式的软件目标推进速度
+大致一致。
+
+`4.0 rad/s` 只是初始候选值，尚未经过本轮实机验证。
+
+不得把它描述为已验证安全速度。
+
+### 8.1 `default_speed` 的新语义
 
 保留：
 
-```text
-/fans/enable
-std_srvs/srv/SetBool
+```yaml
+default_speed: 10.0
 ```
 
-`data=false`：
+但文档和代码注释应明确：
 
-- 立即输出停止 PWM；
-- 锁存 disabled；
-- 清除命令时间；
-- 发布 `/fans/enabled=false`。
+- 它是启动时写给 CyberGear 的位置模式目标速度上限；
+- 它也是每个电机的硬件/底层速度上限初值；
+- 普通软件目标推进速度由三个新模式速度参数决定；
+- 实际软件推进速度不会超过当前电机速度上限。
 
-`data=true`：
+### 8.2 `+` 和 `-`
 
-- 再次输出停止 PWM；
-- 清除旧命令时间；
-- 恢复接受新命令；
-- 发布 `/fans/enabled=true`；
-- 不恢复任何旧 PWM；
-- 在新命令到达前保持停止。
+保留现有按键兼容性：
 
-## 10.4 `/fans/enabled`
+- `+` 提高当前选中电机的速度上限；
+- `-` 降低当前选中电机的速度上限。
 
-新增：
+目标推进器使用：
 
 ```text
-/fans/enabled
-std_msgs/msg/Bool
+min(模式速度, 当前电机速度上限)
 ```
 
-要求：
+因此：
 
-- 状态变化时立即发布；
-- 周期发送心跳；
-- 使用 `RELIABLE + TRANSIENT_LOCAL + KEEP_LAST(1)`；
-- 频率由 YAML 配置。
+- 当电机速度上限低于模式速度时，`+/-` 会直接影响该电机运动速度；
+- 当电机速度上限已经高于模式速度时，继续增加不会超过模式速度参数；
+- 日志必须明确显示“电机速度上限”和当前模式速度，避免让用户误以为
+  `+` 一定会继续提高运动速度。
 
-建议初始值：
+不得删除现有：
 
 ```yaml
-enabled_status_publish_rate_hz: 5.0
+manual_speed_min
+manual_speed_max
+manual_speed_step
 ```
 
-## 10.5 `/e_stop`
-
-底层收到：
-
-```text
-/e_stop = true
-```
-
-必须：
-
-- 立即输出停止 PWM；
-- 锁存 disabled；
-- 清除命令时间；
-- 发布 `/fans/enabled=false`；
-- 禁止普通命令恢复输出；
-- 必须经过显式 `/fans/enable=true` 才能恢复底层接受能力。
-
-急停不能经过缓降。
-
-## 10.6 底层看门狗
-
-底层现有命令看门狗必须保留。
-
-管理器心跳不能被视为删除底层看门狗的理由。
-
-底层命令超时：
-
-- 立即输出停止 PWM；
-- 保持现有安全策略；
-- 不得输出旧命令；
-- 具体 enabled 状态是否保持不变，应保持与已批准方案一致并通过测试记录。
+除非代码检查证明它们可以在保持兼容的情况下被更清晰地重命名。若需要破坏性
+重命名，应停止并报告，不得自行实施。
 
 ---
 
-# 11. `fan_command_manager`
+## 9. MANUAL 键盘目标更新
 
-新增无 GPIO、无 CAN、无串口访问的 ROS 2 节点：
+### 9.1 单次轻按
 
-```text
-fan_command_manager
-```
-
-职责：
-
-- 接收公共手动命令；
-- 接收统一相对姿态；
-- 接收电机模式；
-- 接收底层 enabled 状态；
-- 接收系统 `/e_stop`；
-- 提供自动模式启停服务；
-- 计算自动目标；
-- 维护迟滞和变化率限制；
-- 对手动与自动来源进行单一仲裁；
-- 处理所有来源超时；
-- 输出唯一正常底层命令；
-- 发布可观察状态。
-
-不得：
-
-- 导入或初始化 GPIO；
-- 连接 CAN；
-- 打开串口；
-- 初始化电调；
-- 直接控制微电机；
-- 独立解析原始 IMU 零点；
-- 绕过底层 PWM 限幅和看门狗。
-
-核心状态和计算应放入不依赖 ROS 的纯 Python 类或纯函数模块，例如：
-
-```text
-fan_control.py
-```
-
----
-
-# 12. 手动命令接口与新鲜度
-
-保持公共接口：
-
-```text
-/fans/pwm
-std_msgs/msg/Int32MultiArray
-
-/fans/left/pwm
-std_msgs/msg/Int32
-
-/fans/right/pwm
-std_msgs/msg/Int32
-```
-
-## 12.1 双通道消息
-
-`/fans/pwm` 的有效消息必须恰好包含两个元素。
-
-一条有效消息原子更新：
-
-- 左侧命令；
-- 右侧命令；
-- 左侧接收时间；
-- 右侧接收时间。
-
-长度错误时：
-
-- 拒绝整条消息；
-- 不更新任何命令；
-- 不更新任何时间戳。
-
-## 12.2 单通道消息
-
-`/fans/left/pwm`：
-
-- 只更新左侧值和左侧时间；
-- 不更新右侧值；
-- 不刷新右侧时间。
-
-`/fans/right/pwm`：
-
-- 只更新右侧值和右侧时间；
-- 不更新左侧值；
-- 不刷新左侧时间。
-
-## 12.3 越界输入
-
-上层管理器必须检查：
-
-```text
-min_pwm_us <= value <= max_pwm_us
-```
-
-越界时：
-
-- 拒绝该条消息；
-- 不更新时间戳；
-- 两元素消息中任一元素越界时拒绝整条消息；
-- 不允许部分接受；
-- 不进行静默限幅。
-
-底层继续保留最终限幅，作为最后一道防御。
-
-## 12.4 手动超时
-
-左右通道分别维护新鲜度。
-
-- 左侧超时只让左侧输出停止 PWM；
-- 右侧超时只让右侧输出停止 PWM；
-- 至少一侧新鲜时处于 `MANUAL_ACTIVE`；
-- 两侧都超时时进入 `MANUAL_WAITING`；
-- 一侧消息不得给另一侧续期。
-
-建议初始参数：
+保留现有参数：
 
 ```yaml
-manual_command_timeout_sec: 0.5
+manual_step_deg: 3.0
 ```
 
-如果现有键盘心跳频率与该值不适配，可选择更合理初值，但必须在反馈中说明
-依据。
+重新定义为：
 
----
+> 一个不属于连续重复序列的单次按键，对 `desired_target` 增加的精细步进角度。
 
-# 13. 自动风扇控制公式
-
-使用经过统一修正和归零的相对姿态。
-
-先转换为度用于控制参数：
+单次按键：
 
 ```text
-roll_deg = degrees(relative_roll_rad)
-pitch_deg = degrees(relative_pitch_rad)
+desired_target += direction × manual_step_deg
 ```
 
-方向公式固定为：
+然后应用软限位。
 
-```text
-pitch_activity = abs(pitch_deg)
+单次按键不得直接写 CyberGear 位置。
 
-left_roll_activity = max(0.0, -roll_deg)
-right_roll_activity = max(0.0, roll_deg)
+这样仍保留轻按一次约 3° 的精细调节能力。
 
-left_activity = max(pitch_activity, left_roll_activity)
-right_activity = max(pitch_activity, right_roll_activity)
-```
+### 9.2 长按和重复字符
 
-不得把 pitch 和 roll 简单相加。
-
-期望行为：
-
-- 正 pitch：左右风扇同时增大；
-- 负 pitch：左右风扇同时增大；
-- 相同绝对值的正负 pitch 产生相同结果；
-- 左倾：左侧增加、右侧只保留 pitch 分量；
-- 右倾：右侧增加、左侧只保留 pitch 分量；
-- 零姿态：左右停止。
-
----
-
-# 14. 死区、迟滞、映射和变化率
-
-初始配置：
+为了降低长按速度对操作系统字符重复频率的依赖，增加：
 
 ```yaml
-auto_enabled_at_start: false
-
-fan_deadband_on_deg: 5.0
-fan_deadband_off_deg: 3.0
-fan_full_scale_deg: 45.0
-
-fan_stop_pwm_us: 800
-fan_start_pwm_us: 1200
-fan_auto_max_pwm_us: 1400
-
-control_rate_hz: 20.0
-rise_step_pwm_us: 10
-fall_step_pwm_us: 20
-
-imu_timeout_sec: 0.2
-manual_command_timeout_sec: 0.5
-motor_mode_timeout_sec: 1.0
-fan_enabled_timeout_sec: 1.0
-
-motor_mode_publish_rate_hz: 5.0
-enabled_status_publish_rate_hz: 5.0
+manual_repeat_gap_sec: 0.8
+manual_repeat_dt_max_sec: 0.08
 ```
 
-这些是软件初始值，不代表已经实机标定。
+为每个电机和方向维护上一条相同运动按键的接收时间。
 
-## 14.1 左右独立迟滞
-
-每侧分别维护运行状态。
+如果某个按键事件不属于连续重复序列：
 
 ```text
-停止状态：
-activity >= fan_deadband_on_deg
-→ 进入运行
-
-运行状态：
-activity < fan_deadband_off_deg
-→ 退出运行
-
-两个阈值之间：
-保持原状态
+增量 = manual_step_deg
 ```
 
-## 14.2 角度到 PWM
-
-运行状态下：
+如果同一电机、同一方向的字符在 `manual_repeat_gap_sec` 内再次到达，则：
 
 ```text
-ratio = clamp(
-    (activity_deg - fan_deadband_on_deg)
-    / (fan_full_scale_deg - fan_deadband_on_deg),
+event_dt = 当前接收时间 - 上一次相同按键接收时间
+
+repeat_dt = clamp(
+    event_dt,
     0.0,
-    1.0
+    manual_repeat_dt_max_sec
 )
 
-target_pwm = fan_start_pwm_us + ratio * (
-    fan_auto_max_pwm_us - fan_start_pwm_us
-)
+增量 = manual_motion_speed_rad_s × repeat_dt
 ```
 
-停止状态：
+再应用：
+
+- 当前电机速度上限；
+- `max_position_step`；
+- 电机软限位。
+
+目标是使稳定重复阶段的平均期望目标变化率近似：
 
 ```text
-target_pwm = fan_stop_pwm_us
+manual_motion_speed_rad_s
 ```
 
-## 14.3 正常变化率限制
+而不是：
 
 ```text
-next_pwm = current_pwm + clamp(
-    target_pwm - current_pwm,
-    -fall_step_pwm_us,
-    rise_step_pwm_us
-)
+manual_step_deg × 某台机器的键盘重复频率
 ```
 
-以下事件必须绕过变化率限制并立即停止：
+### 9.3 手动输入安全要求
 
-- `/e_stop=true`
-- `/fans/stop`
-- `/fans/enable=false`
-- 底层 disabled
-- 底层状态超时
-- 电机离开 AUTO
-- 电机模式超时
-- 姿态超时
-- 姿态无效
-- AUTO 关闭
-- 管理器退出
-- 参数或消息非法导致的安全停止
+- 不得在没有新字符时持续无限增加目标；
+- 终端没有可靠 key-up 事件，因此不能把单个字符理解为永久按住；
+- 每个字符只产生有限的期望目标增量；
+- 松开按键、字符停止后，`desired_target` 不再继续变化；
+- 推进器可以继续把 `current_target` 追到最后一个有限的
+  `desired_target`，随后停止；
+- 换方向时重置对应重复序列；
+- 切换电机时不复用另一个电机的重复时间；
+- 错误按键不得刷新运动重复时间；
+- 进入 AUTO、HOME、急停、停用或退出时清除手动重复状态。
+
+### 9.4 快速反向
+
+同一电机从正方向按键切换为负方向按键时：
+
+- 取消上一方向的重复序列；
+- 新方向的第一次按键按 `manual_step_deg` 处理；
+- 不允许把上一方向的大时间间隔用于计算反方向大步长。
 
 ---
 
-# 15. 参数校验
+## 10. `/motors/manual_targets`
 
-启动管理器前必须验证：
+保留现有接口和消息类型：
 
 ```text
-0 <= fan_deadband_off_deg
-fan_deadband_off_deg < fan_deadband_on_deg
-fan_deadband_on_deg < fan_full_scale_deg
-
-fan_stop_pwm_us <= fan_start_pwm_us
-fan_start_pwm_us <= fan_auto_max_pwm_us
-fan_auto_max_pwm_us <= max_pwm_us
-
-control_rate_hz > 0
-rise_step_pwm_us > 0
-fall_step_pwm_us > 0
-imu_timeout_sec > 0
-manual_command_timeout_sec > 0
-motor_mode_timeout_sec > 0
-fan_enabled_timeout_sec > 0
-motor_mode_publish_rate_hz > 0
-enabled_status_publish_rate_hz > 0
+/motors/manual_targets
+std_msgs/msg/Float64MultiArray
 ```
 
-非法参数不得产生硬件命令。
+行为改为：
 
-应在节点初始化阶段明确失败，或者进入永久安全停止并输出清晰错误。选择一种
-一致策略并通过测试覆盖。
+- 只在 MANUAL 模式接受；
+- 校验长度；
+- 校验所有元素均为有限值；
+- 按 `motor_ids` 顺序更新全部 `desired_targets`；
+- 应用软限位；
+- 不直接调用普通位置写入；
+- 使用 `manual_motion_speed_rad_s` 由固定推进器逐步逼近；
+- 收到新的绝对目标时停止 HOME；
+- 清除键盘重复序列，避免键盘旧状态继续影响该目标。
+
+错误消息：
+
+- 不进行部分更新；
+- 不改变任何 `desired_target`；
+- 不刷新任何运动状态。
 
 ---
 
-# 16. 风扇 AUTO 启用服务
+## 11. AUTO 模式
 
-新增：
+IMU 回调继续负责：
+
+- 四元数校验；
+- roll/pitch 解析；
+- 轴向修正；
+- 统一零点扣除；
+- 相对姿态发布；
+- 姿态死区；
+- 电机方向映射；
+- ±90° 控制限制；
+- 软限位目标计算。
+
+但 AUTO 回调改为：
 
 ```text
-/fans/auto_enable
-std_srvs/srv/SetBool
+计算 targets
+→ 更新 desired_targets
+→ 更新时间戳
 ```
 
-## 16.1 启用条件
+不得在 IMU 回调中直接调用正常电机位置写入。
 
-`data=true` 只有在以下条件全部成立时才能成功：
+固定推进器继续在两帧 IMU 消息之间逼近最近的有效姿态目标。
 
-- 电机模式为 `AUTO`；
-- 电机模式状态新鲜；
-- 底层风扇 `enabled=true`；
-- 底层 enabled 状态新鲜；
-- 管理器不处于未恢复急停；
-- 已有有效且新鲜的相对姿态，证明数据源可用；
-- 自动控制参数有效。
+这样：
 
-条件不满足时：
+- 快速倾斜 IMU 时，电机以 `auto_motion_speed_rad_s` 限速追赶；
+- IMU 消息频率不再直接决定每秒允许推进多少次；
+- 缓慢倾斜 IMU 时，目标本身变化慢，电机仍会自然缓慢跟随；
+- IMU 看门狗和 AUTO 退出行为保持原有安全语义；
+- IMU 超时后不得继续向旧 AUTO 目标运动。
 
-- 返回失败；
-- 不记录 AUTO 请求；
-- 不进入等待武装状态；
-- 返回消息说明失败原因。
+### 11.1 AUTO 超时
 
-不得采用“先记录请求，条件恢复后自动启动”的隐藏武装方案。
+当现有 IMU 看门狗使控制器退出 AUTO 时：
 
-## 16.2 成功启用
+- 立即停止继续追赶旧 AUTO `desired_targets`；
+- 把 `desired_targets` 同步为当前已发送的 `current_targets`；
+- 保持当前位置；
+- 不得继续完成尚未追上的旧姿态目标；
+- 保持现有从 AUTO 切回 MANUAL 的行为；
+- 不得削弱现有风扇 AUTO 清除和安全行为。
 
-成功后：
+### 11.2 切换到 AUTO
 
-- `auto_requested=true`；
-- 发布 `/fans/auto_enabled=true`；
-- 进入 `AUTO_WAITING`；
-- 立即输出停止；
-- 清除手动缓存；
-- 清除自动迟滞和平滑状态；
-- 记录当前姿态接收序号；
-- 必须等待服务成功之后到达的新姿态；
-- 新姿态到达后才可进入 `AUTO_ACTIVE`。
+从 MANUAL 切换到 AUTO 时：
 
-## 16.3 关闭 AUTO
+- 取消 HOME；
+- 清除手动按键重复状态；
+- 在收到新的有效 IMU 姿态前，`desired_targets` 保持为
+  `current_targets`；
+- 不得使用模式切换前缓存的陈旧姿态产生突然运动；
+- 收到新有效姿态后才更新 AUTO `desired_targets`。
 
-`data=false` 始终应成功。
-
-关闭后：
-
-- 立即停止；
-- `auto_requested=false`；
-- 发布 `/fans/auto_enabled=false`；
-- 发布 `/fans/auto_active=false`；
-- 清除自动缓存；
-- 清除迟滞；
-- 清除平滑输出状态；
-- 进入 `MANUAL_WAITING`、`DISABLED` 或 `EMERGENCY_STOP` 中符合当前安全条件
-  的状态；
-- 不自动恢复关闭前的手动缓存。
+如当前代码已经通过其他序列号或时间戳保证新姿态，请复用，不要重复建立不一致
+机制。
 
 ---
 
-# 17. 电机 AUTO 与风扇 AUTO 同步
+## 12. `h` 自动回零
 
-自动控制实际生效必须同时满足：
+删除 HOME 独立反复调用 `write_target()` 的快速定时器路径。
 
-```text
-auto_requested
-AND motor_mode == AUTO
-AND motor_mode 新鲜
-AND fan_enabled == true
-AND fan_enabled 状态新鲜
-AND e_stop_latched == false
-AND 已收到启用后的新姿态
-AND 姿态有效且新鲜
-```
+`h` 改为：
 
-以下任一事件必须：
+1. 检查控制器处于可以运动的正常状态；
+2. 如果当前为 AUTO，先显式切换到 MANUAL；
+3. 停止使用 AUTO 姿态目标；
+4. 清除手动按键重复状态；
+5. 将全部 `desired_targets` 设置为 `0.0`，并应用软限位；
+6. 设置当前运动源为 `HOME`；
+7. 由统一目标推进器使用 `home_motion_speed_rad_s` 回零；
+8. 全部电机到达目标后结束 HOME；
+9. 回零完成后保持 MANUAL，并保持零目标。
 
-- 立即停止；
-- 清除 AUTO 请求；
-- 清除自动缓存；
-- 发布 `/fans/auto_enabled=false`；
-- 发布 `/fans/auto_active=false`。
+因此 `h` 不得创建自己的运动定时器。
 
-事件包括：
-
-- 电机离开 AUTO；
-- 电机进入 `EMERGENCY_STOP`；
-- 电机进入 `ERROR`；
-- 电机进入 `DISABLED`；
-- 电机模式状态超时；
-- 底层风扇 disabled；
-- 底层状态超时；
-- `/e_stop=true`；
-- 姿态无效；
-- 姿态超时；
-- `/fans/stop`；
-- 管理器重启或退出。
-
-条件恢复后不得自动恢复 AUTO。用户必须重新显式调用：
+可以保留：
 
 ```text
-/fans/auto_enable=true
+go_all_to_zero()
+stop_auto_zero()
 ```
+
+等现有方法名以减少调用方修改，但内部语义应改为启停 HOME 目标状态，不再管理
+独立 ROS 定时器。
+
+### 12.1 HOME 被其他操作中断
+
+以下操作应取消 HOME：
+
+- 任意有效 MANUAL 运动按键；
+- 新的 `/motors/manual_targets`；
+- `[` 或 `]`；
+- 切换到 AUTO；
+- 急停；
+- 节点停用；
+- cleanup；
+- shutdown。
+
+取消时不得突然写入额外位置，只改变运动源和 `desired_targets`。
+
+### 12.2 HOME 速度
+
+当三个模式速度参数都为 `4.0` 时，相同初始目标误差下：
+
+- MANUAL 目标追赶；
+- AUTO 目标追赶；
+- HOME 回零；
+
+应使用相同的软件位置变化率上限。
+
+不得保留 HOME 特有的更快步进。
 
 ---
 
-# 18. 急停锁存和恢复规则
+## 13. `[` 和 `]` 快捷目标
 
-这是对阶段 1 方案的强制修正。
+现有 `[` 和 `]` 快捷键保持兼容，但改为：
 
-## 18.1 收到急停
+- 只在 MANUAL 模式使用；
+- 设置选中电机的 `desired_target` 为正或负 90°；
+- 应用该电机软限位；
+- 取消 HOME；
+- 清除对应手动重复状态；
+- 由统一推进器使用 `manual_motion_speed_rad_s` 运动；
+- 不得直接一次性向 CyberGear 写入完整 ±90° 目标。
 
-收到：
+日志应使用“设置期望目标”，不能误写为“已经到达”。
 
-```text
-/e_stop = true
-```
+---
 
-管理器必须：
+## 14. 正常位置写入职责拆分
 
-- 设置本地 `e_stop_latched=true`；
-- 立即输出停止；
-- 绕过变化率限制；
-- 清除手动左右缓存；
-- 清除所有手动时间戳；
-- 清除姿态缓存；
-- 清除姿态时间戳；
-- 清除迟滞；
-- 清除平滑输出状态；
-- 清除 AUTO 请求；
-- 进入 `EMERGENCY_STOP`。
+当前 `write_target()` 同时：
 
-底层风扇控制器同时：
+- 计算单步限速；
+- 更新 `_current_targets`；
+- 写入 SDO。
 
-- 立即输出停止；
-- 锁存 disabled；
-- 发布 `/fans/enabled=false`。
+实施后应清楚拆分职责。
 
-## 18.2 不允许仅由风扇 enable 清除系统急停
-
-在统一 `windarmor.launch.py` 运行模式中：
+建议至少区分：
 
 ```text
-/fans/enable=true
+set_desired_target()
+advance_targets()
+write_command_target()
 ```
 
-只能恢复底层风扇接受新命令的能力，**不能单独清除管理器的系统急停锁存**。
+### `set_desired_target()`
 
-统一系统中，管理器清除 `e_stop_latched` 必须同时确认：
+负责：
 
-1. 在急停事件之后收到了新的 `/fans/enabled=true`；
-2. 在急停事件之后收到了新的、有效且新鲜的电机模式；
-3. 电机模式已经是 `MANUAL` 或 `AUTO`；
-4. 电机模式不是 `EMERGENCY_STOP`、`DISABLED` 或 `ERROR`。
+- 输入有限值校验；
+- 软限位；
+- 更新 `desired_targets`；
+- 不访问 CAN。
 
-只有上述条件同时满足，才可：
+### `advance_targets()`
+
+负责：
+
+- 根据运动源选取速度；
+- 使用真实 `dt`；
+- 应用电机速度上限；
+- 应用 `max_position_step`；
+- 逼近 `desired_targets`；
+- 调用最终命令写入。
+
+核心数学计算应提取为纯函数，不能只存在于 ROS 定时器回调中。
+
+### `write_command_target()`
+
+负责：
+
+- 最终有限值检查；
+- 最终软限位；
+- 向 CyberGear 写入本周期已经算好的位置；
+- 更新 `current_targets`；
+- 更新相关状态和时间。
+
+不得在这里再次乘以 `command_interval_sec` 做第二层普通速度限制，否则会出现
+双重限速。
+
+如果硬件写入失败，应保持当前错误处理语义。若计划改变
+`current_targets` 在写失败时的更新顺序，必须增加测试并在反馈中说明。
+
+---
+
+## 15. 运动源和状态
+
+建议定义清晰的内部运动源，例如：
 
 ```text
-e_stop_latched=false
-→ MANUAL_WAITING
+IDLE
+MANUAL
+AUTO
+HOME
 ```
 
-不得恢复任何旧手动命令或 AUTO 请求。
-
-## 18.3 独立风扇运行模式
-
-为了保持 `fans.launch.py` 的独立手动调试能力，管理器增加参数：
-
-```yaml
-require_motor_mode_for_manual: false
-```
-
-在独立 `fans.launch.py` 中默认：
-
-```yaml
-require_motor_mode_for_manual: false
-```
-
-此模式下：
-
-- 自动风扇仍必须要求电机模式为 AUTO，因此没有电机控制器时不能启用 AUTO；
-- 手动风扇可以独立工作；
-- 急停后，必须在急停事件之后显式执行 `/fans/enable=true`，才能清除本地风扇
-  急停锁存并进入 `MANUAL_WAITING`；
-- 仍不得恢复旧命令。
-
-在统一 `windarmor.launch.py` 中必须覆盖为：
-
-```yaml
-require_motor_mode_for_manual: true
-```
-
-统一模式下，如果电机状态为以下任一值，手动风扇也必须停止：
+该运动源不是新的公共电机控制模式，不需要改变现有：
 
 ```text
+MANUAL
+AUTO
 EMERGENCY_STOP
 DISABLED
 ERROR
 ```
 
-如果统一模式中曾经收到过电机模式，但其后状态超时，也必须停止手动风扇。
+公共状态话题语义。
 
-这可以避免电机系统仍处于急停或失效状态时，风扇被单独重新启动。
+映射要求：
 
-## 18.4 手动模式允许的电机状态
+- 公共 MANUAL 可对应内部 IDLE、MANUAL 或 HOME；
+- 公共 AUTO 对应内部 AUTO；
+- 急停、DISABLED、ERROR 不允许普通目标推进；
+- HOME 完成后进入内部 IDLE，公共模式保持 MANUAL。
 
-统一模式中，手动风扇仅在新鲜电机模式为以下状态时允许：
-
-```text
-MANUAL
-AUTO
-```
-
-手动风扇是否运行仍由新鲜手动命令决定。
-
-电机处于 AUTO 不会自动启用风扇 AUTO；未请求风扇 AUTO 时，显式手动命令仍可
-按手动模式处理。
+不要为本任务破坏 `/motors/control_mode` 已有稳定值。
 
 ---
 
-# 19. 管理器状态机
+## 16. 安全行为
 
-至少实现以下状态：
+### 16.1 急停
 
-```text
-SAFE_STOP
-MANUAL_WAITING
-MANUAL_ACTIVE
-AUTO_WAITING
-AUTO_ACTIVE
-DISABLED
-EMERGENCY_STOP
-```
+收到急停时：
 
-## 19.1 `SAFE_STOP`
+- 立即停止正常推进定时器的电机写入；
+- 取消 HOME；
+- 清除手动重复状态；
+- 把 `desired_targets` 同步为当前 `current_targets`；
+- 保留现有电机停止、状态切换和系统 `/e_stop` 行为；
+- 不得通过运动速度限制延迟急停。
 
-用于：
+### 16.2 从急停恢复
 
-- 启动时尚无可信状态；
-- 参数非法；
-- 自动姿态无效或超时；
-- 模式状态出现不一致；
-- 无法归类的安全故障。
+恢复后：
 
-输出：
+- 进入 MANUAL；
+- `desired_targets = current_targets`；
+- 运动源为 IDLE；
+- 不恢复急停前的 MANUAL、AUTO 或 HOME 目标；
+- 等待新的操作指令。
 
-```text
-[stop_pwm, stop_pwm]
-```
+### 16.3 Lifecycle
 
-## 19.2 `MANUAL_WAITING`
+停用、cleanup 和 shutdown 时：
 
-条件：
+- 取消推进定时器；
+- 取消 HOME；
+- 清除手动重复状态；
+- 不保留会在重新激活后立即执行的旧期望目标；
+- 保留既有真实硬件停止和资源释放行为。
 
-- 不处于急停；
-- 底层 enabled；
-- 如果要求电机模式，则电机状态允许且新鲜；
-- AUTO 未请求；
-- 没有新鲜手动命令。
+### 16.4 参数非法
 
-输出停止 PWM。
+以下参数必须是有限值：
 
-## 19.3 `MANUAL_ACTIVE`
+- `command_interval_sec`
+- `motion_dt_max_sec`
+- `target_reached_tolerance_rad`
+- `manual_motion_speed_rad_s`
+- `auto_motion_speed_rad_s`
+- `home_motion_speed_rad_s`
+- `manual_step_deg`
+- `manual_repeat_gap_sec`
+- `manual_repeat_dt_max_sec`
+- `max_position_step`
+- `default_speed`
+- 手动速度上下限和步长
 
-条件：
-
-- 满足手动安全条件；
-- 至少一侧存在新鲜手动命令；
-- AUTO 未请求。
-
-输出：
-
-- 新鲜侧：对应手动命令；
-- 超时侧：停止 PWM。
-
-## 19.4 `AUTO_WAITING`
-
-条件：
-
-- AUTO 服务请求已成功；
-- 所有启用条件仍成立；
-- 正在等待服务成功后的新姿态。
-
-输出停止 PWM。
-
-## 19.5 `AUTO_ACTIVE`
-
-条件：
-
-- AUTO 请求仍有效；
-- 电机仍为 AUTO；
-- 底层仍 enabled；
-- 所有状态均新鲜；
-- 存在服务成功后的有效新姿态。
-
-输出自动计算结果。
-
-`AUTO_ACTIVE` 不表示风扇一定旋转。姿态处于死区时输出仍为停止 PWM。
-
-## 19.6 `DISABLED`
-
-用于：
-
-- 底层 enabled=false；
-- 底层状态未知或超时。
-
-立即停止并清除所有缓存和 AUTO 请求。
-
-## 19.7 `EMERGENCY_STOP`
-
-用于：
+并满足：
 
 ```text
-e_stop_latched=true
+command_interval_sec > 0
+motion_dt_max_sec >= command_interval_sec
+target_reached_tolerance_rad >= 0
+
+manual_motion_speed_rad_s > 0
+auto_motion_speed_rad_s > 0
+home_motion_speed_rad_s > 0
+
+manual_step_deg > 0
+manual_repeat_gap_sec > 0
+manual_repeat_dt_max_sec > 0
+manual_repeat_dt_max_sec <= manual_repeat_gap_sec
+
+max_position_step > 0
+
+default_speed > 0
+manual_speed_min > 0
+manual_speed_max >= manual_speed_min
+manual_speed_step > 0
 ```
 
-立即停止，清除全部缓存和 AUTO 请求。
-
-只有满足第 18 节的恢复条件才能退出。
+参数非法时应在配置阶段明确失败，不得启动正常电机控制。
 
 ---
 
-# 20. 新增状态接口
+## 17. 推荐初始参数
 
-新增：
+本次建议的初始配置：
 
-```text
-/fans/auto_enabled
-std_msgs/msg/Bool
+```yaml
+# CyberGear 位置模式速度上限初值。
+default_speed: 10.0
+
+# 固定电机目标推进周期。
+command_interval_sec: 0.02
+
+# 任何单周期允许的绝对位置变化保护上限。
+max_position_step: 0.4
+
+# 三种普通运动的软件目标速度。
+manual_motion_speed_rad_s: 4.0
+auto_motion_speed_rad_s: 4.0
+home_motion_speed_rad_s: 4.0
+
+# 定时器延迟保护。
+motion_dt_max_sec: 0.05
+
+# 目标到达容差。
+target_reached_tolerance_rad: 0.001
+
+# 单次轻按的精细步进。
+manual_step_deg: 3.0
+
+# 同一按键连续重复识别参数。
+manual_repeat_gap_sec: 0.8
+manual_repeat_dt_max_sec: 0.08
 ```
 
-语义：
+不得擅自把三种模式设为当前理论最大 `10.0 rad/s`。
 
-```text
-管理器已经接受且当前仍保留 auto_requested
-```
-
-新增：
-
-```text
-/fans/auto_active
-std_msgs/msg/Bool
-```
-
-语义：
-
-```text
-AUTO 的全部运行条件成立，且已收到启用后的新姿态
-```
-
-新增：
-
-```text
-/fans/auto_target_pwm
-std_msgs/msg/Int32MultiArray
-```
-
-语义：
-
-```text
-自动算法计算出的、变化率限制之前的左右目标
-```
-
-新增：
-
-```text
-/fans/control_state
-std_msgs/msg/String
-```
-
-建议内容使用稳定状态值，并通过日志补充停止原因。
-
-状态类话题使用：
-
-```text
-RELIABLE + TRANSIENT_LOCAL + KEEP_LAST(1)
-```
-
-并按低频心跳发布。
-
-命令和姿态话题使用可靠、volatile、小队列 QoS。
-
-新鲜度判断必须使用：
-
-```text
-time.monotonic()
-```
-
-IMU `header.stamp` 用于保留源时间和检测明显旧数据，不能替代本地接收超时。
+用户完成低速实机验证后，可以通过 YAML 逐步调整三种模式速度。
 
 ---
 
-# 21. Launch 结构
+## 18. 需要新增或修改的测试
 
-## 21.1 `fans.launch.py`
+测试必须完全隔离真实 CAN、电机、IMU、GPIO 和风扇硬件。
 
-正式启动：
+核心推进计算应提取为纯函数或纯状态类进行测试。
 
-- `fan_command_manager`
-- `fan_controller`
-
-不得创建两个 `fan_controller`。
-
-独立风扇 launch 默认：
-
-```text
-require_motor_mode_for_manual=false
-```
-
-自动模式因缺少电机 AUTO 状态而不可启用。
-
-## 21.2 `windarmor.launch.py`
-
-统一系统必须通过包含或复用正式 `fans.launch.py` 来启动风扇系统。
-
-不得：
-
-- 在统一 launch 中再次创建第二个 `fan_controller`；
-- 让底层订阅公共手动话题；
-- 产生两个 `/fans/command_pwm` 正常发布者。
-
-统一系统覆盖：
-
-```text
-require_motor_mode_for_manual=true
-```
-
-## 21.3 底层维护模式
-
-单独执行 `fan_controller` 仅属于底层维护模式。
-
-README 必须明确：
-
-- 它不是正常公共控制方式；
-- 它只订阅内部 `/fans/command_pwm`；
-- 只有在明确硬件测试授权后才能运行；
-- 使用该模式前必须确认管理器未运行；
-- 正常操作应使用 `fans.launch.py` 或 `windarmor.launch.py`。
-
-本次不得实际运行任何 launch。
-
----
-
-# 22. 文件修改范围
-
-预计允许修改以下文件；应保持范围最小。
-
-## 22.1 项目文档
-
-- `README.md`
-- `src/imu_cybergear_ros2/README.md`
-- 必要时更新风扇包 README；若当前不存在，不要为了重复根 README 而创建冗余
-  文档。
-
-## 22.2 IMU 和电机包
-
-- `src/imu_cybergear_ros2/imu_cybergear_ros2/imu_protocol.py`
-- `src/imu_cybergear_ros2/imu_cybergear_ros2/imu_motor_controller_node.py`
-- `src/imu_cybergear_ros2/imu_cybergear_ros2/controller_state.py`
-- `src/imu_cybergear_ros2/imu_cybergear_ros2/keyboard_handler.py`
-- `src/imu_cybergear_ros2/imu_cybergear_ros2/safety_monitor.py`
-- `src/imu_cybergear_ros2/config/imu_cybergear_params.yaml`
-- `src/imu_cybergear_ros2/package.xml`
-- 相关测试文件
-
-不要求必须修改每个文件。若某个目标能以更小范围实现，应选择更小范围。
-
-## 22.3 风扇包
-
-- 新增 `fan_control.py`
-- 新增 `fan_command_manager.py`
-- 修改 `fan_node.py`
-- 必要时修改 `pwm.py`
-- 修改 `fan_params.yaml`
-- 修改 `fans.launch.py`
-- 修改 `setup.py`
-- 修改 `package.xml`
-- 新增和扩展相关测试
-
-## 22.4 Bringup
-
-- `src/windarmor_bringup/launch/windarmor.launch.py`
-- `src/windarmor_bringup/test/test_launch_syntax.py`
-- 必要的新静态接口路由测试
-
-## 22.5 禁止修改
-
-本次不得修改：
-
-- `AGENTS.md`
-- `docs/FIRST_COMMAND.md`
-- `docs/NEXT_COMMAND.md`
-- 包版本号
-- Git 标签
-- `motor_ids`
-- `motor_signs`
-- `motor_limits_min`
-- `motor_limits_max`
-- GPIO12 用途
-- GPIO13 用途
-- 已确认的 CAN 硬件映射
-
-如果实现确实需要超出允许范围，必须停止并报告，不得自行扩大任务。
-
----
-
-# 23. 建议实施顺序
-
-按以下顺序实施，以降低一次性改动风险。
-
-## 步骤 1：纯函数和测试
-
-先实现并测试：
-
-- 四元数校验和归一化；
-- 相对姿态角度计算；
-- 姿态到左右活动量；
-- 参数校验；
-- 左右迟滞；
-- 角度到 PWM；
-- 变化率限制；
-- 手动左右通道缓存和超时；
-- 状态机转换。
-
-此阶段不得实例化 ROS 硬件节点。
-
-## 步骤 2：IMU 和电机状态接口
-
-实现：
-
-- 统一相对姿态发布；
-- MANUAL 下持续发布；
-- 统一归零；
-- `/motors/control_mode`；
-- 状态心跳；
-- `/enable_motor=true` 恢复到 MANUAL。
-
-先运行相关纯软件测试。
-
-## 步骤 3：风扇管理器
-
-实现：
-
-- 公共手动输入；
-- 自动启停服务；
-- 模式同步；
-- enabled 状态；
-- 急停锁存；
-- 手动/自动仲裁；
-- 唯一最终命令发布；
-- 状态话题。
-
-不得访问 GPIO。
-
-## 步骤 4：底层路由与锁存安全
-
-修改 `fan_controller`：
-
-- 只订阅内部命令；
-- stop 锁存 disabled；
-- enable 恢复但不恢复旧命令；
-- e-stop 锁存 disabled；
-- enabled 状态发布；
-- 保留限幅、看门狗和清理。
-
-底层节点不能在测试中真实实例化。将可测逻辑提取为纯类，或使用静态结构测试。
-
-## 步骤 5：Launch 和文档
-
-更新：
-
-- `fans.launch.py`
-- `windarmor.launch.py`
-- README
-- 接口说明
-- 安全恢复说明
-- 独立和统一模式差异
-- 软件验证状态
-- 等待实机验证项目
-
-## 步骤 6：完整软件构建和回归
-
-重新审查所有新增测试，确认不会访问硬件后，再执行构建和测试。
-
----
-
-# 24. 最低测试要求
-
-## 24.1 四元数和相对姿态
+### 18.1 目标推进数学
 
 至少测试：
 
-- 正常单位四元数；
-- 可归一化的非单位四元数；
-- 零范数；
-- 极小范数；
+- 正方向推进；
+- 负方向推进；
+- 到达目标时不越过；
+- 三种模式速度选择；
+- 三种模式相同参数时，相同距离和时间产生相同结果；
+- `max_position_step` 成为最终单周期上限；
+- 当前电机速度上限低于模式速度；
+- 当前电机速度上限高于模式速度；
+- `dt=0`；
+- 正常 `dt`；
+- `dt` 超过 `motion_dt_max_sec`；
+- 到达容差；
+- 软限位；
 - `NaN`；
-- 正 `Inf`；
-- 负 `Inf`；
-- roll/pitch 方向；
-- 角度跨越 ±π；
-- 轴向 sign；
-- 零点扣除；
-- MANUAL 与 AUTO 发布相同相对姿态；
-- 相对姿态位于电机死区和限位之前；
-- 原始 IMU header 被保留；
-- 无效姿态不刷新有效时间。
+- `Inf`；
+- 非法负速度；
+- 非法参数关系。
 
-## 24.2 归零
+### 18.2 固定周期和回调解耦
 
 至少测试：
 
-- 服务归零成功；
-- 键盘归零成功；
-- 两者调用同一方法；
-- 两者新鲜度规则一致；
-- 数据过旧时拒绝；
-- 无有效数据时拒绝；
-- 归零后旧姿态序列不能启用 AUTO；
-- 归零清除已有风扇 AUTO 请求。
+- AUTO 姿态回调只更新 `desired_targets`；
+- AUTO 姿态回调不直接写普通位置命令；
+- 连续收到多条相同姿态消息，不会因回调数量增加单周期位置变化；
+- 在相同经过时间内，10 Hz、20 Hz 和 50 Hz 姿态输入得到相同的最大目标追赶
+  速度；
+- 固定推进器可以在两条姿态消息之间继续追赶最后一个新鲜目标；
+- IMU 超时后立即停止追赶旧 AUTO 目标。
 
-## 24.3 电机模式
-
-至少测试：
-
-- 初始化映射为 DISABLED；
-- MANUAL；
-- AUTO；
-- EMERGENCY_STOP；
-- ERROR；
-- shutdown 映射为 DISABLED；
-- 状态变化立即发布；
-- 心跳发布；
-- `/enable_motor=true` 从急停恢复到 MANUAL；
-- 不直接恢复 AUTO。
-
-## 24.4 自动姿态控制
+### 18.3 MANUAL 单次按键
 
 至少测试：
 
-- 零姿态；
-- 正 pitch；
-- 负 pitch；
-- 相同绝对值正负 pitch；
-- 左 roll；
-- 右 roll；
-- pitch 与左 roll 复合；
-- pitch 与右 roll 复合；
-- 使用 `max()` 而非相加；
-- 左右独立迟滞；
-- 死区边界；
-- 满量程；
-- 最大 PWM 限幅；
-- 正常上升限制；
-- 正常下降限制；
-- 安全停止绕过限速。
+- 第一次 `w/s/a/d/i/k/j/l` 使用 `manual_step_deg`；
+- 单次按键只更新对应电机；
+- 单次按键不直接写硬件；
+- 单次按键应用软限位；
+- 松开后没有新字符，不继续增加 `desired_target`。
 
-## 24.5 自动启用条件
+### 18.4 MANUAL 连续重复
 
-至少测试：
+使用可控的单调时间测试：
 
-- 电机 MANUAL 时拒绝；
-- 电机 AUTO 时可申请；
-- 电机模式超时时拒绝；
-- 底层 disabled 时拒绝；
-- enabled 状态超时时拒绝；
-- 姿态过旧时拒绝；
-- 急停未恢复时拒绝；
-- 成功后进入 AUTO_WAITING；
-- 服务前姿态不能直接激活；
-- 服务后的新姿态进入 AUTO_ACTIVE；
-- 关闭 AUTO 始终成功；
-- 条件失效清除 AUTO 请求；
-- 条件恢复不会自动重新启用。
+- 相同电机和方向的重复字符；
+- 不同重复间隔；
+- 重复间隔小于 `manual_repeat_gap_sec`；
+- 重复间隔大于该值后重新按轻按处理；
+- `event_dt` 被 `manual_repeat_dt_max_sec` 限制；
+- 20 Hz 和 25 Hz 重复流的平均期望速度接近
+  `manual_motion_speed_rad_s`；
+- 快速重复不会超过模式速度推进；
+- 改变方向会重置重复状态；
+- 改变电机会使用独立状态；
+- 非运动按键不刷新重复时间；
+- 模式切换清除重复状态；
+- 急停清除重复状态。
 
-## 24.6 手动通道
+测试允许存在由首个轻按造成的小固定差异，但稳定重复阶段必须证明平均速度不再
+简单等于固定角度乘以字符频率。
+
+### 18.5 `/motors/manual_targets`
 
 至少测试：
 
-- pair 原子刷新左右；
-- pair 错误长度整条拒绝；
-- pair 任一越界整条拒绝；
-- left 只刷新左侧；
-- right 只刷新右侧；
-- 左消息不刷新右侧时间；
-- 右消息不刷新左侧时间；
-- 单侧超时；
-- 双侧超时；
-- 模式切换清缓存；
-- disabled 清缓存；
-- 急停清缓存；
-- 非法消息不刷新时间。
+- 正确长度更新全部 `desired_targets`；
+- 不直接写普通硬件位置；
+- 错误长度整条拒绝；
+- 任一 `NaN` 整条拒绝；
+- 任一 `Inf` 整条拒绝；
+- 软限位；
+- 取消 HOME；
+- 清除键盘重复状态；
+- 非 MANUAL 模式拒绝。
 
-## 24.7 急停和恢复
+### 18.6 AUTO
 
 至少测试：
 
-- `/e_stop=true` 立即停止；
-- 急停清除全部缓存；
-- 急停清除 AUTO；
-- 急停绕过变化率限制；
-- 单独 `/fans/enable=true` 在统一模式中不能清除系统急停；
-- 电机仍为 EMERGENCY_STOP 时不能恢复手动风扇；
-- 风扇 enabled 与电机 MANUAL/AUTO 均在急停后重新到达时才解除锁存；
-- 独立风扇模式中，急停后的新 `/fans/enable=true` 可以恢复到
-  MANUAL_WAITING；
-- 恢复后不使用旧手动命令；
-- 恢复后不使用旧姿态；
-- 恢复后不恢复旧 AUTO 请求。
+- IMU 目标更新到 `desired_targets`；
+- 电机方向关系保持不变；
+- 电机死区保持不变；
+- ±90° 限制保持不变；
+- 软限位保持不变；
+- AUTO 使用 `auto_motion_speed_rad_s`；
+- AUTO 切换后等待新姿态；
+- AUTO 超时同步 desired/current 并保持当前位置；
+- AUTO 退出不会继续追赶旧姿态目标。
 
-## 24.8 底层控制器
+### 18.7 HOME
 
-通过纯类、mock 或静态测试覆盖：
+至少测试：
 
-- `/fans/stop` 锁存 disabled；
-- `/fans/enable=false` 锁存 disabled；
-- `/fans/enable=true` 保持停止并等待新命令；
-- disabled 时拒绝普通命令；
-- `/e_stop=true` 锁存 disabled；
-- 新命令到达后才更新时间；
-- 命令超时停止；
-- 最终范围限幅仍保留；
-- 退出清理路径仍存在。
+- `h` 设置所有 `desired_targets=0`；
+- `h` 使用 `home_motion_speed_rad_s`；
+- HOME 不创建独立运动定时器；
+- HOME 和 AUTO 使用相同参数时，相同距离下的软件推进时间一致；
+- HOME 完成后公共模式为 MANUAL；
+- HOME 完成后内部运动源为 IDLE；
+- MANUAL 按键取消 HOME；
+- `/motors/manual_targets` 取消 HOME；
+- `[` 和 `]` 取消 HOME；
+- 切换 AUTO 取消 HOME；
+- 急停取消 HOME；
+- 在 AUTO 中按 `h` 先安全切换为 MANUAL；
+- HOME 不与 IMU 回调争用目标。
 
-不得为测试而实例化真实 GPIO 节点。
+### 18.8 快捷目标
 
-## 24.9 单一最终发布者
+至少测试：
 
-静态或结构测试确认：
+- `[` 设置正向期望目标；
+- `]` 设置负向期望目标；
+- 应用软限位；
+- 不直接跳写完整 ±90°；
+- 使用 MANUAL 速度推进。
 
-- 正式 launch 只有一个 `fan_command_manager`；
-- 正式 launch 只有一个 `fan_controller`；
-- `fan_controller` 不订阅三个公共手动话题；
-- `fan_command_manager` 发布 `/fans/command_pwm`；
-- 正式仓库代码中没有第二个正常 `/fans/command_pwm` 发布者；
-- 统一 launch 不重复创建风扇底层节点；
-- 公共手动接口仍存在。
+### 18.9 Lifecycle 和急停
 
-## 24.10 回归
+至少测试：
 
-必须保证现有测试继续通过：
+- 激活时创建一个推进定时器；
+- 重复激活不创建多个定时器；
+- 停用时停止推进；
+- cleanup 销毁推进资源；
+- shutdown 销毁推进资源；
+- 急停后不进行普通位置推进；
+- 恢复后不恢复旧目标。
 
-- IMU 协议；
-- 当前姿态换算；
-- 风扇 PWM；
-- 风扇键盘伪终端；
-- launch AST；
-- 现有包构建。
+### 18.10 回归测试
+
+必须保持以下行为和测试通过：
+
+- IMU 协议和相对姿态；
+- 电机方向；
+- 软限位；
+- 键盘映射；
+- `/motors/manual_targets` 接口名称和类型；
+- `/motors/control_mode`；
+- IMU 看门狗；
+- 电机急停；
+- 风扇 AUTO 与电机模式同步；
+- 现有风扇控制测试；
+- launch 语法和结构测试。
 
 ---
 
-# 25. 构建和测试要求
+## 19. 建议文件范围
 
-## 25.1 执行前检查
+预计主要修改：
 
-在运行测试前：
+- `src/imu_cybergear_ros2/imu_cybergear_ros2/motor_manager.py`
+- `src/imu_cybergear_ros2/imu_cybergear_ros2/keyboard_handler.py`
+- `src/imu_cybergear_ros2/imu_cybergear_ros2/imu_motor_controller_node.py`
+- `src/imu_cybergear_ros2/config/imu_cybergear_params.yaml`
+- `src/imu_cybergear_ros2/README.md`
+- 根目录 `README.md`
+- `src/imu_cybergear_ros2/test/` 中现有或新增的软件测试
+- 必要的 launch 静态测试
 
-1. 阅读全部新增测试；
-2. 阅读 fixture；
-3. 检查导入链；
-4. 确认不会实例化硬件节点；
-5. 确认不会访问 IMU、CAN、GPIO 或串口；
-6. 确认不会调用 `sudo`；
-7. 确认不会执行 launch。
+如果纯推进逻辑较复杂，可以新增一个不依赖 ROS 和硬件的模块，例如：
 
-## 25.2 允许的构建命令
+```text
+motor_motion.py
+```
 
-确认安全后，可执行：
+该模块可包含：
+
+- 模式速度选择；
+- 单周期目标推进；
+- 手动重复增量计算；
+- 参数校验；
+- 到达判断。
+
+是否新增该文件由当前结构决定，但不得进行与任务无关的大型重构。
+
+原则上不应修改：
+
+- 风扇控制算法；
+- 风扇状态机；
+- 风扇 GPIO；
+- 电机 ID；
+- 电机符号；
+- 电机软限位；
+- CAN 配置；
+- IMU 安装方向参数。
+
+---
+
+## 20. 实施顺序
+
+按以下顺序执行：
+
+### 步骤 1：静态确认
+
+确认现有三种速度路径和调用关系。
+
+### 步骤 2：纯推进逻辑
+
+先实现纯函数或纯状态类，并完成针对性测试。
+
+### 步骤 3：desired/current 模型
+
+加入 `desired_targets`，确保初始化时与 `current_targets` 一致。
+
+### 步骤 4：统一定时器
+
+实现固定周期推进器，并正确处理真实 `dt`、Lifecycle 和急停。
+
+### 步骤 5：迁移输入源
+
+依次迁移：
+
+1. `/motors/manual_targets`
+2. 键盘单次和重复输入
+3. `[` 和 `]`
+4. AUTO IMU 目标
+5. `h` HOME
+
+每迁移一条路径后运行相关软件测试。
+
+### 步骤 6：清理旧路径
+
+删除或停用：
+
+- HOME 独立运动定时器；
+- AUTO 回调中的正常直接位置推进；
+- MANUAL 普通按键中的正常直接位置写入；
+- 快捷 ±90° 的正常直接位置跳写。
+
+必须确认配置、设机械零点、急停和关闭等特殊硬件流程没有被错误删除。
+
+### 步骤 7：文档
+
+更新参数、速度公式、按键行为和调节方法。
+
+### 步骤 8：完整软件回归
+
+检查测试不会访问硬件后，执行完整构建和测试。
+
+---
+
+## 21. 构建与测试限制
+
+运行前必须审查测试代码、fixture 和导入链，确认不会：
+
+- 创建真实 CAN 后端；
+- 初始化 CyberGear；
+- 访问真实 IMU；
+- 打开串口；
+- 初始化 GPIO；
+- 输出 PWM；
+- 启动 ROS 2 硬件节点或 launch。
+
+确认安全后，可以运行：
 
 ```bash
 source /opt/ros/jazzy/setup.bash
 colcon build --symlink-install
 ```
 
-## 25.3 允许的软件测试
-
-确认测试集合安全后，可执行：
+随后：
 
 ```bash
 source /opt/ros/jazzy/setup.bash
@@ -1602,89 +1170,147 @@ colcon test --packages-select \
 colcon test-result --verbose
 ```
 
-还应按实际新增测试文件运行针对性 pytest，例如：
+并按实际文件名运行新增的纯软件 pytest：
 
 ```bash
 python3 -m pytest <实际安全测试文件> -v
 ```
 
-必须使用实际文件路径，不得照抄不存在的名称。
-
-## 25.4 禁止的验证方式
-
-不得运行：
+本次禁止运行：
 
 ```bash
-ros2 node list
-ros2 topic list
-ros2 topic echo
-ros2 topic pub
-ros2 service call
-ros2 run
-ros2 launch
+ros2 run ...
+ros2 launch ...
+ros2 topic ...
+ros2 service ...
+sudo ...
+./scripts/setup_can.sh ...
 ```
 
-因为当前没有授权启动或访问真实 ROS 硬件系统。
+---
 
-不得运行任何需要 GPIO、CAN 或真实串口的集成测试。
+## 22. README 更新要求
+
+根 README 和电机包 README 至少说明：
+
+### 22.1 三类速度参数
+
+```yaml
+manual_motion_speed_rad_s
+auto_motion_speed_rad_s
+home_motion_speed_rad_s
+```
+
+说明这些是软件目标位置变化率，不一定等于负载下实际测得的机械角速度。
+
+### 22.2 共同推进公式
+
+```text
+allowed_step =
+min(
+    max_position_step,
+    min(mode_speed, motor_speed_limit) × dt
+)
+```
+
+### 22.3 `default_speed`
+
+说明它是 CyberGear 位置模式速度上限初值，不再直接等同于所有模式的软件目标
+推进速度。
+
+### 22.4 `+/-`
+
+说明：
+
+- 改变选中电机的速度上限；
+- 低于模式速度时会限制运动；
+- 高于模式速度后继续增加不会突破模式速度参数。
+
+### 22.5 手动按键
+
+说明：
+
+- 轻按一次使用 `manual_step_deg`；
+- 长按产生的重复字符按实际间隔换算为目标增量；
+- 稳定重复阶段尽量接近 `manual_motion_speed_rad_s`；
+- 终端不存在可靠 key-up，因此单个字符只产生有限运动，不会永久持续。
+
+### 22.6 AUTO
+
+说明：
+
+- IMU 回调只更新期望目标；
+- 固定推进器按 `auto_motion_speed_rad_s` 追赶；
+- 缓慢倾斜时运动仍由姿态本身变化速度决定；
+- 快速倾斜时由 AUTO 速度上限约束。
+
+### 22.7 HOME
+
+说明：
+
+- `h` 会使用统一推进器；
+- 如果在 AUTO 中按 `h`，会退出 AUTO并进入 MANUAL 回零；
+- HOME 使用 `home_motion_speed_rad_s`；
+- HOME 不再具有独立快速路径。
+
+### 22.8 当前验证状态
+
+明确写明：
+
+- 本次只是软件实现和纯软件测试；
+- 新的 `4.0 rad/s` 三模式速度尚未实机验证；
+- `v0.3.0` 标签不包含本次改进；
+- 后续需要在低速、固定机器人、逐电机条件下重新实机验证；
+- 未经用户授权不得运行硬件验证。
 
 ---
 
-# 26. README 更新要求
+## 23. 不得破坏的兼容性
 
-实现后更新 README，至少说明：
+必须保持：
 
-- v0.3.0 候选功能；
-- 当前稳定发布仍为 v0.2.1；
-- 自动风扇默认关闭；
-- 姿态与左右风扇关系；
-- 相对姿态话题；
-- 电机模式状态话题；
-- 自动启停服务；
-- `auto_enabled` 和 `auto_active` 区别；
-- 手动公共话题保持兼容；
-- 内部 `/fans/command_pwm` 不属于普通公共控制接口；
-- 独立风扇模式和统一系统模式的区别；
-- `/fans/stop` 会锁存 disabled；
-- `/fans/enable=true` 不恢复旧命令；
-- 统一系统急停恢复还要求电机恢复；
-- 手动左右通道分别超时；
-- 自动姿态超时；
-- 底层命令看门狗；
-- 正式启动方式；
-- 单独运行 `fan_controller` 仅用于授权维护；
-- 当前完成的仅是软件验证；
-- 电机和风扇尚未通电测试；
-- 1200 µs 和 1400 µs 尚未实机标定；
-- 后续实机验证前必须获得用户授权。
+- `w/s/a/d/i/k/j/l` 键位；
+- `h` 键；
+- `[` 和 `]` 键；
+- `+` 和 `-` 键；
+- `m` 模式切换；
+- `/motors/manual_targets` 名称和类型；
+- `/motors/control_mode` 名称和稳定值；
+- `/imu/relative_roll_pitch`；
+- 电机 ID；
+- 电机方向；
+- 电机软限位；
+- AUTO 姿态映射；
+- IMU 零点；
+- 电机急停；
+- 风扇与电机模式联动；
+- `v0.3.0` 标签内容。
 
-不得把软件测试写成实机测试。
+允许改变的是普通运动命令在内部如何平滑逼近期望目标。
 
 ---
 
-# 27. 实现过程中的偏差处理
+## 24. 停止并报告的条件
 
-如果实现过程中发现以下情况之一，必须停止并先反馈：
+出现以下任一情况时，不得继续实施，覆盖
+`docs/LATEST_FEEDBACK.md` 报告并等待用户：
 
-- 当前代码与阶段 1 结论明显不一致；
-- 必须改变受保护电机参数；
-- 必须改变 GPIO12/13 用途；
-- 必须运行硬件节点才能继续；
-- 必须访问真实串口、CAN 或 GPIO；
-- 必须进行带电测试；
-- 需要破坏现有公共接口；
-- 无法在不实例化硬件节点的情况下测试安全逻辑；
-- 需要新增自定义消息包或进行明显扩大范围的重构；
-- 用户已有修改与本次实现冲突；
-- 构建或测试显示存在与本任务无关的大范围故障。
-
-停止时覆盖 `docs/LATEST_FEEDBACK.md`，说明问题和建议，不得自行突破限制。
+- 当前代码与本任务的基础判断明显不一致；
+- 必须改变电机 ID、方向或软限位；
+- 必须访问真实硬件才能继续；
+- 无法在不连接 CAN 的情况下测试核心推进逻辑；
+- 新设计会破坏现有公共接口；
+- 必须修改风扇状态机才能完成；
+- 用户已有修改与任务冲突；
+- 构建失败来自与本任务无关的大范围问题；
+- 需要移动或重建 `v0.3.0` 标签；
+- 需要执行带电测试。
 
 ---
 
-# 28. 完成后的反馈要求
+## 25. `docs/LATEST_FEEDBACK.md` 输出要求
 
-完成实现和纯软件验证后，覆盖：
+完成后覆盖：
 
 ```text
 docs/LATEST_FEEDBACK.md
@@ -1693,54 +1319,61 @@ docs/LATEST_FEEDBACK.md
 标题建议：
 
 ```markdown
-# 最新反馈：阶段 2 软件实现与纯软件验证
+# 最新反馈：统一电机运动速度的软件实现
 ```
 
 至少包含：
 
-1. 当前分支、HEAD 和工作区初始状态；
-2. 用户任务开始前已有修改；
-3. 实际修改文件列表；
-4. 每个文件的修改目的；
-5. 最终架构；
-6. 新增和修改的接口；
-7. 新增和修改的参数；
-8. 相对姿态的处理顺序；
-9. 电机模式状态行为；
-10. 手动/自动仲裁行为；
-11. 急停锁存和恢复行为；
-12. 独立风扇模式和统一模式的区别；
-13. 控制公式；
-14. 状态机；
-15. 参数校验；
-16. 已执行的全部命令；
-17. 构建结果；
-18. 每组测试结果；
-19. 测试总数、通过数、失败数、跳过数；
-20. 未执行的测试及原因；
-21. 是否访问 IMU；
-22. 是否访问 CAN；
-23. 是否访问 GPIO；
-24. 是否访问真实串口；
-25. 电机和风扇是否通电；
-26. 剩余软件风险；
-27. 等待实机验证内容；
-28. `git diff --stat`；
-29. `git diff --check`；
-30. 最终 `git status --short --branch`。
+1. 当前分支和 HEAD；
+2. `v0.3.0` 标签与当前 HEAD 的关系；
+3. 任务开始时用户已有修改；
+4. 修改前 MANUAL、AUTO 和 HOME 的速度路径；
+5. 为什么原来的 `h` 更快；
+6. 最终统一架构；
+7. `desired_targets` 与 `current_targets` 的语义；
+8. 固定推进器的周期和真实 `dt` 处理；
+9. 三种模式速度参数；
+10. `default_speed` 的最终语义；
+11. `+/-` 的最终语义；
+12. 手动轻按和连续重复算法；
+13. AUTO 目标更新方式；
+14. HOME 回零方式；
+15. AUTO 中按 `h` 的最终行为；
+16. `/motors/manual_targets` 的最终行为；
+17. `[` 和 `]` 的最终行为；
+18. Lifecycle 和急停行为；
+19. 实际修改文件；
+20. 每个文件的修改目的；
+21. 新增和修改的参数；
+22. 已执行的全部命令；
+23. 构建结果；
+24. 测试总数；
+25. 通过、失败、跳过数量；
+26. 每组关键测试结果；
+27. 未执行的测试及原因；
+28. 是否访问 IMU；
+29. 是否访问 CAN；
+30. 是否访问 GPIO 或 PWM；
+31. 电机和风扇是否通电；
+32. 剩余风险；
+33. 实机验证建议，但不得直接要求用户通电；
+34. `git diff --stat`；
+35. `git diff --check`；
+36. 最终 `git status --short --branch`。
 
 必须明确写明：
 
 ```text
-本次没有运行任何 ROS 2 节点或 launch。
+本次没有运行 ROS 2 节点或 launch。
 本次没有访问 IMU、CAN、GPIO、PWM 或真实串口。
-4 个微电机和 2 个风扇均未通电、未控制、未影响。
+4 个微电机和 2 个风扇均未因本任务被控制。
 本次完成的是软件实现和纯软件验证，不是实机验证。
+v0.3.0 标签未被修改。
 ```
 
 ---
 
-# 29. 最终检查
+## 26. 最终检查
 
 完成后执行：
 
@@ -1750,19 +1383,15 @@ git diff --stat
 git status --short --branch
 ```
 
-根据需要展示关键 diff。
-
-不得：
+不要：
 
 - commit；
 - push；
-- 创建标签；
-- 修改现有标签；
-- 启动节点；
-- 运行 launch；
-- 访问硬件；
-- 要求用户现在通电。
+- 创建 tag；
+- 修改 tag；
+- 运行硬件节点；
+- 进行实机测试；
+- 修改 `docs/NEXT_COMMAND.md`；
+- 修改 `AGENTS.md`，除非用户另行批准。
 
-完成阶段 2 反馈后停止，等待用户审查。
-
-只有用户审查通过后，才会另行制定断电接口检查和分级实机验证计划。
+完成反馈后停止，等待用户审核和后续低速实机验证授权。
