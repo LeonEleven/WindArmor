@@ -141,3 +141,12 @@ def test_verified_auto_direction_mapping_remains_unchanged() -> None:
     assert "max(0.0, alpha_deg)" in callback
     assert 'cfg.control_axis == "pitch"' in callback
     assert "targets[cfg.motor_id] = cfg.sign * deg_to_rad(deg)" in callback
+
+
+def test_state_manager_private_lock_and_callback_are_not_accessed_by_other_modules() -> None:
+    controller = read_source("imu_motor_controller_node.py")
+    safety = read_source("safety_monitor.py")
+    assert "._stop_auto_zero_callback" not in controller
+    assert "register_stop_auto_zero_callback(" in controller
+    assert "._state_lock" not in safety
+    assert "self._state.is_in(" in safety

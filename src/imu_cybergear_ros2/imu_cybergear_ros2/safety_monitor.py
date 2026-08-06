@@ -6,7 +6,12 @@ from typing import Dict
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger, SetBool
 
-from .controller_state import ControllerState
+from .controller_state import (
+    ControllerState,
+    TransitionOutcome,
+    TransitionReason,
+    TransitionSource,
+)
 from .cybergear_driver import MotorStatus
 
 
@@ -70,7 +75,15 @@ class SafetyMonitor:
                     f"IMU 数据超时（已 {elapsed:.3f}s > {self._node._watchdog_timeout_s:.3f}s），"
                     f"自动切换到手动模式并保持当前位置"
                 )
-                self._state.transition_to(ControllerState.MANUAL_RUNNING)
+                result = self._state.transition_to(
+                    ControllerState.MANUAL_RUNNING,
+                    reason=TransitionReason.IMU_WATCHDOG_TIMEOUT,
+                    source=TransitionSource.WATCHDOG,
+                )
+                if result.outcome is TransitionOutcome.REJECTED:
+                    self._node.get_logger().error(
+                        "关键状态转换被拒绝：IMU watchdog 无法退出 AUTO"
+                    )
         except Exception as exc:
             self._node.get_logger().error(f"看门狗检查时发生异常: {exc}")
 
@@ -163,7 +176,10 @@ class SafetyMonitor:
             ):
                 return
             self._node.get_logger().warn("收到 /e_stop 话题急停指令！")
-            self.emergency_stop()
+            self.emergency_stop(
+                reason=TransitionReason.TOPIC_ESTOP,
+                source=TransitionSource.TOPIC,
+            )
 
     def on_e_stop_service(self, request, response: Trigger.Response) -> Trigger.Response:
         """急停服务回调。"""
@@ -172,10 +188,15 @@ class SafetyMonitor:
             response.message = "节点未激活"
             return response
         self._node.get_logger().warn("收到 /e_stop 服务急停请求！")
-        self.emergency_stop()
-        self._node.publish_system_emergency_stop()
-        response.success = True
-        response.message = "急停已执行"
+        response.success = self.emergency_stop(
+            reason=TransitionReason.SERVICE_ESTOP,
+            source=TransitionSource.SERVICE,
+        )
+        if response.success:
+            self._node.publish_system_emergency_stop()
+            response.message = "急停已执行"
+        else:
+            response.message = "急停状态转换被拒绝，请检查控制器状态"
         return response
 
     def on_enable_motor_service(self, request, response: SetBool.Response) -> SetBool.Response:
@@ -196,27 +217,70 @@ class SafetyMonitor:
                 self._node.get_logger().warn(response.message)
                 return response
             self._node.get_logger().info("收到 /enable_motor 启用指令，尝试恢复运控模式")
-            response.success = self._motor_mgr.hold_current_targets_and_recover()
+            response.success = self.recover_from_emergency_stop(
+                source=TransitionSource.SERVICE
+            )
             if response.success:
-                self._state.transition_to(ControllerState.MANUAL_RUNNING)
                 response.message = "电机已恢复至 MANUAL 运控模式"
             else:
                 response.message = "部分电机恢复失败，控制状态未恢复"
                 self._node.get_logger().error(response.message)
         else:
             self._node.get_logger().warn("收到 /enable_motor 停用指令，执行急停")
-            self.emergency_stop()
-            response.success = True
-            response.message = "急停已执行"
+            response.success = self.emergency_stop(
+                reason=TransitionReason.REMOTE_DISABLE,
+                source=TransitionSource.SERVICE,
+            )
+            response.message = (
+                "急停已执行"
+                if response.success
+                else "停用请求的急停状态转换被拒绝"
+            )
         return response
 
-    def emergency_stop(self) -> None:
-        """执行急停。"""
-        with self._state._state_lock:
-            current_state = self._state.state
-            if current_state in (ControllerState.EMERGENCY_STOP, ControllerState.SHUTTING_DOWN):
-                self._node.get_logger().warn("当前已处于急停或关机状态，忽略重复急停请求")
-                return
+    def recover_from_emergency_stop(self, *, source: TransitionSource) -> bool:
+        """完成真实电机恢复后，以显式原因进入 MANUAL。"""
+        if not self._state.is_in(ControllerState.EMERGENCY_STOP):
+            self._node.get_logger().error("仅允许从 EMERGENCY_STOP 显式恢复")
+            return False
+        if not self._motor_mgr.hold_current_targets_and_recover():
+            return False
+        result = self._state.transition_to(
+            ControllerState.MANUAL_RUNNING,
+            reason=TransitionReason.EXPLICIT_ESTOP_RECOVERY,
+            source=source,
+        )
+        if result.outcome is TransitionOutcome.CHANGED:
+            return True
+
+        self._node.get_logger().error(
+            "电机已恢复运控但状态转换未成功；正在重新尽力停止全部电机"
+        )
+        self._motor_mgr.halt_motion()
+        self._motor_mgr.stop_motors_best_effort(
+            reason="recovery_state_transition_rejected"
+        )
+        return False
+
+    def emergency_stop(
+        self,
+        *,
+        reason: TransitionReason,
+        source: TransitionSource,
+    ) -> bool:
+        """执行急停并返回状态是否已安全进入或保持急停。"""
+        if self._state.is_in(ControllerState.EMERGENCY_STOP):
+            self._node.get_logger().warn("当前已处于急停状态，忽略重复急停请求")
+            return True
+        if self._state.is_in(
+            ControllerState.ERROR,
+            ControllerState.SHUTTING_DOWN,
+            ControllerState.UNINITIALIZED,
+        ):
+            self._node.get_logger().error(
+                f"当前状态 {self._state.state_name} 不允许进入急停"
+            )
+            return False
 
         self._node.get_logger().error("【急停】正在停止全部电机！")
         # 普通推进必须先停，不能让速度限制或并发定时器延迟急停。
@@ -226,4 +290,14 @@ class SafetyMonitor:
             for mid in self._node._motor_ids:
                 self._node._motor_protection_flags[mid] = False
 
-        self._state.transition_to(ControllerState.EMERGENCY_STOP)
+        result = self._state.transition_to(
+            ControllerState.EMERGENCY_STOP,
+            reason=reason,
+            source=source,
+        )
+        if result.outcome is TransitionOutcome.REJECTED:
+            self._node.get_logger().error(
+                "关键状态转换被拒绝：电机已停止但无法进入 EMERGENCY_STOP"
+            )
+            return False
+        return True

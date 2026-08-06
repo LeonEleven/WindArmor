@@ -8,7 +8,12 @@ import threading
 import time
 from typing import Optional
 
-from .controller_state import ControllerState
+from .controller_state import (
+    ControllerState,
+    TransitionOutcome,
+    TransitionReason,
+    TransitionSource,
+)
 
 
 class KeyboardHandler:
@@ -169,11 +174,27 @@ class KeyboardHandler:
                 # ---- m: 切换模式 ----
                 if key == "m":
                     if self._state.is_auto_running():
-                        self._state.transition_to(ControllerState.MANUAL_RUNNING)
-                        self._node.get_logger().info("已切换到 MANUAL（手动）模式")
+                        result = self._state.transition_to(
+                            ControllerState.MANUAL_RUNNING,
+                            reason=TransitionReason.USER_MODE_TOGGLE,
+                            source=TransitionSource.KEYBOARD,
+                        )
+                        if result.outcome is TransitionOutcome.CHANGED:
+                            self._node.get_logger().info("已切换到 MANUAL（手动）模式")
+                        else:
+                            self._node.get_logger().error("切换到 MANUAL 被状态契约拒绝")
                     elif self._state.is_manual_running():
-                        self._state.transition_to(ControllerState.AUTO_RUNNING)
-                        self._node.get_logger().info("已切换到 AUTO（自动）模式，IMU 姿态将驱动电机")
+                        result = self._state.transition_to(
+                            ControllerState.AUTO_RUNNING,
+                            reason=TransitionReason.USER_MODE_TOGGLE,
+                            source=TransitionSource.KEYBOARD,
+                        )
+                        if result.outcome is TransitionOutcome.CHANGED:
+                            self._node.get_logger().info(
+                                "已切换到 AUTO（自动）模式，IMU 姿态将驱动电机"
+                            )
+                        else:
+                            self._node.get_logger().error("切换到 AUTO 被状态契约拒绝")
                     elif self._state.state == ControllerState.EMERGENCY_STOP:
                         self._node.get_logger().warn(
                             "当前为急停状态，无法切换模式。请先按 [r] 从急停恢复"
@@ -210,15 +231,19 @@ class KeyboardHandler:
 
                 # ---- 空格: 急停 ----
                 if key == " ":
-                    self._safety.emergency_stop()
-                    self._node.publish_system_emergency_stop()
+                    if self._safety.emergency_stop(
+                        reason=TransitionReason.USER_ESTOP,
+                        source=TransitionSource.KEYBOARD,
+                    ):
+                        self._node.publish_system_emergency_stop()
                     continue
 
                 # ---- r: 从急停恢复 ----
                 if key == "r":
                     if self._state.state == ControllerState.EMERGENCY_STOP:
-                        if self._motor_mgr.hold_current_targets_and_recover():
-                            self._state.transition_to(ControllerState.MANUAL_RUNNING)
+                        self._safety.recover_from_emergency_stop(
+                            source=TransitionSource.KEYBOARD
+                        )
                     else:
                         self._node.get_logger().warn(
                             f"当前状态 {self._state.state_name} 不允许急停恢复；"

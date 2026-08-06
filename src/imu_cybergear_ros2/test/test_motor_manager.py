@@ -4,7 +4,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from imu_cybergear_ros2.controller_state import ControllerState, StateManager
+from imu_cybergear_ros2.controller_state import (
+    ControllerState,
+    StateManager,
+    TransitionReason,
+    TransitionSource,
+)
 from imu_cybergear_ros2.cybergear_driver import SDO_TARGET_POS
 from imu_cybergear_ros2.motor_manager import MotorManager
 from imu_cybergear_ros2.motor_motion import MotionParameters, MotionSource
@@ -104,8 +109,25 @@ def build_system():
     state = StateManager(node)
     manager = MotorManager(node, state)
     state._state_change_callback = manager.on_control_state_changed
-    state.transition_to(ControllerState.MANUAL_RUNNING)
+    state.transition_to(
+        ControllerState.INITIALIZING,
+        reason=TransitionReason.CONFIGURE_START,
+        source=TransitionSource.LIFECYCLE,
+    )
+    state.transition_to(
+        ControllerState.MANUAL_RUNNING,
+        reason=TransitionReason.CONFIGURE_SUCCESS,
+        source=TransitionSource.MOTOR_MANAGER,
+    )
     return node, state, manager
+
+
+def switch_mode(state, new_state):
+    return state.transition_to(
+        new_state,
+        reason=TransitionReason.USER_MODE_TOGGLE,
+        source=TransitionSource.KEYBOARD,
+    )
 
 
 @pytest.fixture
@@ -162,14 +184,14 @@ def test_manual_absolute_targets_are_atomic_and_do_not_write(system) -> None:
         manager.set_manual_targets({1: math.nan, 2: 0.0})
     assert node._desired_targets == before
 
-    state.transition_to(ControllerState.AUTO_RUNNING)
+    switch_mode(state, ControllerState.AUTO_RUNNING)
     with pytest.raises(ValueError):
         manager.set_manual_targets({1: 0.0, 2: 0.0})
 
 
 def test_auto_callbacks_only_replace_desired_and_frequency_does_not_advance(system) -> None:
     node, state, manager = system
-    state.transition_to(ControllerState.AUTO_RUNNING)
+    switch_mode(state, ControllerState.AUTO_RUNNING)
     for _ in range(10):
         assert manager.set_auto_targets({1: 1.0, 2: -1.0})
     assert node._current_targets == {1: 0.0, 2: 0.0}
@@ -182,7 +204,7 @@ def test_auto_callbacks_only_replace_desired_and_frequency_does_not_advance(syst
 
 def test_auto_targets_remain_subject_to_motor_soft_limits(system) -> None:
     node, state, manager = system
-    state.transition_to(ControllerState.AUTO_RUNNING)
+    switch_mode(state, ControllerState.AUTO_RUNNING)
     assert manager.set_auto_targets({1: 2.0, 2: -2.0})
     assert node._desired_targets == {1: 1.0, 2: -1.0}
     assert position_writes(node) == []
@@ -191,7 +213,7 @@ def test_auto_targets_remain_subject_to_motor_soft_limits(system) -> None:
 @pytest.mark.parametrize("message_count", [1, 2, 5])
 def test_10_20_50_hz_auto_input_has_same_100ms_progress(message_count) -> None:
     node, state, manager = build_system()
-    state.transition_to(ControllerState.AUTO_RUNNING)
+    switch_mode(state, ControllerState.AUTO_RUNNING)
     manager._motion_tick(now=0.0)
     for tick in range(1, 6):
         if tick <= message_count:
@@ -202,11 +224,11 @@ def test_10_20_50_hz_auto_input_has_same_100ms_progress(message_count) -> None:
 
 def test_auto_exit_discards_unfinished_target(system) -> None:
     node, state, manager = system
-    state.transition_to(ControllerState.AUTO_RUNNING)
+    switch_mode(state, ControllerState.AUTO_RUNNING)
     manager.set_auto_targets({1: 1.0, 2: -1.0})
     manager._motion_tick(now=1.0)
     manager._motion_tick(now=1.02)
-    state.transition_to(ControllerState.MANUAL_RUNNING)
+    switch_mode(state, ControllerState.MANUAL_RUNNING)
     assert node._desired_targets == node._current_targets
     assert manager.motion_source == MotionSource.IDLE
 
@@ -215,9 +237,11 @@ def test_home_uses_shared_timer_and_auto_switches_to_manual(system) -> None:
     node, state, manager = system
     node._current_targets = {1: 0.4, 2: -0.4}
     node._desired_targets = dict(node._current_targets)
-    state.transition_to(ControllerState.AUTO_RUNNING)
+    switch_mode(state, ControllerState.AUTO_RUNNING)
     assert manager.go_all_to_zero()
     assert state.state == ControllerState.MANUAL_RUNNING
+    assert state.last_transition.reason is TransitionReason.HOME_REQUEST
+    assert state.last_transition.source is TransitionSource.MOTOR_MANAGER
     assert manager.motion_source == MotionSource.HOME
     assert node._desired_targets == {1: 0.0, 2: 0.0}
     assert manager.motion_timer is None
@@ -256,14 +280,14 @@ def test_manual_absolute_target_and_auto_switch_cancel_home(system) -> None:
     assert node._desired_targets == {1: 0.2, 2: -0.2}
 
     manager.go_all_to_zero()
-    state.transition_to(ControllerState.AUTO_RUNNING)
+    switch_mode(state, ControllerState.AUTO_RUNNING)
     assert manager.motion_source == MotionSource.IDLE
     assert node._desired_targets == node._current_targets
 
 
 def test_shortcut_is_rejected_outside_manual(system) -> None:
     node, state, manager = system
-    state.transition_to(ControllerState.AUTO_RUNNING)
+    switch_mode(state, ControllerState.AUTO_RUNNING)
     assert not manager.move_motor_to_90_deg(1, positive=True)
     assert node._desired_targets == node._current_targets
     assert position_writes(node) == []
@@ -305,7 +329,10 @@ def test_emergency_stop_halts_motion_before_direct_stop(system) -> None:
     node, state, manager = system
     manager.set_manual_targets({1: 1.0, 2: -1.0})
     monitor = SafetyMonitor(node, state, manager)
-    monitor.emergency_stop()
+    monitor.emergency_stop(
+        reason=TransitionReason.USER_ESTOP,
+        source=TransitionSource.KEYBOARD,
+    )
     assert state.state == ControllerState.EMERGENCY_STOP
     assert manager.motion_source == MotionSource.IDLE
     assert node._desired_targets == node._current_targets

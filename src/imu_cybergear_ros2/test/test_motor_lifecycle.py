@@ -3,11 +3,17 @@ import os
 import pytest
 import rclpy
 from rclpy.lifecycle import TransitionCallbackReturn
+from rclpy.parameter import Parameter
 
 from imu_cybergear_ros2.cybergear_driver import (
     SDO_RUN_MODE,
     SDO_TARGET_POS,
     SDO_TARGET_SPEED,
+)
+from imu_cybergear_ros2.controller_state import (
+    ControllerState,
+    TransitionReason,
+    TransitionSource,
 )
 from imu_cybergear_ros2.imu_motor_controller_node import ImuMotorControllerNode
 
@@ -52,6 +58,39 @@ class DriverFactory:
         return driver
 
 
+class RejectDriverFactory:
+    def __init__(self):
+        self.calls = 0
+
+    def __call__(self, **_kwargs):
+        self.calls += 1
+        raise AssertionError("配置校验失败时不得创建驱动")
+
+
+class CapturingDriverFactory:
+    def __init__(self, driver):
+        self.driver = driver
+        self.kwargs = []
+
+    def __call__(self, **kwargs):
+        self.kwargs.append(kwargs)
+        return self.driver
+
+
+class CapturingLogger:
+    def __init__(self):
+        self.messages = []
+
+    def info(self, message):
+        self.messages.append(("info", message))
+
+    def warn(self, message):
+        self.messages.append(("warn", message))
+
+    def error(self, message):
+        self.messages.append(("error", message))
+
+
 def operation_motor_ids(driver, operation):
     return [call[1] for call in driver.calls if call[0] == operation]
 
@@ -69,6 +108,74 @@ def assert_fully_released(node, driver):
     assert node._current_speeds == {}
     assert all(getattr(node, attr) is None for attr in RESOURCE_ATTRS)
     assert driver.feedback_callback is None
+
+
+@pytest.mark.parametrize(
+    "parameter",
+    [
+        Parameter("motor_ids", value=[4, 4, 2, 1]),
+        Parameter("left_lift_motor_id", value=5),
+        Parameter("warning_throttle_sec", value=0.0),
+    ],
+)
+def test_invalid_config_has_zero_driver_ros_and_runtime_side_effects(parameter):
+    factory = RejectDriverFactory()
+    node = ImuMotorControllerNode(driver_factory=factory, sleep_fn=lambda _seconds: None)
+    resource_calls = []
+
+    def forbidden_resource(*_args, **_kwargs):
+        resource_calls.append(True)
+        raise AssertionError("配置校验失败时不得创建 ROS 运行资源")
+
+    node.create_publisher = forbidden_resource
+    node.create_subscription = forbidden_resource
+    node.create_service = forbidden_resource
+    node.create_timer = forbidden_resource
+    try:
+        results = node.set_parameters([parameter])
+        assert all(result.successful for result in results)
+        assert node.on_configure(None) == TransitionCallbackReturn.FAILURE
+        assert factory.calls == 0
+        assert resource_calls == []
+        assert node._driver is None
+        assert node._state_mgr is None
+        assert node._motor_mgr is None
+        assert node._safety is None
+        assert node._keyboard is None
+        assert all(getattr(node, attr) is None for attr in RESOURCE_ATTRS)
+    finally:
+        node.destroy_node()
+
+
+def test_usb_legacy_fallback_warns_once_and_still_uses_fake_driver():
+    driver = FakeMotorDriver()
+    factory = CapturingDriverFactory(driver)
+    logger = CapturingLogger()
+    node = ImuMotorControllerNode(driver_factory=factory, sleep_fn=lambda _seconds: None)
+    node.get_logger = lambda: logger
+    try:
+        results = node.set_parameters(
+            [
+                Parameter("control_backend", value="usb_can_serial"),
+                Parameter("usb_port", value=""),
+                Parameter("usb_baud", value=0),
+                Parameter("motor_port", value="fake-legacy-port"),
+                Parameter("motor_baud", value=460800),
+            ]
+        )
+        assert all(result.successful for result in results)
+        assert node.on_configure(None) == TransitionCallbackReturn.SUCCESS
+        assert factory.kwargs[0]["usb_port"] == "fake-legacy-port"
+        assert factory.kwargs[0]["usb_baud"] == 460800
+        warnings = [
+            message
+            for level, message in logger.messages
+            if level == "warn" and "已废弃兼容参数" in message
+        ]
+        assert len(warnings) == 1
+        assert node.on_cleanup(None) == TransitionCallbackReturn.SUCCESS
+    finally:
+        node.destroy_node()
 
 
 @pytest.mark.parametrize(
@@ -188,6 +295,23 @@ def test_cleanup_returns_failure_but_releases_everything_when_close_fails():
         assert_fully_released(node, driver)
         assert node.on_shutdown(None) == TransitionCallbackReturn.SUCCESS
         assert driver.close_attempts == 1
+    finally:
+        node.destroy_node()
+
+
+def test_shutdown_records_lifecycle_reason_before_releasing_resources():
+    driver = FakeMotorDriver()
+    node = ImuMotorControllerNode(
+        driver_factory=DriverFactory([driver]), sleep_fn=lambda _seconds: None
+    )
+    try:
+        assert node.on_configure(None) == TransitionCallbackReturn.SUCCESS
+        state_manager = node._state_mgr
+        assert node.on_shutdown(None) == TransitionCallbackReturn.SUCCESS
+        assert state_manager.state is ControllerState.SHUTTING_DOWN
+        assert state_manager.last_transition.reason is TransitionReason.SHUTDOWN_REQUEST
+        assert state_manager.last_transition.source is TransitionSource.LIFECYCLE
+        assert_fully_released(node, driver)
     finally:
         node.destroy_node()
 

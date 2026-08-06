@@ -113,8 +113,11 @@ python3 -m pytest \
   src/windarmor_bringup/test/test_launch_syntax.py -v
 ```
 
-仓库目前没有 CAN、GPIO、真实串口或完整控制节点的 mock/fake 集成测试；
-不要暗示已有这类覆盖。硬件测试不得加入默认测试命令。
+仓库已有完全内存化的 fake motor driver，以及不连接硬件的进程内 lifecycle
+测试，覆盖电机命令故障、初始化回滚、资源释放和部分确定性并发边界；这些测试
+不创建真实 CyberGear 驱动，也不连接 CAN 或串口。仓库仍没有真实 CAN、真实
+串口或 GPIO 的自动验证，风扇底层 GPIO 控制器也不得在默认测试中实例化。不得
+把 fake/mock 覆盖表述为真实硬件验证，硬件测试不得加入默认测试命令。
 
 ### 非默认：真实硬件验证
 

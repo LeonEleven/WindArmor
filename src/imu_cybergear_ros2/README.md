@@ -24,6 +24,8 @@
 | **统一目标推进** | MANUAL、AUTO、HOME 共用固定周期和真实 dt 的位置目标推进器 |
 | **成功提交语义** | 位置与速度状态只在驱动写入成功后更新，普通写入失败进入 ERROR |
 | **事务式配置** | 初始化失败停止已触及电机，并统一释放驱动与 ROS lifecycle 资源 |
+| **配置契约** | 驱动、回调和 ROS 资源创建前集中解析并校验全部关键参数 |
+| **确定性状态转换** | 显式合法转换表、结构化结果、稳定原因/来源和最近转换快照 |
 
 ## 系统架构
 
@@ -256,12 +258,65 @@ MANUAL/AUTO，也不能用键盘 `r` 或 `/enable_motor=true` 恢复；必须先
 失败时返回 FAILURE；配置失败始终返回 FAILURE，即使 best-effort 回滚其余步骤
 均已完成。失败回滚清理后允许重新执行配置。
 
-Codex 在本轮可靠性加固中只使用 fake driver 完成纯软件故障注入、并发边界和
-lifecycle 测试，没有访问真实 IMU、CAN 或电机。软件完成后，用户自行运行统一
-launch，测试 MANUAL/AUTO 以及风扇功能并报告基本正常。该正常功能测试不等于
-本任务设计的 SDO、初始化、stop、close 或 ROS 资源销毁故障已经在实机注入。
-启动零目标的机械风险没有改变；后续实机故障注入仍须单独获得硬件授权并满足
-仓库安全门槛。
+### 3.6 配置契约与状态转换契约
+
+控制器在 `on_configure()` 中先把 ROS 参数读取为不可变的分层配置：单电机通道、
+通信、运动、控制、安全、ROS 接口和键盘配置。纯函数校验全部成功后，才会创建
+真实驱动、注册反馈回调、创建 publisher/subscription/service/timer、连接总线或
+发送电机命令。配置错误因此以零驱动、零 ROS 运行资源和零硬件接触失败。
+
+电机列表必须非空且所有列表长度一致，并满足：
+
+- `motor_ids` 是唯一的 `1～127` 整数；`master_id` 是 `0～255` 整数且不能与
+  电机 ID 重复；
+- 名称去除首尾空白后非空且唯一；方向严格为 `+1.0` 或 `-1.0`；
+- 软限位必须有限、下限严格小于上限，并位于 CyberGear 位置协议
+  `[-4π, +4π]`；
+- 控制轴只能为 `roll_left`、`roll_right` 或 `pitch`；
+- 前进/后退键必须是全局唯一的小写单字符，不能与固定控制键或数字电机选择键
+  冲突。
+
+`control_backend` 只接受 `socketcan_hat` 和 `usb_can_serial`。SocketCAN 需要
+非空 `can_channel`/`can_bustype`；USB-CAN 需要非空最终串口路径和正整数波特率。
+话题名拒绝空白和明显非法形式；发布频率、新鲜度、位置误差和告警限频必须是
+正有限值。轴向符号严格为 `+/-1`；watchdog 允许 `0` 表示禁用，不允许负数；
+温度紧急阈值必须严格高于警告阈值，电流阈值必须为正数。
+
+`motor_temp_limit_degC`、`motor_temp_critical_degC`、`motor_current_limit_a` 和
+`reconnect_on_disconnect` 当前会被集中解析和校验，但现有保护仍依据驱动故障
+标志和位置误差；这些参数尚未直接实现独立的温度降速、温度停机、电流暂停或
+运行期重连策略。文档不会把“参数已校验”误称为对应保护算法已经生效。
+
+旧版 ID、方向和 `m1_*～m4_*` 软限位标量参数继续被声明以保持参数文件兼容。
+保持默认值时不影响配置；任何非默认值都会明确失败，并提示迁移到
+`motor_ids`、`motor_signs`、`motor_limits_min` 或 `motor_limits_max`。USB 的
+`motor_port`/`motor_baud` 仍是 fallback：有效的新参数优先；只有 `usb_port`
+为空或 `usb_baud=0` 时才使用旧参数，并输出一次废弃警告。
+
+内部合法状态转换如下；同状态请求是无副作用的幂等 `NO_CHANGE`：
+
+```text
+UNINITIALIZED  -> INITIALIZING / ERROR / SHUTTING_DOWN
+INITIALIZING   -> MANUAL_RUNNING / EMERGENCY_STOP / ERROR / SHUTTING_DOWN
+MANUAL_RUNNING -> AUTO_RUNNING / EMERGENCY_STOP / ERROR / SHUTTING_DOWN
+AUTO_RUNNING   -> MANUAL_RUNNING / EMERGENCY_STOP / ERROR / SHUTTING_DOWN
+EMERGENCY_STOP -> MANUAL_RUNNING（仅显式且成功恢复）/ ERROR / SHUTTING_DOWN
+ERROR          -> SHUTTING_DOWN
+SHUTTING_DOWN  -> 无其他状态
+```
+
+每次请求返回 `CHANGED`、`NO_CHANGE` 或 `REJECTED`。真实变化携带稳定的 reason
+和 source，并保存只读的序号、旧/新状态及单调时间快照；非法转换保持原状态，
+不运行状态回调。`ERROR` 和 `SHUTTING_DOWN` 都不能恢复到运行态；急停恢复只有
+在真实电机恢复成功后才会以显式恢复原因进入 MANUAL，若状态转换失败则重新尽力
+停止全部电机。
+
+Codex 在可靠性以及配置/状态契约加固中只使用 fake driver 完成纯软件故障注入、
+并发边界和 lifecycle 测试，没有访问真实 IMU、CAN 或电机。软件完成后，用户
+自行启动整个系统并完成 MANUAL/AUTO 功能实机测试；此前也已报告统一 launch
+下的电机和风扇基本功能正常。上述正常功能测试不等于本任务设计的 SDO、配置、
+初始化、stop、close 或 ROS 资源销毁故障已经在实机注入。启动零目标的机械风险
+没有改变；后续实机故障注入仍须单独获得硬件授权并满足仓库安全门槛。
 
 ## 4. 远程控制接口
 
@@ -296,7 +351,9 @@ ros2 service call /enable_motor std_srvs/srv/SetBool "data: true"
 
 ### 4.3 动态修改参数
 
-两个节点均为 LifecycleNode，需在 active 状态下才能修改参数：
+电机控制配置在 lifecycle `configure` 阶段集中读取和校验。参数修改不会绕过
+配置契约即时改变已创建资源；需要按正常 lifecycle 流程重新配置或重启节点后
+生效：
 
 ```bash
 # 查看节点生命周期状态
@@ -305,7 +362,7 @@ ros2 lifecycle nodes
 # 修改看门狗超时
 ros2 param set /imu_motor_controller_node watchdog_timeout_ms 500
 
-# 修改温度保护阈值
+# 修改温度阈值配置（当前不直接启用独立温度降速算法）
 ros2 param set /imu_motor_controller_node motor_temp_limit_degC 70.0
 ```
 

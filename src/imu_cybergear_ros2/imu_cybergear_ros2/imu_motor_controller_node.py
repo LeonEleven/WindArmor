@@ -46,7 +46,6 @@ ROS2 生命周期状态：
 import math
 import threading
 import time
-from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
 
 import rclpy
@@ -57,35 +56,26 @@ from sensor_msgs.msg import Imu
 from std_msgs.msg import Bool, Float64MultiArray, String, UInt64
 from std_srvs.srv import Trigger, SetBool
 
-from .controller_state import ControllerState, StateManager, public_control_mode
+from .controller_state import (
+    ControllerState,
+    StateManager,
+    TransitionOutcome,
+    TransitionReason,
+    TransitionSource,
+    public_control_mode,
+)
 from .cybergear_driver import CyberGearDriver
 from .imu_protocol import corrected_relative_roll_pitch
 from .keyboard_handler import KeyboardHandler
-from .motor_manager import MotorManager, clamp, deg_to_rad
-from .motor_motion import (
-    MotionParameters,
-    auto_attitude_commands,
-    validate_auto_attitude_gains,
-    validate_motion_parameters,
+from .motor_config import (
+    PARAMETER_NAMES,
+    MotorChannelConfig,
+    MotorNodeConfig,
+    build_motor_node_config,
 )
+from .motor_manager import MotorManager, clamp, deg_to_rad
+from .motor_motion import auto_attitude_commands
 from .safety_monitor import SafetyMonitor
-
-
-# ---------------------------------------------------------------------------
-# 电机配置数据类
-# ---------------------------------------------------------------------------
-
-@dataclass
-class MotorConfig:
-    """单台电机的配置信息。"""
-    name: str            # 电机名称（如 "left_lift"）
-    motor_id: int        # CAN ID
-    sign: float          # 方向符号修正（+1.0 或 -1.0）
-    limit_min: float     # 软限位下限（rad）
-    limit_max: float     # 软限位上限（rad）
-    control_axis: str    # IMU 控制轴："roll_left" / "roll_right" / "pitch"
-    key_forward: str     # 键盘前进键
-    key_backward: str    # 键盘后退键
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +229,8 @@ class ImuMotorControllerNode(LifecycleNode):
         self._keyboard: KeyboardHandler = None
 
         # 电机参数（在 on_configure 中从参数读取）
-        self._motor_configs: List[MotorConfig] = []
+        self._config: Optional[MotorNodeConfig] = None
+        self._motor_configs: List[MotorChannelConfig] = []
         self._motor_ids: List[int] = []
         self._limits: Dict[int, Tuple[float, float]] = {}
         self._key_to_motor: Dict[str, Tuple[int, float]] = {}
@@ -294,202 +285,49 @@ class ImuMotorControllerNode(LifecycleNode):
     # ==================================================================
 
     def on_configure(self, state: State) -> TransitionCallbackReturn:
-        """配置阶段：读取参数、创建驱动和 ROS 资源、连接电机。"""
+        """先完整校验配置，再创建驱动、ROS 资源并连接电机。"""
         self.get_logger().info("控制节点正在配置...")
-
-        # ---- 读取全部参数 ----
-        imu_topic = self.get_parameter("imu_topic").get_parameter_value().string_value
-        relative_attitude_topic = (
-            self.get_parameter("relative_attitude_topic").get_parameter_value().string_value
-        )
-        imu_zero_generation_topic = (
-            self.get_parameter("imu_zero_generation_topic").get_parameter_value().string_value
-        )
-        motor_mode_topic = (
-            self.get_parameter("motor_mode_topic").get_parameter_value().string_value
-        )
-        motor_mode_publish_rate_hz = (
-            self.get_parameter("motor_mode_publish_rate_hz")
-            .get_parameter_value()
-            .double_value
-        )
-        backend = self.get_parameter("control_backend").get_parameter_value().string_value
-        master_id = self.get_parameter("master_id").get_parameter_value().integer_value
-
-        # 兼容历史参数名
-        legacy_port = self.get_parameter("motor_port").get_parameter_value().string_value
-        legacy_baud = self.get_parameter("motor_baud").get_parameter_value().integer_value
-        usb_port = self.get_parameter("usb_port").get_parameter_value().string_value
-        usb_baud = self.get_parameter("usb_baud").get_parameter_value().integer_value
-        usb_port = usb_port if usb_port else legacy_port
-        usb_baud = usb_baud if usb_baud else legacy_baud
-
-        can_channel = self.get_parameter("can_channel").get_parameter_value().string_value
-        can_bustype = self.get_parameter("can_bustype").get_parameter_value().string_value
-
-        # ---- 读取电机列表配置 ----
-        motor_names = list(self.get_parameter("motor_names").get_parameter_value().string_array_value)
-        motor_ids = list(self.get_parameter("motor_ids").get_parameter_value().integer_array_value)
-        motor_signs = list(self.get_parameter("motor_signs").get_parameter_value().double_array_value)
-        motor_limits_min = list(self.get_parameter("motor_limits_min").get_parameter_value().double_array_value)
-        motor_limits_max = list(self.get_parameter("motor_limits_max").get_parameter_value().double_array_value)
-        motor_control_axes = list(self.get_parameter("motor_control_axes").get_parameter_value().string_array_value)
-        motor_keys_fwd = list(self.get_parameter("motor_keys_forward").get_parameter_value().string_array_value)
-        motor_keys_bwd = list(self.get_parameter("motor_keys_backward").get_parameter_value().string_array_value)
-
-        n = len(motor_ids)
-        if not (len(motor_names) == len(motor_signs) == len(motor_limits_min) ==
-                len(motor_limits_max) == len(motor_control_axes) ==
-                len(motor_keys_fwd) == len(motor_keys_bwd) == n):
-            self.get_logger().error(
-                f"电机列表参数长度不一致: names={len(motor_names)}, ids={n}, "
-                f"signs={len(motor_signs)}, limits_min={len(motor_limits_min)}, "
-                f"limits_max={len(motor_limits_max)}, axes={len(motor_control_axes)}, "
-                f"keys_fwd={len(motor_keys_fwd)}, keys_bwd={len(motor_keys_bwd)}"
-            )
-            return TransitionCallbackReturn.FAILURE
-
-        self._motor_configs = [
-            MotorConfig(
-                name=motor_names[i],
-                motor_id=motor_ids[i],
-                sign=motor_signs[i],
-                limit_min=motor_limits_min[i],
-                limit_max=motor_limits_max[i],
-                control_axis=motor_control_axes[i],
-                key_forward=motor_keys_fwd[i],
-                key_backward=motor_keys_bwd[i],
-            )
-            for i in range(n)
-        ]
-        self._motor_ids = [cfg.motor_id for cfg in self._motor_configs]
-        self._limits = {cfg.motor_id: (cfg.limit_min, cfg.limit_max) for cfg in self._motor_configs}
-        self._key_to_motor = {}
-        for cfg in self._motor_configs:
-            self._key_to_motor[cfg.key_forward] = (cfg.motor_id, +1.0)
-            self._key_to_motor[cfg.key_backward] = (cfg.motor_id, -1.0)
-
-        # 控制参数
-        self._default_speed = self.get_parameter("default_speed").get_parameter_value().double_value
-        self._deadband = self.get_parameter("deadband_rad").get_parameter_value().double_value
-        self._auto_roll_gain = (
-            self.get_parameter("auto_roll_gain").get_parameter_value().double_value
-        )
-        self._auto_pitch_gain = (
-            self.get_parameter("auto_pitch_gain").get_parameter_value().double_value
-        )
+        # 读取、兼容解析和全部纯函数校验必须先于任何驱动或 ROS 资源创建。
         try:
-            validate_auto_attitude_gains(
-                self._auto_roll_gain, self._auto_pitch_gain
+            raw_values = {
+                name: self.get_parameter(name).value for name in PARAMETER_NAMES
+            }
+            config = build_motor_node_config(raw_values)
+        except Exception as exc:
+            self.get_logger().error(f"电机配置非法: {exc}")
+            # 配置异常发生在 INITIALIZING 前；显式记录允许的 UNINITIALIZED→ERROR。
+            self._state_mgr = StateManager(
+                self,
+                state_change_callback=self._on_control_state_changed,
             )
-        except ValueError as exc:
-            self.get_logger().error(f"电机 AUTO 姿态增益非法: {exc}")
-            return TransitionCallbackReturn.FAILURE
-        self._max_step = self.get_parameter("max_position_step").get_parameter_value().double_value
-        self._command_interval = self.get_parameter("command_interval_sec").get_parameter_value().double_value
-        self._manual_motion_speed = (
-            self.get_parameter("manual_motion_speed_rad_s").get_parameter_value().double_value
-        )
-        self._auto_motion_speed = (
-            self.get_parameter("auto_motion_speed_rad_s").get_parameter_value().double_value
-        )
-        self._home_motion_speed = (
-            self.get_parameter("home_motion_speed_rad_s").get_parameter_value().double_value
-        )
-        self._motion_dt_max = (
-            self.get_parameter("motion_dt_max_sec").get_parameter_value().double_value
-        )
-        self._target_reached_tolerance = (
-            self.get_parameter("target_reached_tolerance_rad")
-            .get_parameter_value()
-            .double_value
-        )
-        self._manual_speed_min = self.get_parameter("manual_speed_min").get_parameter_value().double_value
-        self._manual_speed_max = self.get_parameter("manual_speed_max").get_parameter_value().double_value
-        self._manual_speed_step = self.get_parameter("manual_speed_step").get_parameter_value().double_value
-        self._manual_step_rad = deg_to_rad(
-            self.get_parameter("manual_step_deg").get_parameter_value().double_value
-        )
-        self._manual_repeat_gap = (
-            self.get_parameter("manual_repeat_gap_sec").get_parameter_value().double_value
-        )
-        self._manual_repeat_dt_max = (
-            self.get_parameter("manual_repeat_dt_max_sec").get_parameter_value().double_value
-        )
-        manual_loop_hz = self.get_parameter("manual_loop_hz").get_parameter_value().double_value
-        if not math.isfinite(manual_loop_hz) or manual_loop_hz <= 0.0:
-            self.get_logger().error("manual_loop_hz 必须是大于 0 的有限值")
-            return TransitionCallbackReturn.FAILURE
-        self._manual_period = 1.0 / manual_loop_hz
-        self._keyboard_device = self.get_parameter("keyboard_device").get_parameter_value().string_value
-        self._watchdog_timeout_s = self.get_parameter("watchdog_timeout_ms").get_parameter_value().integer_value / 1000.0
-        self._position_error_threshold = (
-            self.get_parameter("position_error_threshold_rad").get_parameter_value().double_value
-        )
-        self._warning_throttle_sec = max(
-            0.0,
-            self.get_parameter("warning_throttle_sec").get_parameter_value().double_value,
-        )
-        self._roll_axis_sign = self.get_parameter("roll_axis_sign").get_parameter_value().double_value
-        self._pitch_axis_sign = self.get_parameter("pitch_axis_sign").get_parameter_value().double_value
-        self._imu_zero_timeout = (
-            self.get_parameter("imu_zero_timeout_sec").get_parameter_value().double_value
-        )
-        motor_status_topic = self.get_parameter("motor_status_topic").get_parameter_value().string_value
-        if motor_mode_publish_rate_hz <= 0.0 or self._imu_zero_timeout <= 0.0:
-            self.get_logger().error(
-                "motor_mode_publish_rate_hz 和 imu_zero_timeout_sec 必须大于 0"
+            self._state_mgr.transition_to(
+                ControllerState.ERROR,
+                reason=TransitionReason.CONFIGURE_FAILURE,
+                source=TransitionSource.LIFECYCLE,
+            )
+            self._release_resources(
+                reason="configuration_validation_failed",
+                attempt_motor_stop=False,
             )
             return TransitionCallbackReturn.FAILURE
 
-        self._motion_params = MotionParameters(
-            command_interval_sec=self._command_interval,
-            motion_dt_max_sec=self._motion_dt_max,
-            target_reached_tolerance_rad=self._target_reached_tolerance,
-            manual_motion_speed_rad_s=self._manual_motion_speed,
-            auto_motion_speed_rad_s=self._auto_motion_speed,
-            home_motion_speed_rad_s=self._home_motion_speed,
-            manual_step_rad=self._manual_step_rad,
-            manual_repeat_gap_sec=self._manual_repeat_gap,
-            manual_repeat_dt_max_sec=self._manual_repeat_dt_max,
-            max_position_step=self._max_step,
-            default_speed=self._default_speed,
-            manual_speed_min=self._manual_speed_min,
-            manual_speed_max=self._manual_speed_max,
-            manual_speed_step=self._manual_speed_step,
-        )
-        try:
-            validate_motion_parameters(self._motion_params)
-        except ValueError as exc:
-            self.get_logger().error(f"电机运动参数非法: {exc}")
-            return TransitionCallbackReturn.FAILURE
-
-        # ---- 初始化电机运行时状态 ----
-        self._lock = threading.RLock()
-        # 这三组状态在对应驱动写入成功前保持为空，不能预先伪装初始化成功。
-        self._current_targets = {}
-        self._desired_targets = {}
-        self._current_speeds = {}
-        self._selected_motor_id = 1 if 1 in self._motor_ids else self._motor_ids[0]
-        self._motor_feedback = {}
-        self._motor_protection_flags = {mid: False for mid in self._motor_ids}
-        self._init_complete = False
-        self._last_target_change_time = {mid: 0.0 for mid in self._motor_ids}
-        self._command_failure_counts = {mid: 0 for mid in self._motor_ids}
-        self._command_fault_active = False
-        self._last_imu_time = 0.0
-        self._imu_sequence = 0
-        self._imu_zero_sequence = 0
+        self._apply_validated_config(config)
+        if config.communication.fallback_parameters:
+            names = ", ".join(config.communication.fallback_parameters)
+            self.get_logger().warn(
+                f"USB-CAN 使用已废弃兼容参数 {names}；请迁移到 usb_port/usb_baud"
+            )
 
         try:
             # ---- 创建驱动 ----
+            communication = config.communication
             self._driver = self._driver_factory(
-                backend=backend,
-                master_id=master_id,
-                usb_port=usb_port,
-                usb_baud=usb_baud,
-                can_channel=can_channel,
-                can_bustype=can_bustype,
+                backend=communication.backend,
+                master_id=communication.master_id,
+                usb_port=communication.usb_port,
+                usb_baud=communication.usb_baud,
+                can_channel=communication.can_channel,
+                can_bustype=communication.can_bustype,
             )
 
             # ---- 创建子模块 ----
@@ -497,16 +335,28 @@ class ImuMotorControllerNode(LifecycleNode):
                 self,
                 state_change_callback=self._on_control_state_changed,
             )
+            start_result = self._state_mgr.transition_to(
+                ControllerState.INITIALIZING,
+                reason=TransitionReason.CONFIGURE_START,
+                source=TransitionSource.LIFECYCLE,
+            )
+            if start_result.outcome is not TransitionOutcome.CHANGED:
+                raise RuntimeError("无法进入 INITIALIZING，拒绝继续配置")
             self._motor_mgr = MotorManager(self, self._state_mgr)
             self._safety = SafetyMonitor(self, self._state_mgr, self._motor_mgr)
             self._keyboard = KeyboardHandler(
                 self, self._state_mgr, self._motor_mgr, self._safety
             )
-            self._state_mgr._stop_auto_zero_callback = self._motor_mgr.stop_auto_zero
+            self._state_mgr.register_stop_auto_zero_callback(
+                self._motor_mgr.stop_auto_zero
+            )
             self._driver.register_feedback_callback(self._safety.on_motor_feedback)
 
             # ---- 创建 ROS 资源 ----
-            self._motor_status_pub = self.create_publisher(String, motor_status_topic, 10)
+            ros_config = config.ros
+            self._motor_status_pub = self.create_publisher(
+                String, ros_config.motor_status_topic, 10
+            )
             self._system_e_stop_pub = self.create_publisher(Bool, "/e_stop", 10)
             state_qos = QoSProfile(
                 depth=1,
@@ -514,19 +364,21 @@ class ImuMotorControllerNode(LifecycleNode):
                 durability=DurabilityPolicy.TRANSIENT_LOCAL,
             )
             self._relative_attitude_pub = self.create_publisher(
-                Vector3Stamped, relative_attitude_topic, 20
+                Vector3Stamped, ros_config.relative_attitude_topic, 20
             )
             self._imu_zero_generation_pub = self.create_publisher(
-                UInt64, imu_zero_generation_topic, state_qos
+                UInt64, ros_config.imu_zero_generation_topic, state_qos
             )
             self._motor_mode_pub = self.create_publisher(
-                String, motor_mode_topic, state_qos
+                String, ros_config.motor_mode_topic, state_qos
             )
             self._motor_mode_timer = self.create_timer(
-                1.0 / motor_mode_publish_rate_hz,
+                1.0 / ros_config.motor_mode_publish_rate_hz,
                 self._publish_control_mode,
             )
-            self._sub = self.create_subscription(Imu, imu_topic, self._imu_callback, 20)
+            self._sub = self.create_subscription(
+                Imu, ros_config.imu_topic, self._imu_callback, 20
+            )
             self._e_stop_sub = self.create_subscription(
                 Bool, "/e_stop", self._safety.on_e_stop_topic, 10
             )
@@ -550,7 +402,6 @@ class ImuMotorControllerNode(LifecycleNode):
             )
 
             # ---- 连接电机并初始化 ----
-            self._state_mgr.transition_to(ControllerState.INITIALIZING)
             if not self._motor_mgr.connect_and_init_motors():
                 touched = list(reversed(self._motor_mgr.init_touched_motor_ids))
                 stage = self._motor_mgr.current_init_stage
@@ -565,13 +416,22 @@ class ImuMotorControllerNode(LifecycleNode):
                 return TransitionCallbackReturn.FAILURE
 
             # ---- 启动看门狗 ----
-            watchdog_period = max(0.01, self._watchdog_timeout_s / 2.0)
-            self._safety.start_watchdog(watchdog_period)
+            if self._watchdog_timeout_s > 0.0:
+                watchdog_period = max(0.01, self._watchdog_timeout_s / 2.0)
+                self._safety.start_watchdog(watchdog_period)
             driver_backend = self._driver.backend_name
         except Exception as exc:
             self.get_logger().error(f"配置阶段发生异常，开始事务式回滚: {exc}")
-            if self._state_mgr is not None:
-                self._state_mgr.transition_to(ControllerState.ERROR)
+            if self._state_mgr is None:
+                self._state_mgr = StateManager(
+                    self,
+                    state_change_callback=self._on_control_state_changed,
+                )
+            self._state_mgr.transition_to(
+                ControllerState.ERROR,
+                reason=TransitionReason.CONFIGURE_FAILURE,
+                source=TransitionSource.LIFECYCLE,
+            )
             touched = (
                 list(reversed(self._motor_mgr.init_touched_motor_ids))
                 if self._motor_mgr is not None
@@ -585,9 +445,75 @@ class ImuMotorControllerNode(LifecycleNode):
             return TransitionCallbackReturn.FAILURE
 
         self.get_logger().info(
-            f"控制节点配置完成: backend={driver_backend}, imu_topic={imu_topic}"
+            f"控制节点配置完成: backend={driver_backend}, "
+            f"imu_topic={config.ros.imu_topic}"
         )
         return TransitionCallbackReturn.SUCCESS
+
+    def _apply_validated_config(self, config: MotorNodeConfig) -> None:
+        """把已通过纯函数校验的配置提交为运行时内存状态。"""
+        self._config = config
+        self._motor_configs = list(config.channels)
+        self._motor_ids = [channel.motor_id for channel in config.channels]
+        self._limits = {
+            channel.motor_id: (channel.limit_min, channel.limit_max)
+            for channel in config.channels
+        }
+        self._key_to_motor = {}
+        for channel in config.channels:
+            self._key_to_motor[channel.key_forward] = (channel.motor_id, +1.0)
+            self._key_to_motor[channel.key_backward] = (channel.motor_id, -1.0)
+
+        motion = config.control.motion
+        self._motion_params = motion
+        self._default_speed = motion.default_speed
+        self._deadband = config.control.deadband_rad
+        self._auto_roll_gain = config.control.auto_roll_gain
+        self._auto_pitch_gain = config.control.auto_pitch_gain
+        self._max_step = motion.max_position_step
+        self._command_interval = motion.command_interval_sec
+        self._manual_motion_speed = motion.manual_motion_speed_rad_s
+        self._auto_motion_speed = motion.auto_motion_speed_rad_s
+        self._home_motion_speed = motion.home_motion_speed_rad_s
+        self._motion_dt_max = motion.motion_dt_max_sec
+        self._target_reached_tolerance = motion.target_reached_tolerance_rad
+        self._manual_speed_min = motion.manual_speed_min
+        self._manual_speed_max = motion.manual_speed_max
+        self._manual_speed_step = motion.manual_speed_step
+        self._manual_step_rad = motion.manual_step_rad
+        self._manual_repeat_gap = motion.manual_repeat_gap_sec
+        self._manual_repeat_dt_max = motion.manual_repeat_dt_max_sec
+        self._manual_period = 1.0 / config.keyboard.manual_loop_hz
+        self._keyboard_device = config.keyboard.device
+        self._watchdog_timeout_s = config.safety.watchdog_timeout_ms / 1000.0
+        self._position_error_threshold = (
+            config.safety.position_error_threshold_rad
+        )
+        self._warning_throttle_sec = config.safety.warning_throttle_sec
+        self._roll_axis_sign = config.control.roll_axis_sign
+        self._pitch_axis_sign = config.control.pitch_axis_sign
+        self._imu_zero_timeout = config.ros.imu_zero_timeout_sec
+
+        self._lock = threading.RLock()
+        self._current_targets = {}
+        self._desired_targets = {}
+        self._current_speeds = {}
+        self._selected_motor_id = 1 if 1 in self._motor_ids else self._motor_ids[0]
+        self._motor_feedback = {}
+        self._motor_protection_flags = {
+            motor_id: False for motor_id in self._motor_ids
+        }
+        self._init_complete = False
+        self._last_target_change_time = {
+            motor_id: 0.0 for motor_id in self._motor_ids
+        }
+        self._command_failure_counts = {
+            motor_id: 0 for motor_id in self._motor_ids
+        }
+        self._command_fault_active = False
+        self._last_imu_time = 0.0
+        self._imu_sequence = 0
+        self._imu_zero_sequence = 0
 
     def on_activate(self, state: State) -> TransitionCallbackReturn:
         """激活阶段：启动键盘线程。"""
@@ -598,7 +524,7 @@ class ImuMotorControllerNode(LifecycleNode):
         self._publish_imu_zero_generation()
         self._motor_mgr.start_motion_timer()
 
-        if self.get_parameter("enable_keyboard").get_parameter_value().bool_value:
+        if self._config.keyboard.enabled:
             self._keyboard.start()
 
         self._keyboard.print_help()
@@ -738,6 +664,7 @@ class ImuMotorControllerNode(LifecycleNode):
                 self._command_failure_counts = {}
 
             self._motor_configs = []
+            self._config = None
             self._motor_ids = []
             self._limits = {}
             self._key_to_motor = {}
@@ -895,12 +822,22 @@ class ImuMotorControllerNode(LifecycleNode):
     def on_shutdown(self, state: State) -> TransitionCallbackReturn:
         """关闭阶段：与 cleanup/配置失败共用统一释放流程。"""
         self.get_logger().info("控制节点正在关闭...")
+        transition_accepted = True
         if self._state_mgr is not None:
-            self._state_mgr.transition_to(ControllerState.SHUTTING_DOWN)
+            shutdown_result = self._state_mgr.transition_to(
+                ControllerState.SHUTTING_DOWN,
+                reason=TransitionReason.SHUTDOWN_REQUEST,
+                source=TransitionSource.LIFECYCLE,
+            )
+            if shutdown_result.outcome is TransitionOutcome.REJECTED:
+                transition_accepted = False
+                self.get_logger().error(
+                    "关键状态转换被拒绝：无法进入 SHUTTING_DOWN"
+                )
         released = self._release_resources(reason="shutdown", attempt_motor_stop=True)
         return (
             TransitionCallbackReturn.SUCCESS
-            if released
+            if released and transition_accepted
             else TransitionCallbackReturn.FAILURE
         )
 

@@ -3,7 +3,12 @@ import threading
 
 import pytest
 
-from imu_cybergear_ros2.controller_state import ControllerState, StateManager
+from imu_cybergear_ros2.controller_state import (
+    ControllerState,
+    StateManager,
+    TransitionReason,
+    TransitionSource,
+)
 from imu_cybergear_ros2.cybergear_driver import (
     SDO_RUN_MODE,
     SDO_TARGET_POS,
@@ -106,7 +111,16 @@ def build_system(driver=None, motor_ids=(4, 3, 2, 1)):
     state = StateManager(node)
     manager = MotorManager(node, state)
     state._state_change_callback = manager.on_control_state_changed
-    state.transition_to(ControllerState.MANUAL_RUNNING)
+    state.transition_to(
+        ControllerState.INITIALIZING,
+        reason=TransitionReason.CONFIGURE_START,
+        source=TransitionSource.LIFECYCLE,
+    )
+    state.transition_to(
+        ControllerState.MANUAL_RUNNING,
+        reason=TransitionReason.CONFIGURE_SUCCESS,
+        source=TransitionSource.MOTOR_MANAGER,
+    )
     return node, state, manager
 
 
@@ -116,6 +130,14 @@ def calls(driver, operation, index=None):
         for call in driver.calls
         if call[0] == operation and (index is None or call[2] == index)
     ]
+
+
+def begin_initializing(state):
+    state.transition_to(
+        ControllerState.INITIALIZING,
+        reason=TransitionReason.CONFIGURE_START,
+        source=TransitionSource.LIFECYCLE,
+    )
 
 
 def test_position_commits_only_after_success_and_uses_clamped_command(monkeypatch):
@@ -154,6 +176,7 @@ def test_partial_position_batch_commits_prefix_then_enters_error_and_stops_all()
     assert node._desired_targets == node._current_targets
     assert manager.motion_source == MotionSource.IDLE
     assert state.state == ControllerState.ERROR
+    assert state.last_transition.reason is TransitionReason.POSITION_COMMAND_WRITE_FAILURE
     assert [call[1] for call in calls(driver, "stop_motor")] == [4, 3, 2, 1]
     assert not any("自动归零完成" in message for _level, message in node._logger.messages)
 
@@ -176,6 +199,7 @@ def test_position_failure_preserves_timestamp_and_stop_failure_does_not_abort_ba
     assert node._last_target_change_time[4] == 7.0
     assert node._desired_targets == node._current_targets
     assert state.state == ControllerState.ERROR
+    assert state.last_transition.reason is TransitionReason.POSITION_COMMAND_WRITE_FAILURE
     assert [call[1] for call in calls(driver, "stop_motor")] == [4, 3, 2, 1]
     assert any("停止电机 ID3 失败" in message for level, message in node._logger.messages if level == "error")
 
@@ -202,6 +226,7 @@ def test_speed_failure_keeps_old_value_and_timestamp_and_reports_old_value():
     assert node._current_speeds[4] == 10.0
     assert node._last_target_change_time[4] == 6.0
     assert state.state == ControllerState.ERROR
+    assert state.last_transition.reason is TransitionReason.SPEED_COMMAND_WRITE_FAILURE
     assert any("仍保持 10.00" in message for _level, message in node._logger.messages)
 
 
@@ -214,6 +239,7 @@ def test_initialization_success_uses_required_order_and_commits_all_state():
     state = StateManager(node)
     manager = MotorManager(node, state)
     state._state_change_callback = manager.on_control_state_changed
+    begin_initializing(state)
 
     assert manager.connect_and_init_motors()
     for mid in (4, 3):
@@ -256,10 +282,12 @@ def test_initialization_failure_tracks_exact_stage_without_false_completion(
     state = StateManager(node)
     manager = MotorManager(node, state)
     state._state_change_callback = manager.on_control_state_changed
+    begin_initializing(state)
 
     assert not manager.connect_and_init_motors()
     assert not node._init_complete
     assert state.state == ControllerState.ERROR
+    assert state.last_transition.reason is TransitionReason.MOTOR_INIT_FAILURE
     assert manager.init_touched_motor_ids == expected_touched
     assert expected_stage in manager.current_init_stage
     assert manager.motion_source == MotionSource.IDLE
@@ -270,7 +298,9 @@ def test_connect_failure_does_not_touch_any_motor():
     node = FakeNode(driver=driver)
     state = StateManager(node)
     manager = MotorManager(node, state)
+    begin_initializing(state)
     assert not manager.connect_and_init_motors()
+    assert state.last_transition.reason is TransitionReason.DRIVER_CONNECT_FAILURE
     assert manager.init_touched_motor_ids == ()
     assert calls(driver, "write_sdo_int") == []
 
@@ -278,7 +308,11 @@ def test_connect_failure_does_not_touch_any_motor():
 def test_recovery_uses_last_successful_targets_not_desired_and_rolls_back_partial():
     driver = FakeMotorDriver(failures={("enter_control_mode", 3, None)})
     node, state, manager = build_system(driver, motor_ids=(4, 3))
-    state.transition_to(ControllerState.EMERGENCY_STOP)
+    state.transition_to(
+        ControllerState.EMERGENCY_STOP,
+        reason=TransitionReason.USER_ESTOP,
+        source=TransitionSource.KEYBOARD,
+    )
     node._current_targets = {4: 0.2, 3: -0.3}
     node._desired_targets = {4: 0.9, 3: 0.8}
 
@@ -302,6 +336,7 @@ def test_mechanical_zero_only_commits_motor_after_target_and_enter_succeed():
     assert not manager.set_all_motor_zero_reference()
     assert node._current_targets == {4: 0.0, 3: -0.3}
     assert state.state == ControllerState.ERROR
+    assert state.last_transition.reason is TransitionReason.MECHANICAL_ZERO_FAILURE
     # 首轮停机和失败后的回滚都必须覆盖全部电机。
     assert [call[1] for call in calls(driver, "stop_motor")] == [4, 3, 4, 3]
 
@@ -357,7 +392,10 @@ def test_emergency_stop_gets_io_lock_after_current_single_write():
 
     def stop():
         stopper_started.set()
-        monitor.emergency_stop()
+        monitor.emergency_stop(
+            reason=TransitionReason.USER_ESTOP,
+            source=TransitionSource.KEYBOARD,
+        )
 
     writer.start()
     assert entered.wait(timeout=1.0)

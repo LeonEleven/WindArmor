@@ -6,7 +6,12 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 from std_msgs.msg import String
 
-from .controller_state import ControllerState
+from .controller_state import (
+    ControllerState,
+    TransitionOutcome,
+    TransitionReason,
+    TransitionSource,
+)
 from .cybergear_driver import SDO_RUN_MODE, SDO_TARGET_POS, SDO_TARGET_SPEED
 from .motor_motion import (
     MotionSource,
@@ -93,7 +98,15 @@ class MotorManager:
                 "  2. 电机电源是否已接通\n"
                 "  3. CAN 总线接线是否正确"
             )
-            self._state.transition_to(ControllerState.ERROR)
+            result = self._state.transition_to(
+                ControllerState.ERROR,
+                reason=TransitionReason.DRIVER_CONNECT_FAILURE,
+                source=TransitionSource.MOTOR_MANAGER,
+            )
+            if result.outcome is TransitionOutcome.REJECTED:
+                self._node.get_logger().error(
+                    "关键状态转换被拒绝：驱动连接失败后无法进入 ERROR"
+                )
             self._current_init_stage = "failed:connect"
             return False
 
@@ -148,14 +161,32 @@ class MotorManager:
                         self._node.get_logger().error(
                             f"初始化电机 ID{mid} 失败（已重试 {max_init_retry} 次）: {exc}"
                         )
-                        self._state.transition_to(ControllerState.ERROR)
+                        result = self._state.transition_to(
+                            ControllerState.ERROR,
+                            reason=TransitionReason.MOTOR_INIT_FAILURE,
+                            source=TransitionSource.MOTOR_MANAGER,
+                        )
+                        if result.outcome is TransitionOutcome.REJECTED:
+                            self._node.get_logger().error(
+                                "关键状态转换被拒绝：电机初始化失败后无法进入 ERROR"
+                            )
                         self._current_init_stage = f"failed:{self._current_init_stage}"
                         return False
 
+        result = self._state.transition_to(
+            ControllerState.MANUAL_RUNNING,
+            reason=TransitionReason.CONFIGURE_SUCCESS,
+            source=TransitionSource.MOTOR_MANAGER,
+        )
+        if result.outcome is not TransitionOutcome.CHANGED:
+            self._node.get_logger().error(
+                "关键状态转换被拒绝或未改变：初始化完成后无法进入 MANUAL_RUNNING"
+            )
+            self._current_init_stage = "failed:state_transition"
+            return False
         with self._node._lock:
             self._node._init_complete = True
             self._node._command_fault_active = False
-        self._state.transition_to(ControllerState.MANUAL_RUNNING)
         self._current_init_stage = "complete"
         return True
 
@@ -503,7 +534,20 @@ class MotorManager:
             "已丢弃未完成运动并尝试停止全部电机"
         )
         self.stop_motors_best_effort(reason=f"command_fault:{command_type}")
-        self._state.transition_to(ControllerState.ERROR)
+        transition_reason = (
+            TransitionReason.SPEED_COMMAND_WRITE_FAILURE
+            if command_type == "speed_limit"
+            else TransitionReason.POSITION_COMMAND_WRITE_FAILURE
+        )
+        result = self._state.transition_to(
+            ControllerState.ERROR,
+            reason=transition_reason,
+            source=TransitionSource.MOTOR_MANAGER,
+        )
+        if result.outcome is TransitionOutcome.REJECTED:
+            self._node.get_logger().error(
+                "关键状态转换被拒绝：运行时命令故障后无法进入 ERROR"
+            )
 
     def stop_motors_best_effort(
         self,
@@ -556,7 +600,16 @@ class MotorManager:
     def go_all_to_zero(self) -> bool:
         """设置 HOME 目标；AUTO 中会先显式切换为 MANUAL。"""
         if self._state.is_auto_running():
-            self._state.transition_to(ControllerState.MANUAL_RUNNING)
+            result = self._state.transition_to(
+                ControllerState.MANUAL_RUNNING,
+                reason=TransitionReason.HOME_REQUEST,
+                source=TransitionSource.MOTOR_MANAGER,
+            )
+            if result.outcome is not TransitionOutcome.CHANGED:
+                self._node.get_logger().error(
+                    "HOME 请求无法从 AUTO 切换到 MANUAL，已拒绝回零"
+                )
+                return False
         if not self._state.is_manual_running():
             self._node.get_logger().warn(
                 f"当前状态 {self._state.state_name} 不允许自动归零"
@@ -645,7 +698,15 @@ class MotorManager:
             self._node.get_logger().info("全部电机机械零点已设置")
         else:
             self.stop_motors_best_effort(reason="set_zero_failed")
-            self._state.transition_to(ControllerState.ERROR)
+            result = self._state.transition_to(
+                ControllerState.ERROR,
+                reason=TransitionReason.MECHANICAL_ZERO_FAILURE,
+                source=TransitionSource.MOTOR_MANAGER,
+            )
+            if result.outcome is TransitionOutcome.REJECTED:
+                self._node.get_logger().error(
+                    "关键状态转换被拒绝：机械零点失败后无法进入 ERROR"
+                )
         return success
 
     def hold_current_targets_and_recover(self) -> bool:
@@ -691,6 +752,7 @@ class MotorManager:
     def publish_state_summary(self) -> None:
         """发布当前状态汇总到日志。"""
         state_name = self._state.state_name
+        transition = self._state.last_transition
         with self._node._lock:
             summary_lines = [
                 "===== 节点状态汇总 =====",
@@ -699,6 +761,14 @@ class MotorManager:
                 f"Pitch: {math.degrees(self._node._latest_pitch):.2f}°",
                 f"选中电机: ID{self._node._selected_motor_id}",
             ]
+        if transition is not None:
+            summary_lines.append(
+                "最近状态转换: "
+                f"#{transition.sequence} {transition.old_state.name} -> "
+                f"{transition.new_state.name}, reason={transition.reason.value}, "
+                f"source={transition.source.value}, "
+                f"monotonic={transition.monotonic_timestamp:.6f}"
+            )
         summary_lines.append("各电机当前状态:")
         for cfg in self._node._motor_configs:
             mid = cfg.motor_id
