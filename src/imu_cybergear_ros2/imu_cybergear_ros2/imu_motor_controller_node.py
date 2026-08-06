@@ -47,7 +47,7 @@ import math
 import threading
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import rclpy
 from geometry_msgs.msg import Vector3Stamped
@@ -101,8 +101,16 @@ class ImuMotorControllerNode(LifecycleNode):
 
     # ---- 构造 ----
 
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        driver_factory: Callable[..., object] = CyberGearDriver,
+        sleep_fn: Callable[[float], None] = time.sleep,
+    ):
         super().__init__("imu_motor_controller_node")
+        # 测试可注入完全内存化 fake；生产入口仍使用 CyberGearDriver。
+        self._driver_factory = driver_factory
+        self._sleep = sleep_fn
 
         # ================================================================
         # 声明全部参数（在 unconfigured 状态下可用）
@@ -238,6 +246,10 @@ class ImuMotorControllerNode(LifecycleNode):
 
         # 电机运行时状态（供子模块通过 self._node.xxx 访问）
         self._lock = threading.RLock()
+        # 锁顺序：绝不在持有 _lock 时等待 _driver_io_lock。
+        # 每次只串行化单个驱动调用，使急停最多等待当前一次 I/O。
+        self._driver_io_lock = threading.Lock()
+        self._release_lock = threading.Lock()
         self._current_targets: Dict[int, float] = {}
         self._desired_targets: Dict[int, float] = {}
         self._current_speeds: Dict[int, float] = {}
@@ -246,6 +258,8 @@ class ImuMotorControllerNode(LifecycleNode):
         self._motor_protection_flags: Dict[int, bool] = {}
         self._init_complete = False
         self._last_target_change_time: Dict[int, float] = {}
+        self._command_failure_counts: Dict[int, int] = {}
+        self._command_fault_active = False
 
         # IMU 运行时状态
         self._imu_zero_roll = 0.0
@@ -452,102 +466,126 @@ class ImuMotorControllerNode(LifecycleNode):
 
         # ---- 初始化电机运行时状态 ----
         self._lock = threading.RLock()
-        self._current_targets = {mid: 0.0 for mid in self._motor_ids}
-        self._desired_targets = dict(self._current_targets)
-        self._current_speeds = {mid: self._default_speed for mid in self._motor_ids}
+        # 这三组状态在对应驱动写入成功前保持为空，不能预先伪装初始化成功。
+        self._current_targets = {}
+        self._desired_targets = {}
+        self._current_speeds = {}
         self._selected_motor_id = 1 if 1 in self._motor_ids else self._motor_ids[0]
         self._motor_feedback = {}
         self._motor_protection_flags = {mid: False for mid in self._motor_ids}
         self._init_complete = False
         self._last_target_change_time = {mid: 0.0 for mid in self._motor_ids}
+        self._command_failure_counts = {mid: 0 for mid in self._motor_ids}
+        self._command_fault_active = False
         self._last_imu_time = 0.0
         self._imu_sequence = 0
         self._imu_zero_sequence = 0
 
-        # ---- 创建驱动 ----
-        self._driver = CyberGearDriver(
-            backend=backend,
-            master_id=master_id,
-            usb_port=usb_port,
-            usb_baud=usb_baud,
-            can_channel=can_channel,
-            can_bustype=can_bustype,
-        )
+        try:
+            # ---- 创建驱动 ----
+            self._driver = self._driver_factory(
+                backend=backend,
+                master_id=master_id,
+                usb_port=usb_port,
+                usb_baud=usb_baud,
+                can_channel=can_channel,
+                can_bustype=can_bustype,
+            )
 
-        # ---- 创建子模块 ----
-        self._state_mgr = StateManager(
-            self,
-            state_change_callback=self._on_control_state_changed,
-        )
-        self._motor_mgr = MotorManager(self, self._state_mgr)
-        self._safety = SafetyMonitor(self, self._state_mgr, self._motor_mgr)
-        self._keyboard = KeyboardHandler(
-            self, self._state_mgr, self._motor_mgr, self._safety
-        )
+            # ---- 创建子模块 ----
+            self._state_mgr = StateManager(
+                self,
+                state_change_callback=self._on_control_state_changed,
+            )
+            self._motor_mgr = MotorManager(self, self._state_mgr)
+            self._safety = SafetyMonitor(self, self._state_mgr, self._motor_mgr)
+            self._keyboard = KeyboardHandler(
+                self, self._state_mgr, self._motor_mgr, self._safety
+            )
+            self._state_mgr._stop_auto_zero_callback = self._motor_mgr.stop_auto_zero
+            self._driver.register_feedback_callback(self._safety.on_motor_feedback)
 
-        # 状态转换时自动停止自动归零
-        self._state_mgr._stop_auto_zero_callback = self._motor_mgr.stop_auto_zero
+            # ---- 创建 ROS 资源 ----
+            self._motor_status_pub = self.create_publisher(String, motor_status_topic, 10)
+            self._system_e_stop_pub = self.create_publisher(Bool, "/e_stop", 10)
+            state_qos = QoSProfile(
+                depth=1,
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            )
+            self._relative_attitude_pub = self.create_publisher(
+                Vector3Stamped, relative_attitude_topic, 20
+            )
+            self._imu_zero_generation_pub = self.create_publisher(
+                UInt64, imu_zero_generation_topic, state_qos
+            )
+            self._motor_mode_pub = self.create_publisher(
+                String, motor_mode_topic, state_qos
+            )
+            self._motor_mode_timer = self.create_timer(
+                1.0 / motor_mode_publish_rate_hz,
+                self._publish_control_mode,
+            )
+            self._sub = self.create_subscription(Imu, imu_topic, self._imu_callback, 20)
+            self._e_stop_sub = self.create_subscription(
+                Bool, "/e_stop", self._safety.on_e_stop_topic, 10
+            )
+            self._manual_targets_sub = self.create_subscription(
+                Float64MultiArray,
+                "/motors/manual_targets",
+                self._on_manual_targets,
+                10,
+            )
+            self._e_stop_srv = self.create_service(
+                Trigger, "/e_stop", self._safety.on_e_stop_service
+            )
+            self._enable_motor_srv = self.create_service(
+                SetBool, "/enable_motor", self._safety.on_enable_motor_service
+            )
+            self._imu_zero_srv = self.create_service(
+                Trigger, "/imu/set_zero", self._on_imu_zero_service
+            )
+            self._motor_zero_srv = self.create_service(
+                Trigger, "/motors/set_zero", self._on_motor_zero_service
+            )
 
-        # 注册电机反馈回调
-        self._driver.register_feedback_callback(self._safety.on_motor_feedback)
+            # ---- 连接电机并初始化 ----
+            self._state_mgr.transition_to(ControllerState.INITIALIZING)
+            if not self._motor_mgr.connect_and_init_motors():
+                touched = list(reversed(self._motor_mgr.init_touched_motor_ids))
+                stage = self._motor_mgr.current_init_stage
+                self.get_logger().error(
+                    f"电机初始化失败，配置回滚: stage={stage}, touched={touched}"
+                )
+                self._release_resources(
+                    reason=f"configure_failed:{stage}",
+                    attempt_motor_stop=bool(touched),
+                    motor_ids=touched,
+                )
+                return TransitionCallbackReturn.FAILURE
 
-        # ---- 创建 ROS 资源 ----
-        self._motor_status_pub = self.create_publisher(String, motor_status_topic, 10)
-        self._system_e_stop_pub = self.create_publisher(Bool, "/e_stop", 10)
-        state_qos = QoSProfile(
-            depth=1,
-            reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
-        )
-        self._relative_attitude_pub = self.create_publisher(
-            Vector3Stamped, relative_attitude_topic, 20
-        )
-        self._imu_zero_generation_pub = self.create_publisher(
-            UInt64, imu_zero_generation_topic, state_qos
-        )
-        self._motor_mode_pub = self.create_publisher(
-            String, motor_mode_topic, state_qos
-        )
-        self._motor_mode_timer = self.create_timer(
-            1.0 / motor_mode_publish_rate_hz,
-            self._publish_control_mode,
-        )
-        self._sub = self.create_subscription(Imu, imu_topic, self._imu_callback, 20)
-        self._e_stop_sub = self.create_subscription(
-            Bool, "/e_stop", self._safety.on_e_stop_topic, 10
-        )
-        self._manual_targets_sub = self.create_subscription(
-            Float64MultiArray,
-            "/motors/manual_targets",
-            self._on_manual_targets,
-            10,
-        )
-        self._e_stop_srv = self.create_service(
-            Trigger, "/e_stop", self._safety.on_e_stop_service
-        )
-        self._enable_motor_srv = self.create_service(
-            SetBool, "/enable_motor", self._safety.on_enable_motor_service
-        )
-        self._imu_zero_srv = self.create_service(
-            Trigger, "/imu/set_zero", self._on_imu_zero_service
-        )
-        self._motor_zero_srv = self.create_service(
-            Trigger, "/motors/set_zero", self._on_motor_zero_service
-        )
-
-        # ---- 连接电机并初始化 ----
-        self._state_mgr.transition_to(ControllerState.INITIALIZING)
-        if not self._motor_mgr.connect_and_init_motors():
-            self.get_logger().error("电机初始化失败，配置失败")
+            # ---- 启动看门狗 ----
+            watchdog_period = max(0.01, self._watchdog_timeout_s / 2.0)
+            self._safety.start_watchdog(watchdog_period)
+            driver_backend = self._driver.backend_name
+        except Exception as exc:
+            self.get_logger().error(f"配置阶段发生异常，开始事务式回滚: {exc}")
+            if self._state_mgr is not None:
+                self._state_mgr.transition_to(ControllerState.ERROR)
+            touched = (
+                list(reversed(self._motor_mgr.init_touched_motor_ids))
+                if self._motor_mgr is not None
+                else []
+            )
+            self._release_resources(
+                reason="configure_exception",
+                attempt_motor_stop=bool(touched),
+                motor_ids=touched,
+            )
             return TransitionCallbackReturn.FAILURE
 
-        # ---- 启动看门狗 ----
-        watchdog_period = max(0.01, self._watchdog_timeout_s / 2.0)
-        self._safety.start_watchdog(watchdog_period)
-
         self.get_logger().info(
-            f"控制节点配置完成: backend={self._driver.backend_name}, "
-            f"imu_topic={imu_topic}"
+            f"控制节点配置完成: backend={driver_backend}, imu_topic={imu_topic}"
         )
         return TransitionCallbackReturn.SUCCESS
 
@@ -582,80 +620,165 @@ class ImuMotorControllerNode(LifecycleNode):
         return TransitionCallbackReturn.SUCCESS
 
     def on_cleanup(self, state: State) -> TransitionCallbackReturn:
-        """清理阶段：停止电机、关闭驱动、销毁 ROS 资源。"""
+        """清理阶段：使用统一流程尽力释放全部资源。"""
         self.get_logger().info("控制节点正在清理...")
+        released = self._release_resources(reason="cleanup", attempt_motor_stop=True)
+        return (
+            TransitionCallbackReturn.SUCCESS
+            if released
+            else TransitionCallbackReturn.FAILURE
+        )
 
-        if self._motor_mgr is not None:
-            self._motor_mgr.stop_motion_timer()
+    def _release_resources(
+        self,
+        *,
+        reason: str,
+        attempt_motor_stop: bool,
+        motor_ids: Optional[List[int]] = None,
+    ) -> bool:
+        """统一、幂等、可诊断的 lifecycle/配置失败资源释放流程。"""
+        failures: List[str] = []
 
-        # 停止电机并关闭驱动
-        if self._driver is not None:
-            for mid in self._motor_ids:
-                try:
-                    self._driver.stop_motor(mid)
-                except Exception:
-                    pass
+        def attempt(stage: str, action: Callable[[], object]) -> None:
             try:
-                self._driver.close()
-            except Exception:
-                pass
+                result = action()
+                if result is False:
+                    raise RuntimeError("操作返回 false")
+            except Exception as exc:
+                failures.append(f"{stage}: {exc}")
+                self.get_logger().error(
+                    f"资源释放失败: reason={reason}, stage={stage}, error={exc}"
+                )
+
+        with self._release_lock:
+            self._is_active = False
+            self._running = False
+            attempt("publish_disabled_mode", self._publish_control_mode)
+
+            motor_mgr = self._motor_mgr
+            safety = self._safety
+            keyboard = self._keyboard
+
+            if motor_mgr is not None:
+                attempt("stop_motion_timer", motor_mgr.stop_motion_timer)
+            if keyboard is not None:
+                attempt("stop_keyboard", keyboard.stop)
+            if safety is not None:
+                attempt("stop_watchdog", safety.stop_watchdog)
+
+            ids_to_stop = list(self._motor_ids if motor_ids is None else motor_ids)
+            if attempt_motor_stop and self._driver is not None:
+                if motor_mgr is not None:
+                    attempt(
+                        "stop_motors",
+                        lambda: motor_mgr.stop_motors_best_effort(
+                            reason=reason, motor_ids=ids_to_stop
+                        ),
+                    )
+                else:
+                    for mid in ids_to_stop:
+                        def stop_one(motor_id=mid):
+                            with self._driver_io_lock:
+                                if self._driver is None:
+                                    raise RuntimeError("电机驱动不可用")
+                                self._driver.stop_motor(motor_id)
+
+                        attempt(f"stop_motor:ID{mid}", stop_one)
+
+            driver = self._driver
             self._driver = None
+            if driver is not None:
+                if hasattr(driver, "clear_feedback_callbacks"):
+                    def clear_driver_callbacks() -> None:
+                        with self._driver_io_lock:
+                            driver.clear_feedback_callbacks()
 
-        # 停止看门狗
-        self._safety.stop_watchdog()
+                    attempt("clear_driver_callbacks", clear_driver_callbacks)
 
-        # 销毁 ROS 资源
-        if self._motor_mode_timer is not None:
-            self.destroy_timer(self._motor_mode_timer)
-        for pub in [
-            self._motor_status_pub,
-            self._system_e_stop_pub,
-            self._relative_attitude_pub,
-            self._imu_zero_generation_pub,
-            self._motor_mode_pub,
-        ]:
-            if pub is not None:
-                self.destroy_publisher(pub)
-        for sub in [self._sub, self._e_stop_sub, self._manual_targets_sub]:
-            if sub is not None:
-                self.destroy_subscription(sub)
-        for srv in [
-            self._e_stop_srv,
-            self._enable_motor_srv,
-            self._imu_zero_srv,
-            self._motor_zero_srv,
-        ]:
-            if srv is not None:
-                self.destroy_service(srv)
+                def close_driver() -> None:
+                    with self._driver_io_lock:
+                        driver.close()
 
-        self._motor_status_pub = None
-        self._system_e_stop_pub = None
-        self._relative_attitude_pub = None
-        self._imu_zero_generation_pub = None
-        self._motor_mode_pub = None
-        self._motor_mode_timer = None
-        self._sub = None
-        self._e_stop_sub = None
-        self._manual_targets_sub = None
-        self._e_stop_srv = None
-        self._enable_motor_srv = None
-        self._imu_zero_srv = None
-        self._motor_zero_srv = None
+                attempt("close_driver", close_driver)
 
-        # 重置内部状态
-        self._motor_configs = []
-        self._motor_ids = []
-        self._limits = {}
-        self._key_to_motor = {}
-        self._motor_feedback = {}
-        self._motor_protection_flags = {}
-        self._state_mgr = None
-        self._motor_mgr = None
-        self._safety = None
-        self._keyboard = None
+            self._destroy_ros_resource(
+                "_motor_mode_timer", "timer:motor_mode", self.destroy_timer, failures, reason
+            )
+            for attr in (
+                "_motor_status_pub",
+                "_system_e_stop_pub",
+                "_relative_attitude_pub",
+                "_imu_zero_generation_pub",
+                "_motor_mode_pub",
+            ):
+                self._destroy_ros_resource(
+                    attr, f"publisher:{attr}", self.destroy_publisher, failures, reason
+                )
+            for attr in ("_sub", "_e_stop_sub", "_manual_targets_sub"):
+                self._destroy_ros_resource(
+                    attr, f"subscription:{attr}", self.destroy_subscription, failures, reason
+                )
+            for attr in (
+                "_e_stop_srv",
+                "_enable_motor_srv",
+                "_imu_zero_srv",
+                "_motor_zero_srv",
+            ):
+                self._destroy_ros_resource(
+                    attr, f"service:{attr}", self.destroy_service, failures, reason
+                )
 
-        self.get_logger().info("控制节点清理完成")
-        return TransitionCallbackReturn.SUCCESS
+            with self._lock:
+                self._init_complete = False
+                self._command_fault_active = False
+                self._current_targets = {}
+                self._desired_targets = {}
+                self._current_speeds = {}
+                self._last_target_change_time = {}
+                self._command_failure_counts = {}
+
+            self._motor_configs = []
+            self._motor_ids = []
+            self._limits = {}
+            self._key_to_motor = {}
+            self._motor_feedback = {}
+            self._motor_protection_flags = {}
+            self._state_mgr = None
+            self._motor_mgr = None
+            self._safety = None
+            self._keyboard = None
+
+        if failures:
+            self.get_logger().error(
+                f"资源释放完成但存在 {len(failures)} 项失败: reason={reason}; "
+                + " | ".join(failures)
+            )
+            return False
+        self.get_logger().info(f"资源释放全部完成: reason={reason}")
+        return True
+
+    def _destroy_ros_resource(
+        self,
+        attr: str,
+        stage: str,
+        destroy: Callable[[object], object],
+        failures: List[str],
+        reason: str,
+    ) -> None:
+        """每个资源最多尝试销毁一次；失败仍清除引用并继续。"""
+        resource = getattr(self, attr, None)
+        setattr(self, attr, None)
+        if resource is None:
+            return
+        try:
+            result = destroy(resource)
+            if result is False:
+                raise RuntimeError("销毁操作返回 false")
+        except Exception as exc:
+            failures.append(f"{stage}: {exc}")
+            self.get_logger().error(
+                f"资源释放失败: reason={reason}, stage={stage}, error={exc}"
+            )
 
     def _on_imu_zero_service(
         self, _request: Trigger.Request, response: Trigger.Response
@@ -770,65 +893,16 @@ class ImuMotorControllerNode(LifecycleNode):
         self._system_e_stop_pub.publish(msg)
 
     def on_shutdown(self, state: State) -> TransitionCallbackReturn:
-        """关闭阶段：最终清理。"""
+        """关闭阶段：与 cleanup/配置失败共用统一释放流程。"""
         self.get_logger().info("控制节点正在关闭...")
-        self._is_active = False
-        self._running = False
-        self._publish_control_mode()
-
-        if self._motor_mgr is not None:
-            self._motor_mgr.stop_motion_timer()
-
-        if self._safety is not None:
-            self._safety.emergency_stop()
-
-        if self._driver is not None:
-            try:
-                self._driver.close()
-            except Exception:
-                pass
-            self._driver = None
-
-        if self._keyboard is not None:
-            self._keyboard.stop()
-
-        if self._motor_mode_timer is not None:
-            try:
-                self.destroy_timer(self._motor_mode_timer)
-            except Exception:
-                pass
-        for pub in [
-            self._motor_status_pub,
-            self._system_e_stop_pub,
-            self._relative_attitude_pub,
-            self._imu_zero_generation_pub,
-            self._motor_mode_pub,
-        ]:
-            if pub is not None:
-                try:
-                    self.destroy_publisher(pub)
-                except Exception:
-                    pass
-        for sub in [self._sub, self._e_stop_sub, self._manual_targets_sub]:
-            if sub is not None:
-                try:
-                    self.destroy_subscription(sub)
-                except Exception:
-                    pass
-        for srv in [
-            self._e_stop_srv,
-            self._enable_motor_srv,
-            self._imu_zero_srv,
-            self._motor_zero_srv,
-        ]:
-            if srv is not None:
-                try:
-                    self.destroy_service(srv)
-                except Exception:
-                    pass
-
-        self.get_logger().info("控制节点已关闭")
-        return TransitionCallbackReturn.SUCCESS
+        if self._state_mgr is not None:
+            self._state_mgr.transition_to(ControllerState.SHUTTING_DOWN)
+        released = self._release_resources(reason="shutdown", attempt_motor_stop=True)
+        return (
+            TransitionCallbackReturn.SUCCESS
+            if released
+            else TransitionCallbackReturn.FAILURE
+        )
 
     # ==================================================================
     # IMU 数据回调（核心控制逻辑，保留在主节点）

@@ -318,6 +318,10 @@ class UsbCanSerialBackend(_BaseCyberGearBackend):
         """注册电机反馈回调函数。"""
         self._feedback_callbacks.append(callback)
 
+    def clear_feedback_callbacks(self) -> None:
+        """释放 lifecycle 资源时清除回调对节点对象的引用。"""
+        self._feedback_callbacks.clear()
+
     # ---- 适配器初始化 ----
 
     def _init_adapter(self) -> None:
@@ -447,9 +451,8 @@ class SocketCanHatBackend(_BaseCyberGearBackend):
         if self._bus is not None:
             try:
                 self._bus.shutdown()
-            except Exception:
-                pass
-            self._bus = None
+            finally:
+                self._bus = None
 
     @property
     def is_connected(self) -> bool:
@@ -458,6 +461,10 @@ class SocketCanHatBackend(_BaseCyberGearBackend):
     def register_feedback_callback(self, callback: Callable[[MotorStatus], None]) -> None:
         """注册电机反馈回调函数。"""
         self._feedback_callbacks.append(callback)
+
+    def clear_feedback_callbacks(self) -> None:
+        """释放 lifecycle 资源时清除回调对节点对象的引用。"""
+        self._feedback_callbacks.clear()
 
     # ---- 发送指令 ----
 
@@ -608,6 +615,11 @@ class CyberGearDriver:
         """注册电机反馈回调。"""
         if hasattr(self._impl, "register_feedback_callback"):
             self._impl.register_feedback_callback(callback)
+
+    def clear_feedback_callbacks(self) -> None:
+        """清除后端反馈回调，避免 cleanup 后保留节点引用。"""
+        if hasattr(self._impl, "clear_feedback_callbacks"):
+            self._impl.clear_feedback_callbacks()
 
     # ---- 发送指令（委托给后端实现） ----
 

@@ -88,7 +88,8 @@ class SafetyMonitor:
             return
         try:
             mid = status.motor_id
-            self._node._motor_feedback[mid] = status
+            with self._node._lock:
+                self._node._motor_feedback[mid] = status
 
             # 发布格式化的电机状态字符串
             status_msg = String()
@@ -111,23 +112,30 @@ class SafetyMonitor:
                     f"电机 ID{mid} 故障: {status.fault_names}, "
                     f"温度={status.temperature:.1f}°C",
                 )
-                self._node._motor_protection_flags[mid] = True
+                with self._node._lock:
+                    self._node._motor_protection_flags[mid] = True
             else:
-                if self._node._motor_protection_flags.get(mid, False):
-                    self._node._motor_protection_flags[mid] = False
+                with self._node._lock:
+                    was_protected = self._node._motor_protection_flags.get(mid, False)
+                    if was_protected:
+                        self._node._motor_protection_flags[mid] = False
+                if was_protected:
                     self._node.get_logger().info(f"电机 ID{mid} 故障已清除，恢复目标更新")
 
             # 位置误差检查
-            if self._node._init_complete and mid in self._node._current_targets:
+            with self._node._lock:
+                init_complete = self._node._init_complete
+                target = self._node._current_targets.get(mid)
+                changed_at = self._node._last_target_change_time.get(mid, 0.0)
+            if init_complete and target is not None:
                 skip_state = self._state.state in (
                     ControllerState.EMERGENCY_STOP,
                     ControllerState.ERROR,
                     ControllerState.INITIALIZING,
                 )
                 if not skip_state:
-                    target = self._node._current_targets[mid]
                     actual = status.position_rad
-                    elapsed = time.monotonic() - self._node._last_target_change_time.get(mid, 0.0)
+                    elapsed = time.monotonic() - changed_at
                     if elapsed > 0.5:
                         error = abs(target - actual)
                         if error > self._node._position_error_threshold:
@@ -177,6 +185,16 @@ class SafetyMonitor:
             response.message = "节点未激活"
             return response
         if request.data:
+            if self._state.state == ControllerState.ERROR:
+                response.success = False
+                response.message = "控制器处于 ERROR；排除故障后需重新配置或重启节点"
+                self._node.get_logger().error(response.message)
+                return response
+            if self._state.state != ControllerState.EMERGENCY_STOP:
+                response.success = False
+                response.message = "仅允许从 EMERGENCY_STOP 显式恢复电机"
+                self._node.get_logger().warn(response.message)
+                return response
             self._node.get_logger().info("收到 /enable_motor 启用指令，尝试恢复运控模式")
             response.success = self._motor_mgr.hold_current_targets_and_recover()
             if response.success:
@@ -203,12 +221,8 @@ class SafetyMonitor:
         self._node.get_logger().error("【急停】正在停止全部电机！")
         # 普通推进必须先停，不能让速度限制或并发定时器延迟急停。
         self._motor_mgr.halt_motion()
+        self._motor_mgr.stop_motors_best_effort(reason="emergency_stop")
         with self._node._lock:
-            for mid in self._node._motor_ids:
-                try:
-                    self._node._driver.stop_motor(mid)
-                except Exception as exc:
-                    self._node.get_logger().error(f"急停时停止电机 ID{mid} 发生异常: {exc}")
             for mid in self._node._motor_ids:
                 self._node._motor_protection_flags[mid] = False
 

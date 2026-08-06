@@ -220,19 +220,24 @@ class KeyboardHandler:
                         if self._motor_mgr.hold_current_targets_and_recover():
                             self._state.transition_to(ControllerState.MANUAL_RUNNING)
                     else:
-                        self._motor_mgr.hold_current_targets_and_recover()
+                        self._node.get_logger().warn(
+                            f"当前状态 {self._state.state_name} 不允许急停恢复；"
+                            "ERROR 需要重新配置或重启节点"
+                        )
                     continue
 
                 # ---- q: 退出 ----
                 if key == "q":
                     self._node.get_logger().info("收到退出指令，正在停止全部电机...")
-                    with self._node._lock:
-                        for mid in self._node._motor_ids:
-                            try:
-                                self._node._driver.stop_motor(mid)
-                            except Exception:
-                                pass
-                    self._node.get_logger().info("电机已停止，正在关闭节点...")
+                    stopped = self._motor_mgr.stop_motors_best_effort(
+                        reason="keyboard_quit"
+                    )
+                    if stopped:
+                        self._node.get_logger().info("电机已停止，正在关闭节点...")
+                    else:
+                        self._node.get_logger().error(
+                            "退出时部分电机停止失败，仍将继续关闭节点；请检查日志"
+                        )
                     self._node._running = False
                     rclpy.shutdown()
                     break

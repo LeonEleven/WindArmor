@@ -1,370 +1,402 @@
-# 最新反馈：风扇控制安全与确定性加固
+# 最新反馈：电机命令与生命周期可靠性加固
 
 > 本文件只保留最近一次反馈。
 >
-> 日期：2026-08-05
+> 日期：2026-08-06
 
 ## 1. 执行结论
 
-- 五项风扇控制安全与确定性问题均已完成代码修复。
-- 五项问题均已增加或迁移对应纯软件回归测试。
+- 四个目标均已完成：位置命令成功提交、速度上限成功提交、初始化事务式回滚、
+  lifecycle 统一幂等释放。
 - 没有阻塞项和未完成验收项。
-- 已完成风扇针对性测试、三包纯软件构建和三包完整测试。
-- 没有运行任何 ROS 2 节点或 launch。
-- 没有访问 IMU、CAN、GPIO、PWM、Servo、电调、电机或风扇。
-- 开发与验证完成后，用户已明确授权将本任务改动提交并推送到 GitHub。
-- 未创建、移动、删除或重建任何 tag；v0.3.1 继续指向任务开始时的基线提交。
-
-## 2. 开始前基线
+- 已完成 fake driver 故障注入、确定性并发测试、电机包针对性测试、上一项风扇
+  关键回归、三包纯软件构建和三包完整测试。
+- Codex 没有连接或控制任何真实硬件；软件完成后，用户自行启动整套系统并完成
+  MANUAL/AUTO 及风扇基本实机功能测试，报告基本正常。
+- 用户已在开发、软件验证和上述人工功能测试完成后明确授权中文 commit 并推送
+  到 GitHub；提交 SHA 与 push 结果见本次会话最终终端报告。
+- `docs/NEXT_COMMAND.md` 是任务开始前已有用户修改，本任务只读且继续保留。
+
+## 2. 开始前 Git 基线
+
+- 分支：`master`。
+- HEAD：`8673fb06b5e630d07a49033ee1218147d06c34cb`。
+- upstream：`origin/master`。
+- upstream 提交：`8673fb06b5e630d07a49033ee1218147d06c34cb`。
+- 本地领先/落后：`0/0`。
+- 最近提交：`8673fb0 修复：加固风扇控制安全与确定性`。
+- `v0.3.0`：annotated tag；tag 对象
+  `f7d2a476a1aa7493271e60f202fe53ec5a5218de`，指向提交
+  `c3b3c3989674c2c1c902e940953da87fd5812db5`。
+- `v0.3.1`：annotated tag；tag 对象
+  `ff527a370af7203e96480e56901206bdb978932a`，指向提交
+  `5d7bd0fbf0acac3be4f2354a616d109928d5091d`。
+- HEAD 位于 `v0.3.1` 之后一个提交：`v0.3.1-1-g8673fb0`；工作区已有修改时
+  `git describe` 为 `v0.3.1-1-g8673fb0-dirty`。
+- 任务开始时工作区只有：`M docs/NEXT_COMMAND.md`。
+- 任务开始时无未跟踪文件。
+- 开始前 `git diff --check` 通过。
+
+## 3. 上一项风扇任务状态补充
+
+- 风扇安全与确定性加固已提交到 `master` 并推送到 `origin/master`，对应当前
+  HEAD `8673fb0`。
+- 用户随后完成了整机实机功能测试，报告功能正常，未出现报错或明显 Bug。
+- 根 README 已修正“风扇加固尚未提交、尚未实机测试”的过时描述。
+- 文档明确把该记录限定为用户报告的功能验证，不把它夸大为对三种响应曲线、
+  消息乱序、超时、异常注入和全部故障恢复路径的穷尽认证。
+- 上一项风扇实机验证不构成本任务访问电机、CAN、IMU、GPIO 或风扇的授权。
+
+## 4. 修改文件
+
+### 4.1 任务前已有修改
+
+- `docs/NEXT_COMMAND.md`：用户提供的任务说明；本任务只读，未修改、暂存、
+  覆盖或还原。
+
+### 4.2 本任务新增修改
+
+- `README.md`：更新 HEAD 与稳定标签关系、上一项风扇验证事实、电机成功提交、
+  ERROR、初始化回滚、统一释放和本轮纯软件验证状态。
+- `src/imu_cybergear_ros2/README.md`：说明三类位置、命令故障、初始化事务、
+  lifecycle 返回规则和恢复要求。
+- `cybergear_driver.py`：增加反馈回调清理入口；SocketCAN close 不再静默吞掉
+  shutdown 异常。
+- `imu_motor_controller_node.py`：增加 driver factory/sleep 注入、独立驱动 I/O
+  锁、配置事务回滚、统一 `_release_resources()` 和逐资源诊断。
+- `motor_manager.py`：实现成功后提交、批次失败中止、ERROR 故障路径、初始化
+  进度跟踪、best-effort 停止、机械零点和急停恢复一致性。
+- `safety_monitor.py`：急停复用统一逐台停止；ERROR 禁止 `/enable_motor=true`
+  自动恢复；反馈状态按节点锁快照访问。
+- `keyboard_handler.py`：ERROR 禁止键盘恢复；退出停止失败不再静默吞掉。
+- `test_motor_manager.py`：迁移旧写失败预期并补齐新 fake 状态字段。
+- `test_controller_state.py`：覆盖 ERROR 拒绝远程恢复。
+- `test_control_interfaces.py`：同步 cleanup/shutdown 使用统一释放入口的结构断言。
+- `fake_motor_driver.py`：新增完全内存化可记录、可阻塞、可按操作/电机/索引失败
+  的 fake driver。
+- `test_motor_reliability.py`：新增提交一致性、部分批次、初始化、特殊流程和锁边界
+  行为测试。
+- `test_motor_lifecycle.py`：新增配置失败回滚、再次配置、close/stop/ROS 销毁
+  失败和重复清理测试。
+- `docs/LATEST_FEEDBACK.md`：完整覆盖为本次反馈。
+
+未修改 `AGENTS.md`、电机 YAML、setup.py、package.xml、bringup 产品代码或任何
+风扇产品代码。
+
+## 5. 位置命令提交一致性
+
+修改前，`write_command_target()` 会先更新 `_current_targets` 和时间戳，再尝试
+驱动写入；异常后软件会误认为失败命令已经发送。
+
+当前顺序为：
+
+```text
+校验有限值并按软限位钳位
+→ 保存待发送 command
+→ 不持有节点状态锁，在驱动 I/O 锁内执行单次 SDO_TARGET_POS 写入
+→ 写入成功
+→ 节点锁内提交 current_targets 和 last_target_change_time
+→ 清除该电机命令失败计数
+```
+
+`current_targets` 的唯一含义是“最近一次成功写入驱动的位置目标”。它不是
+`desired_targets`，也不是 `motor_feedback.position_rad`。失败时目标和时间戳
+保持旧值，未完成 desired targets 被同步回最近成功目标，HOME 不会被标记完成。
+位置误差监控继续比较最近成功命令与真实反馈位置。
+
+多电机部分成功场景按提交边界处理：例如 ID4 成功、ID3 失败时，ID4 保留本次
+成功目标，ID3 保留旧目标，ID2/ID1 不再接收本周期普通位置命令；随后进入统一
+命令故障路径，HOME 保持未完成。
+
+## 6. 速度上限提交一致性
+
+修改前，速度设置会先更新 `_current_speeds`，再写 `SDO_TARGET_SPEED`。
 
-- 分支：master
-- HEAD：5d7bd0fbf0acac3be4f2354a616d109928d5091d
-- upstream：origin/master
-- upstream 提交：5d7bd0fbf0acac3be4f2354a616d109928d5091d
-- 本地领先：0
-- 本地落后：0
-- v0.3.1 标签类型：annotated tag
-- v0.3.1 标签对象：ff527a370af7203e96480e56901206bdb978932a
-- v0.3.1 指向提交：5d7bd0fbf0acac3be4f2354a616d109928d5091d
-- HEAD 与 v0.3.1：完全一致
-- 任务开始时无未跟踪文件
+当前先校验有限值并按既有最小/最大值钳位，再执行驱动写入；只有成功后才更新
+`_current_speeds`。失败时保留旧速度和旧时间戳，返回 `False` 并进入统一命令
+故障路径。
 
-任务开始前已经存在：
+`change_motor_speed()` 现在返回真实结果：成功日志显示“旧值 -> 实际新值”；
+失败日志明确显示“仍保持旧值”，不会声称失败速度已经生效。
 
-    M docs/LATEST_FEEDBACK.md
-    M docs/NEXT_COMMAND.md
+## 7. 运行时命令故障处理
 
-其中 NEXT_COMMAND.md 是用户提供的本任务说明，本任务没有修改、暂存或覆盖。
-LATEST_FEEDBACK.md 在任务开始时也已有上一项会话反馈修改；本任务按明确要求
-将它完整覆盖为当前最新反馈。
+以下已配置并运行后的普通异常进入统一路径：
 
-## 3. 修改文件
+- `SDO_TARGET_POS` 写入异常；
+- `SDO_TARGET_SPEED` 写入异常；
+- 驱动对象在普通发送时不可用。
 
-### 3.1 任务前已有修改
+用户输入非有限值仍在发送前拒绝，不伪造驱动故障。正常软限位、反馈位置偏差、
+IMU watchdog 和用户主动急停保持各自原有语义。
 
-- docs/NEXT_COMMAND.md：用户任务说明，本任务只读。
-- docs/LATEST_FEEDBACK.md：上一项会话反馈；本任务按要求完整覆盖。
+统一路径会先锁存 `_command_fault_active`，停止普通推进、清空重复按键状态、把
+desired targets 同步到最近成功目标，然后按配置顺序逐台 best-effort 调用
+`stop_motor()`。每台停止分别持有一次 I/O 锁；任一停止失败会记录 motor ID、
+reason 和异常，但不阻止后续电机。最后进入 `ControllerState.ERROR` 并通过
+`/motors/control_mode` 发布 `ERROR`。
 
-### 3.2 本任务新增修改
+ERROR 不伪造用户急停，也不允许 `/enable_motor=true` 或键盘 `r` 自动恢复。
+恢复要求是排除故障后重新配置 lifecycle 或重启节点。
 
-- AGENTS.md：只把稳定发布称谓从 v0.2.0 修正为实际 v0.3.1；硬件安全和 Git
-  限制未改。
-- README.md：更新 v0.3.1 基线、两个新服务、显式急停复位、手动授权和停止
-  基线、唯一控制 tick、未知模式及看门狗语义。
-- src/windarmor_fan_controller/config/fan_params.yaml：说明命令看门狗必须为
-  正有限数值，并更新兼容参数注释。
-- src/windarmor_fan_controller/launch/fans.launch.py：更新手动模式兼容参数
-  说明。
-- fan_control.py：集中实现显式授权、安全状态和唯一正常推进入口。
-- fan_command_manager.py：分离观察回调与控制 tick，注册两个新服务，并为核心
-  状态访问增加互斥保护。
-- fan_node.py：在 GPIO 初始化前严格校验 command_timeout_sec。
-- pwm.py：增加正有限超时纯函数校验，并在 FanCommandGate 中重复防御。
-- fan_keyboard.py：订阅 /fans/control_state，安全状态下清除本地旧 PWM，并在
-  停止基线建立前禁止用户调节。
-- test_fan_control.py：覆盖五项问题、授权、复位、停止基线和状态转换。
-- test_pwm.py：覆盖全部非法超时及 fake initializer 零调用。
-- test_fan_keyboard.py：覆盖状态变化后的旧值清理和调节门控。
-- test_interface_routing.py：覆盖新服务、唯一控制 tick 和硬件初始化顺序。
-- docs/LATEST_FEEDBACK.md：本文件。
+## 8. 锁与驱动 I/O
 
-没有修改 setup.py、package.xml、电机代码、IMU 代码或 bringup 架构。
+- 节点 `_lock`：保护 desired/current targets、current speeds、运动源、提交
+  时间戳、命令故障状态和运行快照。
+- `_driver_io_lock`：串行化 connect、SDO int/float、enter control mode、
+  stop、set zero、清回调和 close。
+- `_release_lock`：串行化整套资源释放，避免 cleanup/shutdown 重入。
 
-## 4. 问题一：控制定时器唯一推进
+统一锁规则是：不得持有节点 `_lock` 后等待 `_driver_io_lock`。普通位置/速度
+写入使用“节点锁取快照 → 释放节点锁 → 单次驱动锁 I/O → 节点锁提交成功结果”。
+驱动锁内不执行普通运动 sleep、publisher 销毁、键盘 join 或 lifecycle 大范围
+清理。
 
-### 原因
+普通推进不会把整批多电机命令包在一个 I/O 锁中。急停先冻结运动，最多等待
+当前单次驱动写入结束，然后可在后续普通命令前取得锁并逐台发送停止。确定性
+Event 测试验证了节点锁在阻塞驱动写入期间仍可取得、普通写入互斥串行，以及
+急停在当前单次写入结束后取得 I/O 权限。
 
-原管理器的姿态、模式、enabled、零点、手动命令、急停和服务回调都会调用
-同一个评估函数；该函数进入核心 step，再进入 AUTO slew。一个控制周期中的
-多条消息因此可能多次推进 PWM。
+## 9. 初始化事务与回滚
 
-### 修改方案
+初始化显式跟踪：
 
-- 核心增加 control_tick(now)，作为唯一正常输出推进入口。
-- 管理器只有 _control_tick() 调用 core.control_tick()。
-- 普通消息和服务回调只校验输入、更新观察缓存、授权、请求或状态。
-- 普通回调不调用 step 或 control_tick，不推进正常 MANUAL 输出或 AUTO slew。
-- 控制定时器每次只计算一次目标、最多执行一次 slew，并发布一次正常
-  /fans/command_pwm。
+- `init_touched_motor_ids`；
+- `init_entered_control_mode_ids`；
+- `init_successful_motor_ids`；
+- `current_init_stage`。
 
-### 安全立即停止
+每台顺序保持不变：`SDO_RUN_MODE` → `SDO_TARGET_SPEED` →
+`SDO_TARGET_POS(0.0)` → `enter_control_mode`。速度写入成功后才提交软件速度；
+位置写入成功后才提交最近成功目标；进入运控成功后才标记该电机完成。只有全部
+电机完成后才设置 `init_complete=true` 并进入 MANUAL_RUNNING。
 
-核心 force_safe_stop() 会清除 AUTO、MANUAL 授权和所有旧命令，直接把命令
-置为双路停止值并设置立即停止标志。管理器普通回调可以消费该标志并立即发布
-停止命令，不等待下一个控制 tick。
+失败注入覆盖连接、首台运行模式、中间电机速度、中间电机目标、最后电机进入
+运控模式。最终失败后停止后续初始化，把状态置为 ERROR，按触及顺序的反向顺序
+尝试停止电机，清除未完成运动和全部成功标志，清反馈回调，关闭驱动，销毁全部
+已创建 ROS 资源并返回配置 FAILURE。回滚 stop 或 close 失败不会阻止其余清理。
 
-急停、底层 disabled、未知模式、姿态或零点失效，以及在控制 tick 检出的关键
-状态超时都使用该路径。重复安全事件是幂等停止，不会恢复旧目标。
+连接最终失败不发送任何电机初始化命令，只清回调、关闭 fake driver 并释放
+ROS 资源。测试还验证第一次配置失败完整回滚后，使用无故障的新 fake driver
+可以第二次配置成功，没有旧 timer、publisher、subscription、service 或
+callback 引用。
 
-### 参数语义
+启动目标策略没有改变，初始化仍写目标位置 `0.0`；没有改成保持反馈位置。
 
-control_rate_hz=20.0、rise_step_pwm_us=10 和 fall_step_pwm_us=20 的默认值
-未改变，语义仍是每个控制定时周期允许的 PWM 步长，不是 PWM/s。
+## 10. lifecycle 资源释放
 
-## 5. 问题二：急停显式复位
+主节点新增统一 `_release_resources(reason, attempt_motor_stop, motor_ids)`，供：
 
-原实现以本地接收序号和 enabled、motor mode 心跳自动解除急停，延迟或乱序
-旧心跳可能被误认为恢复状态。
+- 配置失败回滚；
+- `on_cleanup()`；
+- `on_shutdown()`。
 
-当前行为：
+流程依次禁止新控制、停止运动 timer、停止键盘、停止 watchdog、best-effort
+停止适用电机、清反馈回调、关闭驱动、销毁 motor mode timer、所有 publisher、
+subscription 和 service，最后清除运行对象与软件状态。
 
-- /e_stop=true 立即停止并锁存急停。
-- 急停清除 AUTO 请求、MANUAL 授权、手动缓存、姿态缓存、AUTO 目标和未完成
-  输出。
-- /e_stop=false 只更新观察输入，不解除锁存。
-- enabled、motor mode、姿态、零点和手动 PWM 心跳都不能解除锁存。
+资源引用在销毁尝试前置空，因此每个 ROS 资源最多尝试销毁一次；driver 引用在
+close 前从节点移除，因此重复 cleanup/shutdown 不会重复 close。单项失败记录
+reason、stage、资源类型或电机 ID，汇总失败数，并继续执行所有后续步骤。
 
-新增服务：
+返回规则：
 
-    /fans/reset_e_stop
-    std_srvs/srv/Trigger
+- `on_cleanup()`：全部释放成功返回 SUCCESS；任一释放步骤失败返回 FAILURE；
+- `on_shutdown()`：同上；
+- 配置失败回滚：无论 best-effort 回滚是否全部成功，配置都返回 FAILURE；
+- 回滚后的重复 cleanup/shutdown：对已清空资源执行幂等空操作，可返回 SUCCESS。
 
-复位前检查：
+测试覆盖 cleanup → cleanup → shutdown、配置失败回滚 → cleanup → shutdown、
+stop 失败、close 失败和某个 publisher 销毁失败；其他停止和销毁仍全部继续。
 
-- 急停当前已锁存；
-- 明确观察到 /e_stop=false；
-- /fans/enabled 存在、新鲜且为 true；
-- /motors/control_mode 存在、新鲜且为 MANUAL 或 AUTO。
+## 11. 特殊硬件流程
 
-失败会返回 success=false 和具体原因。成功后：
+- 机械零点：每次 stop、set zero、运行模式、目标和 enter 调用均受驱动 I/O 锁
+  串行化；只有目标写入和进入运控都成功后才提交该电机成功目标。部分失败返回
+  `False`，best-effort 重新停止全部电机并进入 ERROR。
+- 急停恢复：先快照最近成功发送目标，不使用未成功的 desired target。任一电机
+  恢复失败即停止后续恢复，重新尝试停止全部电机，返回 `False`，运动源保持
+  IDLE，状态不会进入 MANUAL_RUNNING。
+- 急停：先冻结普通推进，再逐台 best-effort 停止；单台停止失败不会阻止后续
+  电机，也不会静默吞掉异常。
 
-- 急停锁存清除；
-- 输出保持双路停止值；
-- AUTO 未请求；
-- MANUAL 未授权；
-- 姿态和全部旧命令保持清空；
-- 状态进入 MANUAL_DISARMED，等待用户重新选择控制路径。
+## 12. 保持不变的行为
 
-该服务不会调用底层 /fans/enable，也不会启动风扇。
+- MANUAL/AUTO/HOME 的 `4.0 rad/s` 软件推进速度、固定周期、dt 上限、单步上限
+  和到达容差未变。
+- AUTO roll/pitch 增益、死区和计算未变。
+- `motor_ids`、方向、软限位和 ID1～ID4 映射未变。
+- 初始化仍写 `0.0` 启动目标，机械零点语义未变。
+- IMU 四元数校验、roll/pitch 轴向、统一零点和相对姿态语义未变。
+- 风扇产品代码、状态机、响应曲线、PWM 参数和 GPIO12/GPIO13 未变。
+- ROS 公共话题、服务和消息类型未删除或重命名；只使用既有公开 `ERROR` 值。
 
-## 6. 问题三：AUTO 故障后的手动授权
+## 13. 测试
 
-核心新增 manual_armed 和本次授权后的停止基线状态。
+### 13.1 fake driver 与安全隔离
 
-新增服务：
+`FakeMotorDriver` 记录操作顺序、motor ID、SDO index 和数值，可按操作/电机/索引
+持续失败，可模拟连接失败、stop 失败、close 失败，并用 Event 确定性阻塞指定
+驱动调用。所有 lifecycle 测试通过构造函数注入 fake 和空 sleep；没有构造真实
+CyberGearDriver，没有 SocketCAN bus 或串口对象。
 
-    /fans/manual_enable
-    std_srvs/srv/SetBool
+纯软件 lifecycle 测试会在 pytest 进程内创建 LifecycleNode 及 ROS publisher、
+subscription、service、timer，以验证真实资源释放 API；节点不激活、不 spin，
+驱动始终是 fake。ROS 测试日志定向到 `/tmp`。
 
-/fans/manual_enable 与 /fans/enable 不同：
+### 13.2 新增覆盖
 
-- /fans/enable 是底层硬件输出接受状态；
-- /fans/manual_enable 只改变命令管理器是否允许 MANUAL。
+- 位置成功后提交、失败保持、软限位、非有限拒绝、HOME 失败和部分批次中止；
+- 速度成功后提交、失败保持、日志和原有钳位；
+- 普通故障冻结运动、全电机停止、stop 失败继续和 ERROR 不恢复；
+- 初始化成功顺序、五类主要失败点、反向停止、close 失败和再次配置；
+- cleanup/shutdown 幂等、ROS 销毁失败继续和 callback 清理；
+- 急停恢复使用最近成功目标、部分恢复失败重新停止；
+- 机械零点恢复成功提交边界；
+- 节点锁可用性、I/O 串行化和急停锁优先级。
 
-启用 MANUAL 前检查：
+### 13.3 实际命令与结果
 
-- 急停未锁存且观察输入不是 true；
-- 底层 enabled 新鲜且为 true；
-- motor mode 新鲜且为 MANUAL 或 AUTO；
-- AUTO 未请求、未等待、未活动。
+电机包全量针对性测试：
 
-授权成功后进入 MANUAL_WAITING_FOR_NEUTRAL，清除全部旧手动值。此状态：
+```bash
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+ROS_LOG_DIR=/tmp python3 -m pytest src/imu_cybergear_ros2/test -q
+```
 
-- 非停止双路命令被拒绝；
-- 单路命令被拒绝；
-- 必须先收到本次授权之后的双路停止命令；
-- 建立停止基线后进入 MANUAL_WAITING；
-- 之后的新鲜合法非停止命令才可在控制 tick 生效。
+结果：`146 passed`。
 
-AUTO 成功启用、AUTO 主动关闭、AUTO 故障、急停、disabled、未知模式、关键
-状态超时、姿态或零点失效，以及 manual_enable=false 都会取消手动授权并立即
-停止。
+风扇上一任务关键回归：
 
-fan_keyboard 现在订阅 /fans/control_state。AUTO、SAFE_STOP、急停、disabled、
-MANUAL_DISARMED 和 MANUAL_WAITING_FOR_NEUTRAL 会把本地左右值清回停止值并
-禁止调节。进入 MANUAL_WAITING 后，只有新的用户调节输入才能产生非停止值。
-核心仍独立强制同样约束，因此其他外部 PWM 发布者不能绕过。
+```bash
+python3 -m pytest \
+  src/windarmor_fan_controller/test/test_fan_control.py \
+  src/windarmor_fan_controller/test/test_pwm.py \
+  src/windarmor_fan_controller/test/test_fan_keyboard.py \
+  src/windarmor_fan_controller/test/test_interface_routing.py -q
+```
 
-## 7. 问题四：未知电机模式
+结果：`98 passed`。
 
-收到未知、空白、格式非法或不受支持模式时：
+纯软件构建：
 
-- _motor_mode 设置为 None；
-- _motor_mode_at 设置为 None；
-- AUTO 请求清除；
-- MANUAL 授权清除；
-- 手动缓存和时间戳清除；
-- 输出立即置为停止；
-- 进入 SAFE_STOP，或在急停已锁存时保持 EMERGENCY_STOP；
-- 管理器记录清晰错误日志。
-
-之后的新合法模式只更新观察状态，不恢复 AUTO、MANUAL 或旧 PWM。控制必须
-重新调用适用的 reset_e_stop、manual_enable 或 auto_enable 服务。
-
-## 8. 问题五：看门狗参数
-
-command_timeout_sec 现在必须能转换为 float，且严格大于零并为有限数值。
-
-明确拒绝：
-
-- 0；
-- 负数；
-- NaN；
-- 正 Inf；
-- 负 Inf；
-- 非法字符串或其他无法转换的值。
-
-fan_node 使用 initialize_after_timeout_validation() 先调用纯校验，再允许调用
-_initialize_gpio。测试以 fake initializer 断言全部非法值时调用次数为零。
-
-FanCommandGate.check_timeout() 也调用相同纯校验形成双层防御，不再把非正值
-解释为关闭看门狗。没有新增看门狗关闭开关。
-
-## 9. 状态机和接口变化
-
-新增状态：
-
-- MANUAL_DISARMED：输出停止，MANUAL 未授权；
-- MANUAL_WAITING_FOR_NEUTRAL：MANUAL 已授权，等待本次授权后的双路停止基线。
-
-继续保留：
-
-- SAFE_STOP；
-- MANUAL_WAITING；
-- MANUAL_ACTIVE；
-- AUTO_WAITING；
-- AUTO_ACTIVE；
-- DISABLED；
-- EMERGENCY_STOP。
-
-新增服务：
-
-- /fans/reset_e_stop，std_srvs/srv/Trigger；
-- /fans/manual_enable，std_srvs/srv/SetBool。
-
-现有话题、服务名称和消息类型均保留。公共 /fans/pwm、/fans/left/pwm 和
-/fans/right/pwm 现在需要显式 MANUAL 授权；单路命令不能建立停止基线。
-
-兼容参数 require_motor_mode_for_manual 仍保留。根据本任务安全要求，显式
-manual_enable=true 始终要求新鲜合法 motor mode，因此独立 fans.launch.py
-不再能仅靠后台 PWM 心跳进入手动输出。这是本次有意的安全流程变化。
-
-## 10. 保持不变的行为
-
-- 风扇 activity 仍使用左右独立 max() 合成，没有相加或使用 hypot。
-- linear、smoothstep 和 quadratic 数学定义未改变。
-- 默认响应曲线仍为 smoothstep。
-- fan_deadband_on_deg 仍为 5.0。
-- fan_deadband_off_deg 仍为 3.0。
-- fan_full_scale_deg 仍为 45.0。
-- fan_stop_pwm_us 仍为 800。
-- fan_start_pwm_us 仍为 1200。
-- fan_auto_max_pwm_us 仍为 1400。
-- control_rate_hz 仍为 20.0。
-- rise_step_pwm_us 仍为 10。
-- fall_step_pwm_us 仍为 20。
-- max_pwm_us 仍为 2200。
-- GPIO12、GPIO13 和左右风扇映射未改变。
-- PWM 单位未改变。
-- 电机 AUTO 增益、方向、软限位和统一推进器未改变。
-- IMU 姿态和统一零点算法未改变。
-
-## 11. 测试
-
-### 测试安全检查
-
-运行前静态检查了测试及导入链：
-
-- 核心测试只调用纯 Python 状态逻辑；
-- 看门狗初始化测试使用 fake initializer；
-- 没有实例化 DualFanController 或 FanCommandManager；
-- 没有构造 LGPIOFactory、Servo 或电调；
-- 键盘测试使用 os.openpty 和 __new__，不构造 ROS Node；
-- 接口和 launch 测试只读取源码及 AST；
-- 电机测试继续使用既有 fake 或纯函数；
-- 没有访问 IMU、CAN、GPIO 或真实串口。
-
-### 风扇针对性测试
-
-命令：
-
-    source /opt/ros/jazzy/setup.bash
-    source install/setup.bash
-    python3 -m pytest +      src/windarmor_fan_controller/test/test_fan_control.py +      src/windarmor_fan_controller/test/test_pwm.py +      src/windarmor_fan_controller/test/test_fan_keyboard.py +      src/windarmor_fan_controller/test/test_interface_routing.py -v
-
-最终结果：98 passed。
-
-实现迁移中的首轮组合测试为 80 passed、9 failed；9 项失败均为旧测试仍期待
-默认手动授权或心跳自动解除急停。迁移旧测试后为 89 passed，补强硬件初始化
-顺序和前置条件测试后最终为 98 passed。
-
-### 纯软件构建
-
-命令：
-
-    source /opt/ros/jazzy/setup.bash
-    colcon build --symlink-install
+```bash
+source /opt/ros/jazzy/setup.bash
+colcon build --symlink-install
+```
 
 结果：3 个包构建成功。
 
-### 完整纯软件测试
+三包完整测试：
 
-命令：
-
-    source /opt/ros/jazzy/setup.bash
-    source install/setup.bash
-    colcon test --packages-select +      imu_cybergear_ros2 windarmor_fan_controller windarmor_bringup
-    colcon test-result --verbose
+```bash
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+ROS_LOG_DIR=/tmp colcon test --packages-select \
+  imu_cybergear_ros2 windarmor_fan_controller windarmor_bringup
+colcon test-result --verbose
+```
 
 结果：
 
-- 总数：219；
-- passed：219；
+- 总数：246；
+- passed：246；
 - failed：0；
 - errors：0；
 - skipped：0。
 
-git diff --check：通过。
+`git diff --check`：通过。
 
-以上均为纯软件测试，不是实机验证。
+### 13.4 中间诊断记录
 
-## 12. 文档更新
+- lifecycle 首轮组合测试中，命令/并发部分先得到 `16 passed`，lifecycle 用例
+  因沙箱内默认 `~/.ros/log` 只读而在 setup 阶段出现 8 errors；没有进入配置
+  逻辑。将测试日志定向到 `/tmp` 后该组 `8 passed`。
+- 整个电机包迁移旧源码结构断言时曾为 `142 passed, 1 failed`；失败是旧测试仍
+  要求 cleanup/shutdown 直接出现 `stop_motion_timer()`，更新为统一释放入口后
+  最终为 `146 passed`。
+- 额外裸 `flake8` 全文件扫描返回非零；仓库现有代码和本次沿用风格均触发该
+  命令的引号、docstring、长行规则，且未改的 `test_imu_protocol.py` 还有既有
+  F401。它不是仓库现有验收命令。对本次变更文件执行 `flake8 --select=E9,F`
+  通过，Python `py_compile` 通过。
 
-- README.md 已更新发布基线、状态、服务、恢复顺序、手动停止基线、唯一控制
-  tick、未知模式和看门狗规则。
-- fan_params.yaml 已说明 command_timeout_sec 必须正有限且不可关闭看门狗。
-- fans.launch.py 已说明 require_motor_mode_for_manual 的兼容性。
-- AGENTS.md 只把稳定发布称谓修正为实际 v0.3.1；硬件安全规则、十项授权门槛、
-  Git 禁止操作和真实硬件限制均未修改。
-- docs/LATEST_FEEDBACK.md 已完整覆盖为本次反馈。
+以上自动测试全部是纯软件验证。其后另有用户执行的基本实机功能测试，范围见
+下一节；两者不得混为故障注入验证。
 
-## 13. 硬件安全声明
+## 14. 文档更新
 
-- 未启动真实 IMU。
-- 未访问 /dev/imu_usb。
-- 未访问任何真实串口。
-- 未访问或配置 CAN。
-- 未初始化 CyberGear。
-- 未控制任何电机。
-- 未访问 GPIO12 或 GPIO13。
-- 未构造真实 LGPIOFactory。
-- 未构造真实 Servo。
-- 未初始化或解锁电调。
-- 未输出真实 PWM。
-- 未控制任何风扇。
-- 未运行 ROS 2 节点或 launch。
-- 未使用 sudo。
-- 未执行 scripts/setup_can.sh。
-- 未进行带电测试。
+- 根 README：更新标签/HEAD 关系、上一项风扇用户验证、电机成功提交、ERROR、
+  初始化回滚、统一释放和硬件验证边界。
+- 电机包 README：明确 desired target、最近成功发送目标、反馈位置、失败语义、
+  lifecycle 返回规则和恢复要求。
+- `AGENTS.md`：未修改；当前 `v0.3.1` 稳定基线称谓与实际标签一致。
+- `docs/LATEST_FEEDBACK.md`：完整覆盖为本次反馈。
+- `docs/NEXT_COMMAND.md`：未修改。
 
-## 14. Git 状态
+## 15. 硬件安全声明
 
-- 提交分支：master。
-- 提交说明：`修复：加固风扇控制安全与确定性`。
-- 用户已在开发与验证完成后明确授权 commit 和 push。
-- commit SHA、push 结果及最终远端状态以本次会话的最终报告为准。
-- 本任务没有创建、移动、删除或重建标签。
-- v0.3.0 和 v0.3.1 均未修改；v0.3.1 仍指向
-  `5d7bd0fbf0acac3be4f2354a616d109928d5091d`。
-- docs/NEXT_COMMAND.md 的任务前修改不纳入本次提交，并完整保留在工作区。
+- Codex 在开发和自动验证过程中未启动或 spin 真实硬件节点，未运行 launch，
+  未访问 IMU、真实串口、CAN、`can10`、CyberGear、GPIO12/GPIO13、Servo、
+  电调或 PWM，也未使用 sudo。
+- pytest 内只创建了注入 fake driver 的进程内 LifecycleNode 资源，不连接硬件。
+- 软件验证完成后，用户报告自行执行了：
 
-## 15. 额外发现
+```bash
+ros2 launch windarmor_bringup windarmor.launch.py
+```
 
-没有发现需要越过本任务范围修复的新增问题。任务明确排除的电机写入一致性、
-CyberGear 初始化回滚和 lifecycle 重构均未修改。
+- 用户测试了 MANUAL、AUTO 和风扇功能，结果“基本都正常”。
+- 该记录是用户报告的整机正常功能测试；没有提供逐电机测量值、完整持续时间或
+  异常注入矩阵，因此不得表述为对 SDO 写失败、初始化中断、stop/close 失败、
+  ROS 资源销毁失败或全部安全恢复路径的实机认证。
+- Codex 未执行本任务对应的带电或实机故障注入；后续硬件操作仍需重新获得明确
+  授权。
 
-## 16. 后续建议
+## 16. 提交前 Git 状态与授权
 
-- 在提交前人工审查新的显式恢复流程和独立 fans.launch.py 的兼容性影响。
-- 后续如需实机验证，必须重新满足仓库十项带电测试授权门槛。
-- 电机可靠性问题应继续作为独立任务处理，不与本次风扇安全修改混合。
+- 分支：`master`。
+- 提交前 HEAD 为 `8673fb06b5e630d07a49033ee1218147d06c34cb`。
+- `docs/NEXT_COMMAND.md` 的任务前用户修改继续保留，未暂存、未覆盖、未还原。
+- 用户已明确授权把本任务改动用中文 commit 并推送到 GitHub；本文件将包含在该
+  提交中，commit SHA 和最终远端状态以终端最终报告为准。
+- 未创建、移动、删除或重建任何 tag；`v0.3.0`、`v0.3.1` 均未改变。
+
+提交前 `git status --short`：
+
+```text
+ M README.md
+ M docs/LATEST_FEEDBACK.md
+ M docs/NEXT_COMMAND.md
+ M src/imu_cybergear_ros2/README.md
+ M src/imu_cybergear_ros2/imu_cybergear_ros2/cybergear_driver.py
+ M src/imu_cybergear_ros2/imu_cybergear_ros2/imu_motor_controller_node.py
+ M src/imu_cybergear_ros2/imu_cybergear_ros2/keyboard_handler.py
+ M src/imu_cybergear_ros2/imu_cybergear_ros2/motor_manager.py
+ M src/imu_cybergear_ros2/imu_cybergear_ros2/safety_monitor.py
+ M src/imu_cybergear_ros2/test/test_control_interfaces.py
+ M src/imu_cybergear_ros2/test/test_controller_state.py
+ M src/imu_cybergear_ros2/test/test_motor_manager.py
+?? src/imu_cybergear_ros2/test/fake_motor_driver.py
+?? src/imu_cybergear_ros2/test/test_motor_lifecycle.py
+?? src/imu_cybergear_ros2/test/test_motor_reliability.py
+```
+
+其中 `docs/NEXT_COMMAND.md` 的 diff 仍为任务开始时的 `1249 insertions, 968
+deletions`；其余为本任务修改。tracked diff 统计与三个新增未跟踪测试文件以
+终端最终报告为准。
+
+## 17. 额外发现
+
+- 没有发现需要越过本任务范围顺带修改的其他产品问题。
+- 沙箱环境的默认 ROS 日志目录不可写；测试已在命令和 fixture 中显式使用
+  `/tmp`，不影响产品运行逻辑。
+- 仓库没有统一采用裸 `flake8` 当前加载插件的全量风格规则；本任务未进行无关
+  大范围格式化。
+
+## 18. 后续建议
+
+- 若后续确需电机实机故障注入或带电验证，必须作为独立任务重新报告十项授权
+  信息并等待用户明确同意；本任务不自动进入该阶段。
+- 正常功能已经由用户初步验证；后续可按实际需要单独设计可控、低风险的通信
+  断开或 lifecycle 故障验证，但不能从本次“基本正常”推断全部异常路径已验证。

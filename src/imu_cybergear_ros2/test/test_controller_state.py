@@ -76,3 +76,25 @@ def test_failed_enable_motor_service_stays_in_emergency_stop() -> None:
     )
     assert not result.success
     assert state.state == ControllerState.EMERGENCY_STOP
+
+
+def test_enable_motor_service_cannot_recover_error_state() -> None:
+    state = StateManager(Node())
+    state.transition_to(ControllerState.ERROR)
+    recovery_calls = []
+    motor_manager = SimpleNamespace(
+        hold_current_targets_and_recover=lambda: recovery_calls.append(True),
+    )
+    monitor = SafetyMonitor.__new__(SafetyMonitor)
+    monitor._node = Node()
+    monitor._state = state
+    monitor._motor_mgr = motor_manager
+    response = SimpleNamespace(success=False, message="")
+    result = monitor.on_enable_motor_service(
+        SimpleNamespace(data=True),
+        response,
+    )
+    assert not result.success
+    assert "ERROR" in result.message
+    assert recovery_calls == []
+    assert state.state == ControllerState.ERROR

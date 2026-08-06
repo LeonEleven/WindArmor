@@ -42,11 +42,14 @@ class Node:
         self._motor_ids = [1, 2]
         self._limits = {1: (-1.0, 1.0), 2: (-1.0, 1.0)}
         self._lock = threading.RLock()
+        self._driver_io_lock = threading.Lock()
         self._current_targets = {1: 0.0, 2: 0.0}
         self._desired_targets = dict(self._current_targets)
         self._current_speeds = {1: 10.0, 2: 10.0}
         self._motor_protection_flags = {1: False, 2: False}
         self._last_target_change_time = {1: 0.0, 2: 0.0}
+        self._command_failure_counts = {1: 0, 2: 0}
+        self._command_fault_active = False
         self._command_interval = 0.02
         self._motion_dt_max = 0.05
         self._target_reached_tolerance = 0.001
@@ -79,6 +82,7 @@ class Node:
         self._driver = Driver()
         self._is_active = True
         self._running = True
+        self._sleep = lambda _seconds: None
         self._logger = Logger()
         self.timers = []
         self.destroyed_timers = []
@@ -308,14 +312,16 @@ def test_emergency_stop_halts_motion_before_direct_stop(system) -> None:
     assert node._driver.stopped == [1, 2]
 
 
-def test_write_failure_keeps_previous_software_update_order(system) -> None:
-    node, _state, manager = system
+def test_write_failure_preserves_last_successful_target_and_enters_error(system) -> None:
+    node, state, manager = system
 
     def fail(*_args):
         raise RuntimeError("fake failure")
 
     node._driver.write_sdo_float = fail
-    with node._lock:
-        manager.write_command_target(1, 0.25)
-    assert node._current_targets[1] == 0.25
+    assert not manager.write_command_target(1, 0.25)
+    assert node._current_targets[1] == 0.0
+    assert node._last_target_change_time[1] == 0.0
+    assert state.state == ControllerState.ERROR
+    assert node._driver.stopped == [1, 2]
     assert any(level == "error" for level, _message in node._logger.messages)

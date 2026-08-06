@@ -22,6 +22,8 @@
 | **统一相对姿态** | `/imu/relative_roll_pitch` 发布归一化、轴向修正和统一归零后的 roll/pitch（rad） |
 | **公开控制模式** | `/motors/control_mode` 可靠、transient-local 发布稳定状态并发送心跳 |
 | **统一目标推进** | MANUAL、AUTO、HOME 共用固定周期和真实 dt 的位置目标推进器 |
+| **成功提交语义** | 位置与速度状态只在驱动写入成功后更新，普通写入失败进入 ERROR |
+| **事务式配置** | 初始化失败停止已触及电机，并统一释放驱动与 ROS lifecycle 资源 |
 
 ## 系统架构
 
@@ -176,7 +178,12 @@ ros2 launch imu_cybergear_ros2 imu_motor_controller.launch.py \
 控制器维护两组位置：
 
 - `desired_targets`：键盘、绝对目标话题、IMU 或 HOME 希望最终到达的位置；
-- `current_targets`：最近一次实际发送给 CyberGear 的软件位置命令。
+- `current_targets`：最近一次已经成功写入 CyberGear 驱动的位置目标。
+
+电机反馈中的 `motor_feedback.position_rad` 是最近一次真实反馈位置，与以上两组
+软件目标不同。`current_targets` 既不是尚未写入的推进器计算值，也不是反馈
+位置；HOME 到达判断、位置误差监控和急停恢复都以这个“最近成功发送目标”为
+软件命令基准。
 
 正常运动输入只更新 `desired_targets`。节点激活后的唯一固定周期推进器使用
 真实单调时间差推进：
@@ -223,8 +230,38 @@ AUTO 的 IMU 回调只计算和更新最新期望目标，固定推进器可以�
 在 AUTO 中按 `h` 会先显式切回 MANUAL；任意有效 MANUAL 运动、绝对目标、
 `[`/`]`、切换 AUTO、急停或生命周期停止都会取消 HOME。
 
-本次速度统一改进位于 `v0.3.0` 标签之后，只完成纯软件验证；后续需要固定
-机器人并从低速逐电机复验，未经明确授权不得启动硬件验证。
+### 3.5 命令故障、初始化回滚与 lifecycle 清理
+
+普通位置命令执行顺序为“校验和软限位 → 驱动写入 → 成功后提交
+`current_targets` 与时间戳”。写入失败时保留旧目标和旧时间戳；同一推进周期
+中前面已经成功的电机保留其成功提交，失败电机及其后的电机不再接收本周期普通
+位置命令。速度上限同样只在 `SDO_TARGET_SPEED` 成功后更新；`+/-` 的成功日志
+只显示真实生效的新值，失败日志明确说明仍保持旧值。
+
+运行时普通位置或速度写入失败会立即冻结普通推进，把 `desired_targets` 同步到
+最近成功发送目标，逐台尽力停止全部电机，并进入公开 `ERROR` 状态。任一停止
+失败都会记录电机 ID，但不会中断其他电机的停止尝试。`ERROR` 不会自动回到
+MANUAL/AUTO，也不能用键盘 `r` 或 `/enable_motor=true` 恢复；必须先排除故障，
+再重新配置 lifecycle 或重启节点。
+
+初始化仍保持既有的 `0.0 rad` 启动目标策略。每台电机依次写运行模式、速度、
+零目标并进入运控模式；对应驱动操作成功后才提交软件速度或位置，全部电机完成
+后才设置 `init_complete=true` 并进入 MANUAL。任一步在重试后最终失败，配置
+流程会停止后续初始化，按反向顺序尽力停止所有已触及电机、关闭驱动、清除未完
+成运动和回调，并销毁已创建的 timer、publisher、subscription 与 service。
+
+配置失败、`on_cleanup()` 和 `on_shutdown()` 使用同一个幂等释放流程。每个资源
+最多尝试销毁一次；单项停止、关闭或销毁失败会被记录，但不会阻止后续步骤。
+`on_cleanup()` 与 `on_shutdown()` 在全部释放成功时返回 SUCCESS，存在任何释放
+失败时返回 FAILURE；配置失败始终返回 FAILURE，即使 best-effort 回滚其余步骤
+均已完成。失败回滚清理后允许重新执行配置。
+
+Codex 在本轮可靠性加固中只使用 fake driver 完成纯软件故障注入、并发边界和
+lifecycle 测试，没有访问真实 IMU、CAN 或电机。软件完成后，用户自行运行统一
+launch，测试 MANUAL/AUTO 以及风扇功能并报告基本正常。该正常功能测试不等于
+本任务设计的 SDO、初始化、stop、close 或 ROS 资源销毁故障已经在实机注入。
+启动零目标的机械风险没有改变；后续实机故障注入仍须单独获得硬件授权并满足
+仓库安全门槛。
 
 ## 4. 远程控制接口
 
@@ -249,6 +286,9 @@ ros2 service call /enable_motor std_srvs/srv/SetBool "data: false"
 # 恢复运控模式；成功后固定进入 MANUAL，不直接恢复 AUTO
 ros2 service call /enable_motor std_srvs/srv/SetBool "data: true"
 ```
+
+启用只允许从 `EMERGENCY_STOP` 恢复。若控制模式为 `ERROR`，必须排除故障并
+重新配置 lifecycle 或重启节点，服务不会隐式恢复旧运动。
 
 键盘 `z` 与 `/imu/set_zero` 使用同一归零方法和相同的新鲜度检查。归零成功
 会递增 `/imu/zero_generation`，让风扇管理器丢弃归零前姿态并清除已有 AUTO
@@ -292,9 +332,11 @@ ros2 topic echo /motor/status
 IMU header；即使电机处于 MANUAL，也会继续发布有效姿态。公开模式只使用
 `MANUAL`、`AUTO`、`EMERGENCY_STOP`、`DISABLED`、`ERROR`。
 
-这些协调接口属于 `v0.3.0`，其整机功能已由用户按根 README 验证。本次统一
-速度改进位于标签之后，只完成纯软件验证，未因本次任务访问真实 IMU、CAN
-或电机。
+这些协调接口属于 `v0.3.0`。`v0.3.1` 后的风扇安全提交已经提交和推送，用户
+随后报告整机功能测试正常且未见报错或明显 Bug；该记录不是所有异常路径的穷尽
+认证。本轮电机命令与 lifecycle 加固完成纯软件验证后，用户又报告统一 launch
+下的 MANUAL/AUTO 和风扇基本实机功能正常；没有执行本任务异常路径的实机故障
+注入。
 
 ## 5. 文档导航
 

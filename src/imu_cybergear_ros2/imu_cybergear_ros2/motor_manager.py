@@ -2,7 +2,7 @@
 
 import math
 import time
-from typing import Dict, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from std_msgs.msg import String
 
@@ -36,6 +36,10 @@ class MotorManager:
         self._motion_timer = None
         self._last_motion_tick_time: Optional[float] = None
         self._manual_repeat_times: Dict[Tuple[int, float], float] = {}
+        self._init_touched_motor_ids: List[int] = []
+        self._init_entered_control_mode_ids: List[int] = []
+        self._init_successful_motor_ids: List[int] = []
+        self._current_init_stage = "idle"
 
     @property
     def motion_source(self) -> MotionSource:
@@ -45,18 +49,43 @@ class MotorManager:
     def motion_timer(self):
         return self._motion_timer
 
+    @property
+    def init_touched_motor_ids(self) -> Tuple[int, ...]:
+        return tuple(self._init_touched_motor_ids)
+
+    @property
+    def init_entered_control_mode_ids(self) -> Tuple[int, ...]:
+        return tuple(self._init_entered_control_mode_ids)
+
+    @property
+    def init_successful_motor_ids(self) -> Tuple[int, ...]:
+        return tuple(self._init_successful_motor_ids)
+
+    @property
+    def current_init_stage(self) -> str:
+        return self._current_init_stage
+
     # ------------------------------------------------------------------
     # 电机连接与初始化
     # ------------------------------------------------------------------
 
     def connect_and_init_motors(self) -> bool:
         """连接电机并初始化运控模式。"""
+        self._init_touched_motor_ids = []
+        self._init_entered_control_mode_ids = []
+        self._init_successful_motor_ids = []
+        self._current_init_stage = "connecting"
         self._node.get_logger().info("正在连接电机...")
-        connected = self._node._driver.connect_with_retry(
-            max_attempts=5,
-            initial_delay=1.0,
-            on_status=self._on_motor_connect_status,
-        )
+        try:
+            with self._node._driver_io_lock:
+                connected = self._node._driver.connect_with_retry(
+                    max_attempts=5,
+                    initial_delay=1.0,
+                    on_status=self._on_motor_connect_status,
+                )
+        except Exception as exc:
+            connected = False
+            self._node.get_logger().error(f"连接电机驱动时发生异常: {exc}")
         if not connected:
             self._node.get_logger().error(
                 "电机连接失败（已重试 5 次）！请检查：\n"
@@ -65,6 +94,7 @@ class MotorManager:
                 "  3. CAN 总线接线是否正确"
             )
             self._state.transition_to(ControllerState.ERROR)
+            self._current_init_stage = "failed:connect"
             return False
 
         self._node.get_logger().info("电机连接成功，正在初始化运控模式...")
@@ -72,19 +102,39 @@ class MotorManager:
         for mid in self._node._motor_ids:
             for attempt in range(max_init_retry):
                 try:
-                    self._node._driver.write_sdo_int(mid, SDO_RUN_MODE, 1)
-                    time.sleep(0.08)
-                    self._node._driver.write_sdo_float(
-                        mid, SDO_TARGET_SPEED, self._node._default_speed
-                    )
-                    self._node._current_speeds[mid] = self._node._default_speed
-                    time.sleep(0.08)
-                    self._node._driver.write_sdo_float(mid, SDO_TARGET_POS, 0.0)
-                    self._node._current_targets[mid] = 0.0
-                    self._node._desired_targets[mid] = 0.0
-                    time.sleep(0.08)
-                    self._node._driver.enter_control_mode(mid)
-                    time.sleep(0.08)
+                    self._mark_init_touched(mid)
+                    self._current_init_stage = f"ID{mid}:run_mode"
+                    with self._node._driver_io_lock:
+                        self._node._driver.write_sdo_int(mid, SDO_RUN_MODE, 1)
+                    self._node._sleep(0.08)
+
+                    self._current_init_stage = f"ID{mid}:target_speed"
+                    with self._node._driver_io_lock:
+                        self._node._driver.write_sdo_float(
+                            mid, SDO_TARGET_SPEED, self._node._default_speed
+                        )
+                    with self._node._lock:
+                        self._node._current_speeds[mid] = self._node._default_speed
+                    self._node._sleep(0.08)
+
+                    self._current_init_stage = f"ID{mid}:target_position"
+                    with self._node._driver_io_lock:
+                        self._node._driver.write_sdo_float(mid, SDO_TARGET_POS, 0.0)
+                    with self._node._lock:
+                        # _current_targets 始终表示最近一次成功写入驱动的位置目标。
+                        self._node._current_targets[mid] = 0.0
+                        self._node._desired_targets[mid] = 0.0
+                        self._node._last_target_change_time[mid] = time.monotonic()
+                    self._node._sleep(0.08)
+
+                    self._current_init_stage = f"ID{mid}:enter_control_mode"
+                    with self._node._driver_io_lock:
+                        self._node._driver.enter_control_mode(mid)
+                    if mid not in self._init_entered_control_mode_ids:
+                        self._init_entered_control_mode_ids.append(mid)
+                    if mid not in self._init_successful_motor_ids:
+                        self._init_successful_motor_ids.append(mid)
+                    self._node._sleep(0.08)
                     self._node.get_logger().info(f"电机 ID{mid} 初始化完成")
                     break
                 except Exception as exc:
@@ -93,17 +143,25 @@ class MotorManager:
                             f"初始化电机 ID{mid} 失败 "
                             f"(尝试 {attempt + 1}/{max_init_retry}): {exc}"
                         )
-                        time.sleep(0.3)
+                        self._node._sleep(0.3)
                     else:
                         self._node.get_logger().error(
                             f"初始化电机 ID{mid} 失败（已重试 {max_init_retry} 次）: {exc}"
                         )
                         self._state.transition_to(ControllerState.ERROR)
+                        self._current_init_stage = f"failed:{self._current_init_stage}"
                         return False
 
-        self._node._init_complete = True
+        with self._node._lock:
+            self._node._init_complete = True
+            self._node._command_fault_active = False
         self._state.transition_to(ControllerState.MANUAL_RUNNING)
+        self._current_init_stage = "complete"
         return True
+
+    def _mark_init_touched(self, motor_id: int) -> None:
+        if motor_id not in self._init_touched_motor_ids:
+            self._init_touched_motor_ids.append(motor_id)
 
     def _on_motor_connect_status(self, status: str) -> None:
         """接收电机连接状态变化并发布到 /motor/status。"""
@@ -164,7 +222,7 @@ class MotorManager:
 
         with self._node._lock:
             source = self._motion_source
-            if source == MotionSource.IDLE:
+            if self._node._command_fault_active or source == MotionSource.IDLE:
                 return
             if source == MotionSource.AUTO and not is_auto:
                 self._halt_motion_locked()
@@ -173,9 +231,12 @@ class MotorManager:
                 self._halt_motion_locked()
                 return
 
-            mode_speed = speed_for_source(source, self._node._motion_params)
-            all_reached = True
-            for mid in self._node._motor_ids:
+        mode_speed = speed_for_source(source, self._node._motion_params)
+        all_reached = True
+        for mid in self._node._motor_ids:
+            with self._node._lock:
+                if self._node._command_fault_active or self._motion_source != source:
+                    return
                 current = self._node._current_targets[mid]
                 desired = self._node._desired_targets[mid]
                 if self._node._motor_protection_flags.get(mid, False):
@@ -200,35 +261,75 @@ class MotorManager:
                     self._node.get_logger().error(f"电机 ID{mid} 目标推进参数非法: {exc}")
                     self._halt_motion_locked()
                     return
-                if new_target != current:
-                    self.write_command_target(mid, new_target)
+
+            if new_target != current:
+                if not self.write_command_target(mid, new_target):
+                    # 部分批次失败后不再发送本周期剩余普通命令。
+                    return
+
+            with self._node._lock:
                 if (
                     abs(self._node._desired_targets[mid] - self._node._current_targets[mid])
                     > self._node._target_reached_tolerance
                 ):
                     all_reached = False
 
-            if source == MotionSource.HOME and all_reached:
+        with self._node._lock:
+            if (
+                source == MotionSource.HOME
+                and self._motion_source == MotionSource.HOME
+                and all_reached
+            ):
                 self._motion_source = MotionSource.IDLE
                 self._node.get_logger().info("全部电机已到达零位，自动归零完成")
 
-    def write_command_target(self, motor_id: int, target: float) -> None:
-        """发送推进器算好的位置命令；调用方必须持有节点锁。"""
+    def write_command_target(self, motor_id: int, target: float) -> bool:
+        """发送位置命令，且只在驱动写入成功后提交软件命令状态。"""
         if not math.isfinite(target):
             self._node.get_logger().error(f"拒绝电机 ID{motor_id} 的非有限位置命令")
-            return
+            return False
         low, high = self._node._limits[motor_id]
         command = clamp(target, low, high)
+        with self._node._lock:
+            if self._node._command_fault_active:
+                self._node.get_logger().error(
+                    f"拒绝电机 ID{motor_id} 位置命令：命令故障已锁存"
+                )
+                return False
 
-        # 保持原有语义：先更新软件命令状态，再尝试底层写入；写失败会记录错误。
-        self._node._current_targets[motor_id] = command
-        self._node._last_target_change_time[motor_id] = time.monotonic()
         try:
-            self._node._driver.write_sdo_float(motor_id, SDO_TARGET_POS, command)
+            with self._node._driver_io_lock:
+                # 等待 I/O 锁期间可能已由另一命令锁存故障；不得在停止批次间插入新命令。
+                if self._node._command_fault_active:
+                    self._node.get_logger().error(
+                        f"拒绝电机 ID{motor_id} 位置命令：命令故障已锁存"
+                    )
+                    return False
+                if self._node._driver is None:
+                    raise RuntimeError("电机驱动不可用")
+                self._node._driver.write_sdo_float(
+                    motor_id, SDO_TARGET_POS, command
+                )
         except Exception as exc:
+            with self._node._lock:
+                self._node._command_failure_counts[motor_id] = (
+                    self._node._command_failure_counts.get(motor_id, 0) + 1
+                )
             self._node.get_logger().error(
                 f"写入电机 ID{motor_id} 目标位置时发生异常: {exc}"
             )
+            self._handle_command_failure(motor_id, "position", exc)
+            return False
+
+        committed_at = time.monotonic()
+        with self._node._lock:
+            # 该值不是反馈位置，也不是待发送值；它是最后成功写入的目标。
+            self._node._current_targets[motor_id] = command
+            self._node._last_target_change_time[motor_id] = committed_at
+            self._node._command_failure_counts[motor_id] = 0
+            if self._motion_source == MotionSource.IDLE:
+                self._node._desired_targets[motor_id] = command
+        return True
 
     def _set_desired_target_locked(self, motor_id: int, target: float) -> float:
         if motor_id not in self._node._limits:
@@ -321,20 +422,57 @@ class MotorManager:
         with self._node._lock:
             self._manual_repeat_times.clear()
 
-    def set_motor_speed(self, motor_id: int, speed: float) -> None:
-        """设置指定电机的位置模式速度上限。"""
-        speed = clamp(speed, self._node._manual_speed_min, self._node._manual_speed_max)
-        self._node._current_speeds[motor_id] = speed
+    def set_motor_speed(self, motor_id: int, speed: float) -> bool:
+        """设置速度上限，且只在驱动写入成功后提交软件状态。"""
+        if not math.isfinite(speed):
+            self._node.get_logger().error(f"拒绝电机 ID{motor_id} 的非有限速度上限")
+            return False
+        command = clamp(
+            speed, self._node._manual_speed_min, self._node._manual_speed_max
+        )
+        with self._node._lock:
+            if self._node._command_fault_active:
+                self._node.get_logger().error(
+                    f"拒绝电机 ID{motor_id} 速度命令：命令故障已锁存"
+                )
+                return False
         try:
-            self._node._driver.write_sdo_float(motor_id, SDO_TARGET_SPEED, speed)
+            with self._node._driver_io_lock:
+                if self._node._command_fault_active:
+                    self._node.get_logger().error(
+                        f"拒绝电机 ID{motor_id} 速度命令：命令故障已锁存"
+                    )
+                    return False
+                if self._node._driver is None:
+                    raise RuntimeError("电机驱动不可用")
+                self._node._driver.write_sdo_float(
+                    motor_id, SDO_TARGET_SPEED, command
+                )
         except Exception as exc:
-            self._node.get_logger().error(f"设置电机 ID{motor_id} 速度时发生异常: {exc}")
+            with self._node._lock:
+                self._node._command_failure_counts[motor_id] = (
+                    self._node._command_failure_counts.get(motor_id, 0) + 1
+                )
+            self._node.get_logger().error(
+                f"设置电机 ID{motor_id} 速度上限时发生异常: {exc}"
+            )
+            self._handle_command_failure(motor_id, "speed_limit", exc)
+            return False
+        with self._node._lock:
+            self._node._current_speeds[motor_id] = command
+            self._node._command_failure_counts[motor_id] = 0
+        return True
 
-    def change_motor_speed(self, motor_id: int, delta: float) -> None:
+    def change_motor_speed(self, motor_id: int, delta: float) -> bool:
         """调整选中电机的底层速度上限并说明其与模式速度的关系。"""
         with self._node._lock:
             prev = self._node._current_speeds[motor_id]
-            self.set_motor_speed(motor_id, prev + delta)
+        if not self.set_motor_speed(motor_id, prev + delta):
+            self._node.get_logger().error(
+                f"电机速度上限修改失败: ID{motor_id} 仍保持 {prev:.2f} rad/s"
+            )
+            return False
+        with self._node._lock:
             new_speed = self._node._current_speeds[motor_id]
             self._node._last_target_change_time[motor_id] = time.monotonic()
             if self._state.is_auto_running():
@@ -349,6 +487,48 @@ class MotorManager:
                 f"当前 {source.value} 模式速度={mode_speed:.2f} rad/s，"
                 f"有效推进速度上限={min(new_speed, mode_speed):.2f} rad/s"
             )
+        return True
+
+    def _handle_command_failure(
+        self, motor_id: int, command_type: str, exc: Exception
+    ) -> None:
+        """冻结普通推进、停止全部电机并锁定 ERROR，不自动恢复。"""
+        with self._node._lock:
+            if self._node._command_fault_active:
+                return
+            self._node._command_fault_active = True
+            self._halt_motion_locked()
+        self._node.get_logger().error(
+            f"电机命令故障: ID{motor_id}, type={command_type}, error={exc}; "
+            "已丢弃未完成运动并尝试停止全部电机"
+        )
+        self.stop_motors_best_effort(reason=f"command_fault:{command_type}")
+        self._state.transition_to(ControllerState.ERROR)
+
+    def stop_motors_best_effort(
+        self,
+        *,
+        reason: str,
+        motor_ids: Optional[Iterable[int]] = None,
+    ) -> bool:
+        """逐台尽力停止；每次只为单个驱动调用持有 I/O 锁。"""
+        ids = list(self._node._motor_ids if motor_ids is None else motor_ids)
+        all_stopped = True
+        for mid in ids:
+            try:
+                with self._node._driver_io_lock:
+                    if self._node._driver is None:
+                        raise RuntimeError("电机驱动不可用")
+                    self._node._driver.stop_motor(mid)
+                self._node.get_logger().info(
+                    f"电机 ID{mid} 停止完成 (reason={reason})"
+                )
+            except Exception as exc:
+                all_stopped = False
+                self._node.get_logger().error(
+                    f"停止电机 ID{mid} 失败 (reason={reason}): {exc}"
+                )
+        return all_stopped
 
     def move_motor_to_90_deg(self, motor_id: int, positive: bool) -> bool:
         """设置选中电机的 +/-90° 期望目标，不直接写位置命令。"""
@@ -432,62 +612,76 @@ class MotorManager:
         """将全部电机当前位置设为机械零点，返回是否全部成功。"""
         self.halt_motion()
         success = True
-        with self._node._lock:
-            for mid in self._node._motor_ids:
-                try:
-                    self._node._driver.stop_motor(mid)
-                except Exception as exc:
-                    success = False
-                    self._node.get_logger().error(
-                        f"停止电机 ID{mid} 以设零点时发生异常: {exc}"
-                    )
-            time.sleep(0.2)
-            for mid in self._node._motor_ids:
-                try:
+        success = self.stop_motors_best_effort(reason="set_zero") and success
+        self._node._sleep(0.2)
+        for mid in self._node._motor_ids:
+            try:
+                with self._node._driver_io_lock:
                     self._node._driver.set_zero(mid)
-                    time.sleep(0.05)
-                except Exception as exc:
-                    success = False
-                    self._node.get_logger().error(f"设置电机 ID{mid} 零点时发生异常: {exc}")
-            time.sleep(0.3)
-            for mid in self._node._motor_ids:
-                try:
+                self._node._sleep(0.05)
+            except Exception as exc:
+                success = False
+                self._node.get_logger().error(f"设置电机 ID{mid} 零点时发生异常: {exc}")
+        self._node._sleep(0.3)
+        for mid in self._node._motor_ids:
+            try:
+                with self._node._driver_io_lock:
                     self._node._driver.write_sdo_int(mid, SDO_RUN_MODE, 1)
+                with self._node._driver_io_lock:
                     self._node._driver.write_sdo_float(mid, SDO_TARGET_POS, 0.0)
+                with self._node._driver_io_lock:
                     self._node._driver.enter_control_mode(mid)
+                with self._node._lock:
                     self._node._current_targets[mid] = 0.0
                     self._node._desired_targets[mid] = 0.0
                     self._node._last_target_change_time[mid] = time.monotonic()
-                    time.sleep(0.03)
-                except Exception as exc:
-                    success = False
-                    self._node.get_logger().error(
-                        f"恢复电机 ID{mid} 运控模式时发生异常: {exc}"
-                    )
+                self._node._sleep(0.03)
+            except Exception as exc:
+                success = False
+                self._node.get_logger().error(
+                    f"恢复电机 ID{mid} 运控模式时发生异常: {exc}"
+                )
         if success:
             self._node.get_logger().info("全部电机机械零点已设置")
+        else:
+            self.stop_motors_best_effort(reason="set_zero_failed")
+            self._state.transition_to(ControllerState.ERROR)
         return success
 
     def hold_current_targets_and_recover(self) -> bool:
         """从急停恢复运控模式，保持最近发送的软件位置。"""
         self.halt_motion()
         recovered = True
+        recovered_ids = []
         with self._node._lock:
-            for mid in self._node._motor_ids:
-                try:
+            targets = dict(self._node._current_targets)
+        for mid in self._node._motor_ids:
+            try:
+                with self._node._driver_io_lock:
                     self._node._driver.write_sdo_int(mid, SDO_RUN_MODE, 1)
+                with self._node._driver_io_lock:
                     self._node._driver.write_sdo_float(
-                        mid, SDO_TARGET_POS, self._node._current_targets[mid]
+                        mid, SDO_TARGET_POS, targets[mid]
                     )
+                with self._node._driver_io_lock:
                     self._node._driver.enter_control_mode(mid)
-                    time.sleep(0.03)
-                except Exception as exc:
-                    recovered = False
-                    self._node.get_logger().error(
-                        f"恢复电机 ID{mid} 运控模式时发生异常: {exc}"
-                    )
+                recovered_ids.append(mid)
+                self._node._sleep(0.03)
+            except Exception as exc:
+                recovered = False
+                self._node.get_logger().error(
+                    f"恢复电机 ID{mid} 运控模式时发生异常: {exc}"
+                )
+                break
         if recovered:
             self._node.get_logger().info("全部电机已恢复运控模式（保持当前位置）")
+        else:
+            self._node.get_logger().error(
+                f"急停恢复失败，已恢复电机={recovered_ids}；正在重新停止全部电机"
+            )
+            self.stop_motors_best_effort(reason="recovery_failed")
+            with self._node._lock:
+                self._halt_motion_locked()
         return recovered
 
     # ------------------------------------------------------------------

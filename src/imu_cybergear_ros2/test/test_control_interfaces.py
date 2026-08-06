@@ -84,8 +84,9 @@ def test_motion_timer_follows_lifecycle() -> None:
     shutdown = source[source.index("    def on_shutdown") : source.index("    # ==================================================================\n    # IMU 数据回调")]
     assert "self._motor_mgr.start_motion_timer()" in activate
     assert "self._motor_mgr.stop_motion_timer()" in deactivate
-    assert "self._motor_mgr.stop_motion_timer()" in cleanup
-    assert "self._motor_mgr.stop_motion_timer()" in shutdown
+    assert 'self._release_resources(reason="cleanup"' in cleanup
+    assert 'self._release_resources(reason="shutdown"' in shutdown
+    assert 'attempt("stop_motion_timer", motor_mgr.stop_motion_timer)' in cleanup
 
 
 def test_unified_motion_defaults_and_protected_motor_mapping() -> None:
