@@ -13,11 +13,14 @@ ALLOWED_MOTOR_MODES = {
     "DISABLED",
     "ERROR",
 }
+CONTROL_READY_MOTOR_MODES = {"MANUAL", "AUTO"}
 ALLOWED_RESPONSE_CURVES = {"linear", "smoothstep", "quadratic"}
 
 
 class FanControlState(str, Enum):
     SAFE_STOP = "SAFE_STOP"
+    MANUAL_DISARMED = "MANUAL_DISARMED"
+    MANUAL_WAITING_FOR_NEUTRAL = "MANUAL_WAITING_FOR_NEUTRAL"
     MANUAL_WAITING = "MANUAL_WAITING"
     MANUAL_ACTIVE = "MANUAL_ACTIVE"
     AUTO_WAITING = "AUTO_WAITING"
@@ -169,7 +172,7 @@ def slew_pwm(current: int, target: int, rise_step: int, fall_step: int) -> int:
 
 
 class FanControlCore:
-    """维护手动/自动缓存、急停锁存和唯一安全输出。"""
+    """集中维护授权、缓存、急停锁存和唯一安全输出。"""
 
     def __init__(self, config: FanControlConfig):
         config.validate()
@@ -182,8 +185,11 @@ class FanControlCore:
         self.auto_requested = False
         self._auto_pose_cutoff = 0
 
+        self.manual_armed = False
+        self._manual_neutral_received = False
         self._manual_pwm = [stop, stop]
         self._manual_at: list[Optional[float]] = [None, None]
+
         self._pose: Optional[Tuple[float, float]] = None
         self._pose_at: Optional[float] = None
         self._pose_seq = 0
@@ -191,14 +197,23 @@ class FanControlCore:
 
         self._motor_mode: Optional[str] = None
         self._motor_mode_at: Optional[float] = None
-        self._motor_mode_seq = 0
+        self._motor_mode_event_count = 0
         self._fan_enabled: Optional[bool] = None
         self._fan_enabled_at: Optional[float] = None
-        self._fan_enabled_seq = 0
 
         self.e_stop_latched = False
-        self._recovery_fan_seq = 0
-        self._recovery_motor_seq = 0
+        self._e_stop_active: Optional[bool] = None
+        self._e_stop_at: Optional[float] = None
+        self._safety_reason = "启动后等待显式选择控制路径"
+        self._immediate_stop_pending = True
+
+    @property
+    def safety_reason(self) -> str:
+        return self._safety_reason
+
+    @property
+    def manual_neutral_received(self) -> bool:
+        return self._manual_neutral_received
 
     def _stop_immediately(self) -> None:
         stop = self.config.fan_stop_pwm_us
@@ -206,44 +221,124 @@ class FanControlCore:
         self.auto_target_pwm = (stop, stop)
         self._auto_running = [False, False]
 
-    def _clear_manual(self) -> None:
+    def _clear_manual_cache(self) -> None:
         stop = self.config.fan_stop_pwm_us
         self._manual_pwm = [stop, stop]
         self._manual_at = [None, None]
 
+    def _disarm_manual(self) -> None:
+        self.manual_armed = False
+        self._manual_neutral_received = False
+        self._clear_manual_cache()
+
     def _clear_auto(self) -> None:
         self.auto_requested = False
         self._auto_pose_cutoff = self._pose_seq
-        self._stop_immediately()
+        self.auto_target_pwm = (
+            self.config.fan_stop_pwm_us,
+            self.config.fan_stop_pwm_us,
+        )
+        self._auto_running = [False, False]
 
-    def _clear_all_commands(self) -> None:
-        self._clear_manual()
+    def _clear_all_control(self) -> None:
+        self._disarm_manual()
         self._clear_auto()
 
-    def _fresh(self, timestamp: Optional[float], now: float, timeout: float) -> bool:
-        return timestamp is not None and 0.0 <= now - timestamp <= timeout
+    def force_safe_stop(
+        self,
+        reason: str,
+        *,
+        state: FanControlState = FanControlState.SAFE_STOP,
+    ) -> None:
+        """幂等清除全部授权和旧命令，并请求立即发布停止值。"""
+        self._clear_all_control()
+        self._stop_immediately()
+        self.state = state
+        self._safety_reason = reason
+        self._immediate_stop_pending = True
 
-    def update_motor_mode(self, mode: str, now: float) -> bool:
-        if mode not in ALLOWED_MOTOR_MODES or not math.isfinite(now):
-            self._clear_all_commands()
-            self.state = FanControlState.SAFE_STOP
+    def take_immediate_stop(self) -> bool:
+        pending = self._immediate_stop_pending
+        self._immediate_stop_pending = False
+        return pending
+
+    def _fresh(self, timestamp: Optional[float], now: float, timeout: float) -> bool:
+        return (
+            math.isfinite(now)
+            and timestamp is not None
+            and 0.0 <= now - timestamp <= timeout
+        )
+
+    def update_e_stop(self, active: bool, now: float) -> bool:
+        if not isinstance(active, bool) or not math.isfinite(now):
+            self.force_safe_stop("急停输入或时间无效")
             return False
-        self._motor_mode = mode
-        self._motor_mode_at = now
-        self._motor_mode_seq += 1
-        if self.auto_requested and mode != "AUTO":
-            self._clear_auto()
-        self._try_clear_e_stop(now)
+        self._e_stop_active = active
+        self._e_stop_at = now
+        if active:
+            self.emergency_stop()
         return True
 
-    def update_fan_enabled(self, enabled: bool, now: float) -> None:
-        self._fan_enabled = bool(enabled)
+    def emergency_stop(self) -> None:
+        self.e_stop_latched = True
+        self._e_stop_active = True
+        self._pose = None
+        self._pose_at = None
+        self.force_safe_stop(
+            "收到系统急停；等待 /fans/reset_e_stop 显式复位",
+            state=FanControlState.EMERGENCY_STOP,
+        )
+
+    def update_motor_mode(self, mode: str, now: float) -> bool:
+        self._motor_mode_event_count += 1
+        if (
+            not isinstance(mode, str)
+            or not mode.strip()
+            or mode not in ALLOWED_MOTOR_MODES
+            or not math.isfinite(now)
+        ):
+            self._motor_mode = None
+            self._motor_mode_at = None
+            state = (
+                FanControlState.EMERGENCY_STOP
+                if self.e_stop_latched
+                else FanControlState.SAFE_STOP
+            )
+            self.force_safe_stop("收到未知或非法电机模式", state=state)
+            return False
+
+        self._motor_mode = mode
+        self._motor_mode_at = now
+        if mode not in CONTROL_READY_MOTOR_MODES:
+            state = (
+                FanControlState.EMERGENCY_STOP
+                if self.e_stop_latched or mode == "EMERGENCY_STOP"
+                else FanControlState.SAFE_STOP
+            )
+            self.force_safe_stop(f"电机模式 {mode} 不允许风扇输出", state=state)
+        elif self.auto_requested and mode != "AUTO":
+            self.force_safe_stop(
+                "AUTO 因电机模式退出；等待重新显式授权",
+                state=FanControlState.MANUAL_DISARMED,
+            )
+        return True
+
+    def update_fan_enabled(self, enabled: bool, now: float) -> bool:
+        if not isinstance(enabled, bool) or not math.isfinite(now):
+            self._fan_enabled = None
+            self._fan_enabled_at = None
+            self.force_safe_stop("底层风扇 enabled 状态无效")
+            return False
+        self._fan_enabled = enabled
         self._fan_enabled_at = now
-        self._fan_enabled_seq += 1
         if not enabled:
-            self._clear_all_commands()
-            self.state = FanControlState.DISABLED
-        self._try_clear_e_stop(now)
+            state = (
+                FanControlState.EMERGENCY_STOP
+                if self.e_stop_latched
+                else FanControlState.DISABLED
+            )
+            self.force_safe_stop("底层风扇已停用", state=state)
+        return True
 
     def update_pose(self, roll_rad: float, pitch_rad: float, now: float) -> bool:
         if not all(math.isfinite(value) for value in (roll_rad, pitch_rad, now)):
@@ -257,41 +352,28 @@ class FanControlCore:
     def invalidate_pose(self) -> None:
         self._pose = None
         self._pose_at = None
-        if self.auto_requested:
-            self._clear_auto()
-            self.state = FanControlState.SAFE_STOP
+        if self.auto_requested or self.manual_armed:
+            self.force_safe_stop(
+                "相对姿态失效；等待重新显式授权",
+                state=FanControlState.SAFE_STOP,
+            )
 
-    def update_zero_generation(self, generation: int) -> None:
-        if generation < 0:
-            self._clear_auto()
-            self.invalidate_pose()
-            return
+    def update_zero_generation(self, generation: int) -> bool:
+        if not isinstance(generation, int) or generation < 0:
+            self._zero_generation = None
+            self._pose = None
+            self._pose_at = None
+            self.force_safe_stop("统一零点代次无效")
+            return False
         changed = (
             self._zero_generation is None
             or generation != self._zero_generation
         )
         self._zero_generation = generation
         if changed:
-            self.invalidate_pose()
-            self._clear_auto()
-            self.state = FanControlState.SAFE_STOP
-
-    def update_manual_pair(self, left: int, right: int, now: float) -> bool:
-        if not self._manual_values_valid((left, right), now):
-            return False
-        if self.auto_requested or self.e_stop_latched:
-            return False
-        self._manual_pwm = [int(left), int(right)]
-        self._manual_at = [now, now]
-        return True
-
-    def update_manual_side(self, index: int, pwm: int, now: float) -> bool:
-        if index not in (0, 1) or not self._manual_values_valid((pwm,), now):
-            return False
-        if self.auto_requested or self.e_stop_latched:
-            return False
-        self._manual_pwm[index] = int(pwm)
-        self._manual_at[index] = now
+            self._pose = None
+            self._pose_at = None
+            self.force_safe_stop("统一零点已变化；等待新姿态和重新授权")
         return True
 
     def _manual_values_valid(self, values: tuple[int, ...], now: float) -> bool:
@@ -303,57 +385,161 @@ class FanControlCore:
             for value in values
         )
 
-    def request_auto(self, enabled: bool, now: float) -> Tuple[bool, str]:
+    def update_manual_pair(self, left: int, right: int, now: float) -> bool:
+        if not self._manual_values_valid((left, right), now):
+            return False
+        if not self.manual_armed or self.auto_requested or self.e_stop_latched:
+            return False
+        failure = self._manual_precondition_failure(now)
+        if failure:
+            self.force_safe_stop(
+                failure,
+                state=FanControlState.MANUAL_DISARMED,
+            )
+            return False
+
+        stop = self.config.fan_stop_pwm_us
+        if not self._manual_neutral_received:
+            if (left, right) != (stop, stop):
+                return False
+            self._manual_neutral_received = True
+            self._manual_pwm = [stop, stop]
+            self._manual_at = [now, now]
+            self.state = FanControlState.MANUAL_WAITING
+            return True
+
+        self._manual_pwm = [int(left), int(right)]
+        self._manual_at = [now, now]
+        return True
+
+    def update_manual_side(self, index: int, pwm: int, now: float) -> bool:
+        if index not in (0, 1) or not self._manual_values_valid((pwm,), now):
+            return False
+        if (
+            not self.manual_armed
+            or not self._manual_neutral_received
+            or self.auto_requested
+            or self.e_stop_latched
+        ):
+            return False
+        failure = self._manual_precondition_failure(now)
+        if failure:
+            self.force_safe_stop(
+                failure,
+                state=FanControlState.MANUAL_DISARMED,
+            )
+            return False
+        self._manual_pwm[index] = int(pwm)
+        self._manual_at[index] = now
+        return True
+
+    def request_manual(self, enabled: bool, now: float) -> Tuple[bool, str]:
+        if not isinstance(enabled, bool) or not math.isfinite(now):
+            self.force_safe_stop("手动授权请求无效")
+            return False, "手动授权请求或时间无效"
         if not enabled:
-            self._clear_all_commands()
-            return True, "风扇 AUTO 已关闭；手动缓存已清除"
+            self.force_safe_stop(
+                "手动控制已取消；等待重新授权",
+                state=FanControlState.MANUAL_DISARMED,
+            )
+            return True, "风扇 MANUAL 已关闭，旧命令已清除"
+
+        failure = self._manual_precondition_failure(now)
+        if failure:
+            state = (
+                FanControlState.EMERGENCY_STOP
+                if self.e_stop_latched
+                else FanControlState.SAFE_STOP
+            )
+            self.force_safe_stop(failure, state=state)
+            return False, failure
+        if self.auto_requested or self.state in (
+            FanControlState.AUTO_WAITING,
+            FanControlState.AUTO_ACTIVE,
+        ):
+            self.force_safe_stop("AUTO 尚未退出，不能启用 MANUAL")
+            return False, "AUTO 当前已请求或活动，不能启用 MANUAL"
+
+        self._clear_auto()
+        self._disarm_manual()
+        self.manual_armed = True
+        self._manual_neutral_received = False
+        self._stop_immediately()
+        self._immediate_stop_pending = True
+        self._safety_reason = ""
+        self.state = FanControlState.MANUAL_WAITING_FOR_NEUTRAL
+        return True, "MANUAL 已授权；等待本次授权后的双路停止基线"
+
+    def request_auto(self, enabled: bool, now: float) -> Tuple[bool, str]:
+        if not isinstance(enabled, bool) or not math.isfinite(now):
+            self.force_safe_stop("AUTO 请求无效")
+            return False, "AUTO 请求或时间无效"
+        if not enabled:
+            self.force_safe_stop(
+                "风扇 AUTO 已关闭；等待重新显式选择控制路径",
+                state=FanControlState.MANUAL_DISARMED,
+            )
+            return True, "风扇 AUTO 已关闭；MANUAL 授权和旧命令已清除"
+
         failure = self._auto_precondition_failure(now, require_new_pose=False)
         if failure:
-            self._clear_auto()
+            state = (
+                FanControlState.EMERGENCY_STOP
+                if self.e_stop_latched
+                else FanControlState.SAFE_STOP
+            )
+            self.force_safe_stop(failure, state=state)
             return False, failure
-        self._clear_manual()
+
+        self._disarm_manual()
         self._clear_auto()
         self.auto_requested = True
         self._auto_pose_cutoff = self._pose_seq
+        self._stop_immediately()
+        self._immediate_stop_pending = True
+        self._safety_reason = ""
         self.state = FanControlState.AUTO_WAITING
         return True, "风扇 AUTO 请求已接受，等待启用后的新姿态"
 
-    def emergency_stop(self) -> None:
-        self.e_stop_latched = True
-        self._recovery_fan_seq = self._fan_enabled_seq
-        self._recovery_motor_seq = self._motor_mode_seq
-        self._clear_all_commands()
+    def reset_e_stop(self, now: float) -> Tuple[bool, str]:
+        if not math.isfinite(now):
+            return False, "复位时间无效"
+        if not self.e_stop_latched:
+            return False, "系统急停当前未锁存"
+        if self._e_stop_active is not False:
+            return False, "急停输入仍为 true 或尚未明确观察到 false"
+        if self._fan_enabled is not True or not self._fresh(
+            self._fan_enabled_at, now, self.config.fan_enabled_timeout_sec
+        ):
+            return False, "底层风扇 enabled 状态缺失、过期或为 false"
+        if self._motor_mode not in CONTROL_READY_MOTOR_MODES or not self._fresh(
+            self._motor_mode_at, now, self.config.motor_mode_timeout_sec
+        ):
+            return False, "电机模式缺失、过期或不是合法的 MANUAL/AUTO"
+
+        self.e_stop_latched = False
         self._pose = None
         self._pose_at = None
-        self.state = FanControlState.EMERGENCY_STOP
-
-    def _try_clear_e_stop(self, now: float) -> None:
-        if not self.e_stop_latched:
-            return
-        fan_recovered = (
-            self._fan_enabled_seq > self._recovery_fan_seq
-            and self._fan_enabled is True
-            and self._fresh(
-                self._fan_enabled_at,
-                now,
-                self.config.fan_enabled_timeout_sec,
-            )
+        self.force_safe_stop(
+            "急停已复位；等待重新显式选择 MANUAL 或 AUTO",
+            state=FanControlState.MANUAL_DISARMED,
         )
-        if self.config.require_motor_mode_for_manual:
-            motor_recovered = (
-                self._motor_mode_seq > self._recovery_motor_seq
-                and self._motor_mode in ("MANUAL", "AUTO")
-                and self._fresh(
-                    self._motor_mode_at,
-                    now,
-                    self.config.motor_mode_timeout_sec,
-                )
-            )
-        else:
-            motor_recovered = True
-        if fan_recovered and motor_recovered:
-            self.e_stop_latched = False
-            self.state = FanControlState.MANUAL_WAITING
+        return True, "风扇管理器急停已复位；输出保持停止且控制路径未授权"
+
+    def _manual_precondition_failure(self, now: float) -> Optional[str]:
+        if self.e_stop_latched:
+            return "系统急停尚未显式复位"
+        if self._e_stop_active is True:
+            return "急停输入仍为 true"
+        if self._fan_enabled is not True or not self._fresh(
+            self._fan_enabled_at, now, self.config.fan_enabled_timeout_sec
+        ):
+            return "底层风扇未启用或 enabled 状态已超时"
+        if self._motor_mode not in CONTROL_READY_MOTOR_MODES or not self._fresh(
+            self._motor_mode_at, now, self.config.motor_mode_timeout_sec
+        ):
+            return "电机模式不是新鲜的 MANUAL/AUTO"
+        return None
 
     def _auto_precondition_failure(
         self,
@@ -362,7 +548,9 @@ class FanControlCore:
         require_new_pose: bool,
     ) -> Optional[str]:
         if self.e_stop_latched:
-            return "系统急停尚未完成恢复"
+            return "系统急停尚未显式复位"
+        if self._e_stop_active is True:
+            return "急停输入仍为 true"
         if self._motor_mode != "AUTO" or not self._fresh(
             self._motor_mode_at, now, self.config.motor_mode_timeout_sec
         ):
@@ -379,7 +567,11 @@ class FanControlCore:
             return "等待 AUTO 启用后的新姿态"
         return None
 
-    def step(self, now: float) -> FanControlOutput:
+    def control_tick(self, now: float) -> FanControlOutput:
+        """唯一正常输出推进入口；普通状态更新不得调用此方法。"""
+        if not math.isfinite(now):
+            self.force_safe_stop("控制单调时间无效")
+            return self.output
         if self.e_stop_latched:
             self._stop_immediately()
             self.state = FanControlState.EMERGENCY_STOP
@@ -388,15 +580,16 @@ class FanControlCore:
         if self._fan_enabled is not True or not self._fresh(
             self._fan_enabled_at, now, self.config.fan_enabled_timeout_sec
         ):
-            self._clear_all_commands()
-            self.state = FanControlState.DISABLED
+            self.force_safe_stop(
+                "底层风扇未启用或 enabled 状态已超时",
+                state=FanControlState.DISABLED,
+            )
             return self.output
 
         if self.auto_requested:
             failure = self._auto_precondition_failure(now, require_new_pose=False)
             if failure:
-                self._clear_auto()
-                self.state = FanControlState.SAFE_STOP
+                self.force_safe_stop(failure)
                 return self.output
             if self._pose_seq <= self._auto_pose_cutoff:
                 self._stop_immediately()
@@ -404,39 +597,55 @@ class FanControlCore:
                 return self.output
             return self._step_auto()
 
-        if self.config.require_motor_mode_for_manual and (
-            self._motor_mode not in ("MANUAL", "AUTO")
-            or not self._fresh(
-                self._motor_mode_at,
-                now,
-                self.config.motor_mode_timeout_sec,
+        if self.manual_armed:
+            failure = self._manual_precondition_failure(now)
+            if failure:
+                self.force_safe_stop(
+                    failure,
+                    state=FanControlState.MANUAL_DISARMED,
+                )
+                return self.output
+            if not self._manual_neutral_received:
+                self._stop_immediately()
+                self.state = FanControlState.MANUAL_WAITING_FOR_NEUTRAL
+                return self.output
+
+            fresh = [
+                self._fresh(
+                    timestamp,
+                    now,
+                    self.config.manual_command_timeout_sec,
+                )
+                for timestamp in self._manual_at
+            ]
+            stop = self.config.fan_stop_pwm_us
+            self.command_pwm = tuple(
+                self._manual_pwm[index] if fresh[index] else stop
+                for index in (0, 1)
             )
-        ):
-            self._clear_manual()
-            self._stop_immediately()
-            self.state = FanControlState.SAFE_STOP
+            self.auto_target_pwm = (stop, stop)
+            self.state = (
+                FanControlState.MANUAL_ACTIVE
+                if any(
+                    fresh[index] and self._manual_pwm[index] != stop
+                    for index in (0, 1)
+                )
+                else FanControlState.MANUAL_WAITING
+            )
             return self.output
 
-        fresh = [
-            self._fresh(
-                timestamp,
-                now,
-                self.config.manual_command_timeout_sec,
-            )
-            for timestamp in self._manual_at
-        ]
-        stop = self.config.fan_stop_pwm_us
-        self.command_pwm = tuple(
-            self._manual_pwm[index] if fresh[index] else stop
-            for index in (0, 1)
-        )
-        self.auto_target_pwm = (stop, stop)
-        self.state = (
-            FanControlState.MANUAL_ACTIVE
-            if any(fresh)
-            else FanControlState.MANUAL_WAITING
-        )
+        self._stop_immediately()
+        if self.state not in (
+            FanControlState.SAFE_STOP,
+            FanControlState.DISABLED,
+            FanControlState.EMERGENCY_STOP,
+        ):
+            self.state = FanControlState.MANUAL_DISARMED
         return self.output
+
+    def step(self, now: float) -> FanControlOutput:
+        """兼容纯逻辑调用；生产管理器只使用 control_tick。"""
+        return self.control_tick(now)
 
     def _step_auto(self) -> FanControlOutput:
         left_activity, right_activity = attitude_activities(*self._pose)

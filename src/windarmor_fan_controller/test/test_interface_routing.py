@@ -31,6 +31,14 @@ def test_manager_owns_public_topics_and_does_not_import_gpio() -> None:
     assert "gpiozero" not in manager
     assert "lgpio" not in manager
     assert 'self.create_publisher(\n            Int32MultiArray, "/fans/command_pwm"' in manager
+    assert '"/fans/reset_e_stop"' in manager
+    assert '"/fans/manual_enable"' in manager
+
+
+def test_normal_command_progression_is_owned_by_control_timer() -> None:
+    manager = source("fan_command_manager.py")
+    assert "self._core.control_tick" in manager
+    assert "self._core.step" not in manager
 
 
 def test_manager_is_only_normal_internal_command_publisher() -> None:
@@ -52,6 +60,12 @@ def test_bottom_controller_retains_final_clamp_and_cleanup() -> None:
     assert "def close(self)" in fan_node
     assert "def destroy_node(self)" in fan_node
     assert "self._command_gate.disable()" in fan_node
+
+
+def test_watchdog_is_validated_before_gpio_initialization() -> None:
+    fan_node = source("fan_node.py")
+    assert "initialize_after_timeout_validation(" in fan_node
+    assert "command_timeout_value,\n            self._initialize_gpio" in fan_node
 
 
 def test_fan_launch_is_valid_and_has_one_bottom_controller() -> None:

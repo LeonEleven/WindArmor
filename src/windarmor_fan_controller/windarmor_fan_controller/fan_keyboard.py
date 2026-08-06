@@ -10,7 +10,7 @@ from typing import Optional
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Bool, Int32MultiArray
+from std_msgs.msg import Bool, Int32MultiArray, String
 from std_srvs.srv import SetBool
 
 
@@ -94,20 +94,40 @@ class FanKeyboard(Node):
         self._step = int(self.get_parameter("step_pwm_us").value)
         self._values = [self._minimum, self._minimum]
         self._selection = (0, 1)
+        self._manual_input_allowed = False
         self._pwm_pub = self.create_publisher(Int32MultiArray, "/fans/pwm", 10)
         self._e_stop_pub = self.create_publisher(Bool, "/e_stop", 10)
         self._enable_client = self.create_client(SetBool, "/fans/enable")
+        self._control_state_sub = self.create_subscription(
+            String,
+            "/fans/control_state",
+            self._on_control_state,
+            10,
+        )
 
     def publish(self) -> None:
         msg = Int32MultiArray()
         msg.data = list(self._values)
         self._pwm_pub.publish(msg)
 
-    def adjust(self, delta: int) -> None:
+    def adjust(self, delta: int) -> bool:
+        if not self._manual_input_allowed:
+            self._values = [self._minimum, self._minimum]
+            return False
         for index in self._selection:
             self._values[index] = max(
                 self._minimum, min(self._maximum, self._values[index] + delta)
             )
+        return True
+
+    def _on_control_state(self, msg: String) -> None:
+        """安全状态清除本地旧油门；停止基线后才允许用户调节。"""
+        self._manual_input_allowed = msg.data in (
+            "MANUAL_WAITING",
+            "MANUAL_ACTIVE",
+        )
+        if not self._manual_input_allowed:
+            self._values = [self._minimum, self._minimum]
 
     def stop(self) -> None:
         self._values = [self._minimum, self._minimum]
@@ -150,7 +170,7 @@ def main(args: Optional[list[str]] = None) -> None:
     print(
         "\nWindArmor 双风扇键盘控制\n"
         "[1]左 [2]右 [3]双路  [↑/↓]增减  [s]双路最低油门\n"
-        "[空格]系统急停（电机+风扇） [r]重新启用风扇 [q]退出\n"
+        "[空格]系统急停（电机+风扇） [r]仅重新启用底层风扇 [q]退出\n"
     )
 
     try:
@@ -168,11 +188,9 @@ def main(args: Optional[list[str]] = None) -> None:
                 node._selection = (0, 1)
                 display_changed = True
             elif key in ("\x1b[A", "+", "="):
-                node.adjust(node._step)
-                display_changed = True
+                display_changed = node.adjust(node._step)
             elif key in ("\x1b[B", "-", "_"):
-                node.adjust(-node._step)
-                display_changed = True
+                display_changed = node.adjust(-node._step)
             elif key.lower() == "s":
                 node.stop()
                 display_changed = True

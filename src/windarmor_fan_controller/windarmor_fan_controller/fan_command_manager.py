@@ -1,6 +1,7 @@
 """双风扇公共命令仲裁节点；本模块不接触任何硬件 I/O。"""
 
 import math
+import threading
 import time
 from typing import Optional
 
@@ -9,9 +10,9 @@ from geometry_msgs.msg import Vector3Stamped
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, Int32, Int32MultiArray, String, UInt64
-from std_srvs.srv import SetBool
+from std_srvs.srv import SetBool, Trigger
 
-from .fan_control import FanControlConfig, FanControlCore
+from .fan_control import FanControlConfig, FanControlCore, FanControlOutput
 
 
 class FanCommandManager(Node):
@@ -64,6 +65,7 @@ class FanCommandManager(Node):
             ),
         )
         self._core = FanControlCore(config)
+        self._core_lock = threading.RLock()
         self._last_pose_source_stamp_ns: Optional[int] = None
         self._last_observable_signature = None
 
@@ -120,6 +122,12 @@ class FanCommandManager(Node):
         self._auto_enable_srv = self.create_service(
             SetBool, "/fans/auto_enable", self._on_auto_enable
         )
+        self._manual_enable_srv = self.create_service(
+            SetBool, "/fans/manual_enable", self._on_manual_enable
+        )
+        self._reset_e_stop_srv = self.create_service(
+            Trigger, "/fans/reset_e_stop", self._on_reset_e_stop
+        )
         self._control_timer = self.create_timer(
             1.0 / control_rate, self._control_tick
         )
@@ -127,12 +135,15 @@ class FanCommandManager(Node):
             1.0 / status_rate, self._publish_observable_state
         )
         if bool(self.get_parameter("auto_enabled_at_start").value):
-            success, message = self._core.request_auto(True, time.monotonic())
-            if not success:
-                self.get_logger().warn(
-                    f"启动时 AUTO 请求被安全条件拒绝: {message}"
+            with self._core_lock:
+                success, message = self._core.request_auto(
+                    True, time.monotonic()
                 )
-        self._evaluate_and_publish()
+                if not success:
+                    self.get_logger().warn(
+                        f"启动时 AUTO 请求被安全条件拒绝: {message}"
+                    )
+        self._finish_observation(force=True)
 
     def _declare_parameters(self) -> None:
         self.declare_parameter("min_pwm_us", 800)
@@ -155,93 +166,145 @@ class FanCommandManager(Node):
         self.declare_parameter("fan_enabled_timeout_sec", 1.0)
         self.declare_parameter("require_motor_mode_for_manual", False)
 
+    def _publish_command(self, command_pwm: tuple[int, int]) -> None:
+        command = Int32MultiArray()
+        command.data = list(command_pwm)
+        self._command_pub.publish(command)
+
+    def _finish_observation(self, *, force: bool = False) -> None:
+        """发布安全停止（若有）及观察状态，但绝不推进普通输出。"""
+        with self._core_lock:
+            output = self._core.output
+            if self._core.take_immediate_stop():
+                self._publish_command(output.command_pwm)
+            self._publish_observable_state(force=force, output=output)
+
     def _on_manual_pair(self, msg: Int32MultiArray) -> None:
         if len(msg.data) != 2:
             self.get_logger().error("/fans/pwm 必须恰好包含两个整数")
             return
-        accepted = self._core.update_manual_pair(
-            int(msg.data[0]), int(msg.data[1]), time.monotonic()
-        )
+        with self._core_lock:
+            accepted = self._core.update_manual_pair(
+                int(msg.data[0]), int(msg.data[1]), time.monotonic()
+            )
         if not accepted:
-            self.get_logger().warn("拒绝无效或当前状态不允许的 /fans/pwm")
-            return
-        self._evaluate_and_publish()
+            self.get_logger().warn("拒绝无效、未授权或缺少停止基线的 /fans/pwm")
+        self._finish_observation()
 
     def _on_manual_left(self, msg: Int32) -> None:
-        if not self._core.update_manual_side(0, int(msg.data), time.monotonic()):
+        with self._core_lock:
+            accepted = self._core.update_manual_side(
+                0, int(msg.data), time.monotonic()
+            )
+        if not accepted:
             self.get_logger().warn("拒绝无效或当前状态不允许的 /fans/left/pwm")
-            return
-        self._evaluate_and_publish()
+        self._finish_observation()
 
     def _on_manual_right(self, msg: Int32) -> None:
-        if not self._core.update_manual_side(1, int(msg.data), time.monotonic()):
+        with self._core_lock:
+            accepted = self._core.update_manual_side(
+                1, int(msg.data), time.monotonic()
+            )
+        if not accepted:
             self.get_logger().warn("拒绝无效或当前状态不允许的 /fans/right/pwm")
-            return
-        self._evaluate_and_publish()
+        self._finish_observation()
 
     def _on_relative_attitude(self, msg: Vector3Stamped) -> None:
         stamp_ns = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
-        if (
-            stamp_ns > 0
-            and self._last_pose_source_stamp_ns is not None
-            and stamp_ns <= self._last_pose_source_stamp_ns
-        ):
-            self.get_logger().warn("拒绝时间戳倒退或重复的相对姿态")
-            self._core.invalidate_pose()
-            self._evaluate_and_publish()
-            return
-        if not self._core.update_pose(
-            msg.vector.x, msg.vector.y, time.monotonic()
-        ):
-            self.get_logger().warn("拒绝包含 NaN/Inf 的相对姿态")
-            self._evaluate_and_publish()
-            return
-        if stamp_ns > 0:
-            self._last_pose_source_stamp_ns = stamp_ns
-        self._evaluate_and_publish()
+        with self._core_lock:
+            if (
+                stamp_ns > 0
+                and self._last_pose_source_stamp_ns is not None
+                and stamp_ns <= self._last_pose_source_stamp_ns
+            ):
+                self.get_logger().warn("拒绝时间戳倒退或重复的相对姿态")
+                self._core.invalidate_pose()
+            elif not self._core.update_pose(
+                msg.vector.x, msg.vector.y, time.monotonic()
+            ):
+                self.get_logger().warn("拒绝包含 NaN/Inf 的相对姿态")
+            elif stamp_ns > 0:
+                self._last_pose_source_stamp_ns = stamp_ns
+        self._finish_observation()
 
     def _on_zero_generation(self, msg: UInt64) -> None:
-        self._last_pose_source_stamp_ns = None
-        self._core.update_zero_generation(int(msg.data))
-        self._evaluate_and_publish()
+        with self._core_lock:
+            self._last_pose_source_stamp_ns = None
+            self._core.update_zero_generation(int(msg.data))
+        self._finish_observation()
 
     def _on_motor_mode(self, msg: String) -> None:
-        if not self._core.update_motor_mode(msg.data, time.monotonic()):
+        with self._core_lock:
+            accepted = self._core.update_motor_mode(
+                msg.data, time.monotonic()
+            )
+        if not accepted:
             self.get_logger().error(f"拒绝未知电机模式: {msg.data!r}")
-        self._evaluate_and_publish()
+        self._finish_observation()
 
     def _on_fan_enabled(self, msg: Bool) -> None:
-        self._core.update_fan_enabled(msg.data, time.monotonic())
-        self._evaluate_and_publish()
+        with self._core_lock:
+            self._core.update_fan_enabled(msg.data, time.monotonic())
+        self._finish_observation()
 
     def _on_e_stop(self, msg: Bool) -> None:
-        if msg.data:
-            self._core.emergency_stop()
-            self._evaluate_and_publish()
+        with self._core_lock:
+            self._core.update_e_stop(msg.data, time.monotonic())
+        self._finish_observation()
 
     def _on_auto_enable(
         self,
         request: SetBool.Request,
         response: SetBool.Response,
     ) -> SetBool.Response:
-        response.success, response.message = self._core.request_auto(
-            request.data, time.monotonic()
-        )
-        self._evaluate_and_publish()
+        with self._core_lock:
+            response.success, response.message = self._core.request_auto(
+                request.data, time.monotonic()
+            )
+        self._finish_observation()
+        return response
+
+    def _on_manual_enable(
+        self,
+        request: SetBool.Request,
+        response: SetBool.Response,
+    ) -> SetBool.Response:
+        with self._core_lock:
+            response.success, response.message = self._core.request_manual(
+                request.data, time.monotonic()
+            )
+        self._finish_observation()
+        return response
+
+    def _on_reset_e_stop(
+        self,
+        _request: Trigger.Request,
+        response: Trigger.Response,
+    ) -> Trigger.Response:
+        with self._core_lock:
+            response.success, response.message = self._core.reset_e_stop(
+                time.monotonic()
+            )
+        self._finish_observation()
         return response
 
     def _control_tick(self) -> None:
-        self._evaluate_and_publish()
+        """唯一正常命令发布和 AUTO 斜坡推进入口。"""
+        with self._core_lock:
+            output = self._core.control_tick(time.monotonic())
+            self._core.take_immediate_stop()
+            self._publish_command(output.command_pwm)
+            self._publish_observable_state(force=False, output=output)
 
-    def _evaluate_and_publish(self) -> None:
-        output = self._core.step(time.monotonic())
-        command = Int32MultiArray()
-        command.data = list(output.command_pwm)
-        self._command_pub.publish(command)
-        self._publish_observable_state(force=False)
-
-    def _publish_observable_state(self, *, force: bool = True) -> None:
-        output = self._core.output
+    def _publish_observable_state(
+        self,
+        *,
+        force: bool = True,
+        output: Optional[FanControlOutput] = None,
+    ) -> None:
+        if output is None:
+            with self._core_lock:
+                output = self._core.output
         signature = (
             output.state,
             output.auto_enabled,
@@ -251,6 +314,7 @@ class FanCommandManager(Node):
         if not force and signature == self._last_observable_signature:
             return
         self._last_observable_signature = signature
+
         state = String()
         state.data = output.state.value
         self._control_state_pub.publish(state)
@@ -268,8 +332,9 @@ class FanCommandManager(Node):
         self._auto_target_pub.publish(target)
 
     def destroy_node(self) -> None:
-        self._core.request_auto(False, time.monotonic())
-        self._evaluate_and_publish()
+        with self._core_lock:
+            self._core.request_auto(False, time.monotonic())
+        self._finish_observation(force=True)
         super().destroy_node()
 
 

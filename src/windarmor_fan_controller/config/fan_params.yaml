@@ -11,8 +11,8 @@ fan_controller:
     frame_width_sec: 0.020
     arm_delay_sec: 3.0
 
-    # 超过该时间未收到 /fans/* 指令时自动回到最低油门。
-    # fan_keyboard 会以 10 Hz 持续发送心跳；设为 0 可禁用。
+    # 超过该时间未收到 /fans/command_pwm 时自动回到最低油门。
+    # 必须是严格大于 0 的有限数值；安全看门狗不可通过参数关闭。
     command_timeout_sec: 1.0
 
     # enabled 状态使用可靠、transient-local QoS，并以该频率发送心跳。
@@ -48,7 +48,8 @@ fan_command_manager:
     motor_mode_timeout_sec: 1.0
     fan_enabled_timeout_sec: 1.0
 
-    # fans.launch.py 独立运行时保持 false；统一 bringup 会覆盖为 true。
+    # 保留现有 launch 参数兼容；显式 MANUAL 授权始终要求新鲜合法电机模式。
+    # 统一 bringup 继续覆盖为 true。
     require_motor_mode_for_manual: false
 
 fan_keyboard:

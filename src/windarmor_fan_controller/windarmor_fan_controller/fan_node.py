@@ -1,7 +1,7 @@
 """双涵道风扇 ROS 2 控制节点。"""
 
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 import rclpy
 from rclpy.node import Node
@@ -9,7 +9,21 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, Int32MultiArray
 from std_srvs.srv import SetBool, Trigger
 
-from .pwm import FanCommandGate, PwmRange
+from .pwm import (
+    FanCommandGate,
+    PwmRange,
+    validate_positive_finite_timeout,
+)
+
+
+def initialize_after_timeout_validation(
+    timeout_value,
+    initializer: Callable[[], None],
+) -> float:
+    """先校验安全看门狗，再允许任何 GPIO/PWM 初始化。"""
+    timeout = validate_positive_finite_timeout(timeout_value)
+    initializer()
+    return timeout
 
 
 class DualFanController(Node):
@@ -40,9 +54,7 @@ class DualFanController(Node):
         )
         self._frame_width = float(self.get_parameter("frame_width_sec").value)
         self._arm_delay = max(0.0, float(self.get_parameter("arm_delay_sec").value))
-        self._command_timeout = max(
-            0.0, float(self.get_parameter("command_timeout_sec").value)
-        )
+        command_timeout_value = self.get_parameter("command_timeout_sec").value
         self._warning_throttle = max(
             0.0, float(self.get_parameter("warning_throttle_sec").value)
         )
@@ -64,7 +76,10 @@ class DualFanController(Node):
         self._right_esc = None
         self._pin_factory = None
 
-        self._initialize_gpio()
+        self._command_timeout = initialize_after_timeout_validation(
+            command_timeout_value,
+            self._initialize_gpio,
+        )
 
         self._pair_sub = self.create_subscription(
             Int32MultiArray, "/fans/command_pwm", self._on_pair_pwm, 10
@@ -90,11 +105,7 @@ class DualFanController(Node):
             Bool, "/fans/enabled", state_qos
         )
 
-        timer_period = (
-            max(0.05, self._command_timeout / 2.0)
-            if self._command_timeout > 0.0
-            else 1.0
-        )
+        timer_period = max(0.05, self._command_timeout / 2.0)
         self._watchdog_timer = self.create_timer(timer_period, self._watchdog)
         self._enabled_status_timer = self.create_timer(
             1.0 / enabled_status_rate, self._publish_enabled

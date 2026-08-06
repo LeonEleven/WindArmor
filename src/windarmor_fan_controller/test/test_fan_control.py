@@ -26,9 +26,11 @@ def enabled_core(*, require_motor: bool = False) -> FanControlCore:
     core = FanControlCore(
         FanControlConfig(require_motor_mode_for_manual=require_motor)
     )
+    core.update_e_stop(False, 0.0)
     core.update_fan_enabled(True, 0.0)
-    if require_motor:
-        core.update_motor_mode("MANUAL", 0.0)
+    core.update_motor_mode("MANUAL", 0.0)
+    assert core.request_manual(True, 0.0)[0]
+    assert core.update_manual_pair(800, 800, 0.0)
     return core
 
 
@@ -304,7 +306,7 @@ def test_auto_condition_loss_clears_request_and_stops_immediately() -> None:
     assert output.command_pwm == (800, 800)
     core.update_motor_mode("AUTO", 0.05)
     core.update_pose(0.0, math.radians(20.0), 0.05)
-    assert core.step(0.05).state == FanControlState.MANUAL_WAITING
+    assert core.step(0.05).state == FanControlState.MANUAL_DISARMED
 
 
 def test_auto_disable_always_succeeds_and_clears_manual_cache() -> None:
@@ -313,7 +315,7 @@ def test_auto_disable_always_succeeds_and_clears_manual_cache() -> None:
     success, _ = core.request_auto(False, 0.1)
     assert success
     output = core.step(0.1)
-    assert output.state == FanControlState.MANUAL_WAITING
+    assert output.state == FanControlState.MANUAL_DISARMED
     assert output.command_pwm == (800, 800)
 
 
@@ -350,24 +352,31 @@ def test_bottom_disabled_and_timeout_clear_caches() -> None:
     core.update_fan_enabled(False, 0.1)
     assert core.step(0.1).state == FanControlState.DISABLED
     core.update_fan_enabled(True, 0.2)
-    assert core.step(0.2).state == FanControlState.MANUAL_WAITING
-    core.update_manual_pair(1000, 1100, 0.3)
+    core.update_motor_mode("MANUAL", 0.2)
+    assert core.step(0.2).state == FanControlState.DISABLED
+    assert core.request_manual(True, 0.21)[0]
+    assert core.update_manual_pair(800, 800, 0.22)
+    assert core.update_manual_pair(1000, 1100, 0.3)
     assert core.step(1.31).state == FanControlState.DISABLED
     core.update_fan_enabled(True, 1.32)
     assert core.step(1.32).command_pwm == (800, 800)
 
 
-def test_independent_e_stop_requires_post_event_fan_enable() -> None:
+def test_independent_e_stop_requires_explicit_reset() -> None:
     core = enabled_core()
     core.emergency_stop()
     core.update_fan_enabled(False, 0.1)
     assert core.e_stop_latched
     core.update_fan_enabled(True, 0.2)
+    core.update_motor_mode("MANUAL", 0.2)
+    core.update_e_stop(False, 0.2)
+    assert core.e_stop_latched
+    assert core.reset_e_stop(0.2)[0]
     assert not core.e_stop_latched
-    assert core.step(0.2).state == FanControlState.MANUAL_WAITING
+    assert core.step(0.2).state == FanControlState.MANUAL_DISARMED
 
 
-def test_unified_e_stop_requires_both_post_event_recoveries() -> None:
+def test_unified_e_stop_requires_explicit_reset_after_observations() -> None:
     core = enabled_core(require_motor=True)
     core.emergency_stop()
     core.update_fan_enabled(True, 0.1)
@@ -375,8 +384,10 @@ def test_unified_e_stop_requires_both_post_event_recoveries() -> None:
     core.update_motor_mode("EMERGENCY_STOP", 0.1)
     assert core.e_stop_latched
     core.update_motor_mode("MANUAL", 0.2)
-    assert not core.e_stop_latched
-    assert core.step(0.2).state == FanControlState.MANUAL_WAITING
+    core.update_e_stop(False, 0.2)
+    assert core.e_stop_latched
+    assert core.reset_e_stop(0.2)[0]
+    assert core.step(0.2).state == FanControlState.MANUAL_DISARMED
 
 
 def test_unified_e_stop_recovery_does_not_restore_old_data() -> None:
@@ -389,8 +400,10 @@ def test_unified_e_stop_recovery_does_not_restore_old_data() -> None:
     core.emergency_stop()
     core.update_fan_enabled(True, 0.1)
     core.update_motor_mode("AUTO", 0.1)
+    core.update_e_stop(False, 0.1)
+    assert core.reset_e_stop(0.1)[0]
     output = core.step(0.1)
-    assert output.state == FanControlState.MANUAL_WAITING
+    assert output.state == FanControlState.MANUAL_DISARMED
     assert output.command_pwm == (800, 800)
     assert not output.auto_enabled
 
@@ -401,7 +414,7 @@ def test_unified_manual_stops_when_motor_mode_times_out() -> None:
     assert core.step(0.1).state == FanControlState.MANUAL_ACTIVE
     core.update_fan_enabled(True, 1.01)
     output = core.step(1.01)
-    assert output.state == FanControlState.SAFE_STOP
+    assert output.state == FanControlState.MANUAL_DISARMED
     assert output.command_pwm == (800, 800)
 
 
@@ -412,3 +425,226 @@ def test_yaml_defaults_select_smoothstep_and_preserve_pwm_limits() -> None:
     assert 'fan_response_curve: "smoothstep"' in config
     assert "fan_auto_max_pwm_us: 1400" in config
     assert "max_pwm_us: 2200" in config
+
+
+# ---------------------------------------------------------------------------
+# 风扇安全与确定性加固回归规格
+# ---------------------------------------------------------------------------
+
+
+def prepared_auto_core() -> FanControlCore:
+    core = FanControlCore(
+        FanControlConfig(require_motor_mode_for_manual=True)
+    )
+    core.update_e_stop(False, 0.0)
+    core.update_fan_enabled(True, 0.0)
+    core.update_motor_mode("AUTO", 0.0)
+    core.update_pose(0.0, 0.0, 0.0)
+    assert core.request_auto(True, 0.01)[0]
+    core.update_pose(0.0, math.radians(20.0), 0.02)
+    return core
+
+
+def test_only_control_tick_advances_auto_slew_in_either_direction() -> None:
+    core = prepared_auto_core()
+    first = core.control_tick(0.03)
+    assert first.command_pwm == (810, 810)
+
+    for timestamp in (0.031, 0.032, 0.033):
+        core.update_pose(0.0, math.radians(25.0), timestamp)
+        core.update_motor_mode("AUTO", timestamp)
+        core.update_fan_enabled(True, timestamp)
+        assert core.command_pwm == (810, 810)
+
+    assert core.control_tick(0.04).command_pwm == (820, 820)
+    core.update_pose(0.0, 0.0, 0.041)
+    assert core.command_pwm == (820, 820)
+    assert core.control_tick(0.05).command_pwm == (800, 800)
+
+
+@pytest.mark.parametrize("event", ["e_stop", "disabled", "unknown", "pose"])
+def test_safety_events_force_immediate_stop(event: str) -> None:
+    core = prepared_auto_core()
+    assert core.control_tick(0.03).command_pwm == (810, 810)
+
+    if event == "e_stop":
+        core.update_e_stop(True, 0.04)
+    elif event == "disabled":
+        core.update_fan_enabled(False, 0.04)
+    elif event == "unknown":
+        assert not core.update_motor_mode("UNKNOWN", 0.04)
+    else:
+        core.invalidate_pose()
+
+    assert core.command_pwm == (800, 800)
+    assert core.take_immediate_stop()
+
+
+def test_e_stop_heartbeats_and_false_input_never_auto_reset_latch() -> None:
+    core = prepared_auto_core()
+    core.control_tick(0.03)
+    core.update_e_stop(True, 0.04)
+
+    for timestamp in (0.05, 0.06, 0.07):
+        core.update_fan_enabled(True, timestamp)
+        core.update_motor_mode("MANUAL", timestamp)
+        core.update_pose(0.0, 0.0, timestamp)
+        assert not core.update_manual_pair(1000, 1000, timestamp)
+    core.update_e_stop(False, 0.08)
+
+    assert core.e_stop_latched
+    assert core.control_tick(0.08).command_pwm == (800, 800)
+
+
+@pytest.mark.parametrize(
+    ("prepare", "message_fragment"),
+    [
+        (lambda core: None, "急停输入"),
+        (lambda core: core.update_e_stop(False, 0.1), "enabled"),
+        (
+            lambda core: (
+                core.update_e_stop(False, 0.1),
+                core.update_fan_enabled(False, 0.1),
+            ),
+            "enabled",
+        ),
+        (
+            lambda core: (
+                core.update_e_stop(False, 0.1),
+                core.update_fan_enabled(True, 0.1),
+            ),
+            "电机模式",
+        ),
+        (
+            lambda core: (
+                core.update_e_stop(False, 0.1),
+                core.update_fan_enabled(True, 0.1),
+                core.update_motor_mode("ERROR", 0.1),
+            ),
+            "电机模式",
+        ),
+    ],
+)
+def test_reset_e_stop_reports_missing_or_unsafe_preconditions(
+    prepare, message_fragment
+) -> None:
+    core = FanControlCore(FanControlConfig())
+    core.update_e_stop(True, 0.0)
+    prepare(core)
+    success, message = core.reset_e_stop(0.2)
+    assert not success
+    assert message_fragment in message
+    assert core.e_stop_latched
+
+
+def test_explicit_e_stop_reset_keeps_every_control_path_disarmed() -> None:
+    core = FanControlCore(FanControlConfig())
+    core.update_e_stop(True, 0.0)
+    core.update_e_stop(False, 0.1)
+    core.update_fan_enabled(True, 0.1)
+    core.update_motor_mode("MANUAL", 0.1)
+
+    success, _ = core.reset_e_stop(0.2)
+    assert success
+    assert not core.e_stop_latched
+    assert not core.auto_requested
+    assert not core.manual_armed
+    assert core.command_pwm == (800, 800)
+    assert core.state == FanControlState.MANUAL_DISARMED
+
+    core.update_e_stop(True, 0.3)
+    assert core.e_stop_latched
+    assert core.state == FanControlState.EMERGENCY_STOP
+
+
+def test_reset_e_stop_rejects_stale_fan_and_motor_observations() -> None:
+    core = FanControlCore(FanControlConfig())
+    core.update_e_stop(True, 0.0)
+    core.update_e_stop(False, 2.0)
+    core.update_fan_enabled(True, 0.0)
+    core.update_motor_mode("MANUAL", 2.0)
+    assert not core.reset_e_stop(2.0)[0]
+
+    core.update_fan_enabled(True, 2.1)
+    core.update_motor_mode("MANUAL", 0.0)
+    success, message = core.reset_e_stop(2.1)
+    assert not success
+    assert "电机模式" in message
+
+
+def test_manual_authorization_rejects_each_unsafe_condition() -> None:
+    core = FanControlCore(FanControlConfig())
+    core.update_e_stop(True, 0.0)
+    assert not core.request_manual(True, 0.1)[0]
+
+    core = FanControlCore(FanControlConfig())
+    core.update_e_stop(False, 0.0)
+    core.update_fan_enabled(False, 0.0)
+    core.update_motor_mode("MANUAL", 0.0)
+    assert not core.request_manual(True, 0.1)[0]
+
+    core = FanControlCore(FanControlConfig())
+    core.update_e_stop(False, 0.0)
+    core.update_fan_enabled(True, 0.0)
+    core.update_motor_mode("ERROR", 0.0)
+    assert not core.request_manual(True, 0.1)[0]
+
+    core = prepared_auto_core()
+    assert not core.request_manual(True, 0.03)[0]
+    assert core.command_pwm == (800, 800)
+
+
+def test_auto_fault_rejects_background_manual_heartbeats_until_rearmed() -> None:
+    core = prepared_auto_core()
+    core.control_tick(0.03)
+    core.update_motor_mode("MANUAL", 0.04)
+    for timestamp in (0.05, 0.06, 0.07):
+        assert not core.update_manual_pair(1200, 1200, timestamp)
+        assert core.control_tick(timestamp).command_pwm == (800, 800)
+    assert not core.manual_armed
+    assert core.state == FanControlState.MANUAL_DISARMED
+
+
+def test_manual_authorization_requires_new_pair_stop_baseline() -> None:
+    core = FanControlCore(FanControlConfig())
+    core.update_e_stop(False, 0.0)
+    core.update_fan_enabled(True, 0.0)
+    core.update_motor_mode("MANUAL", 0.0)
+
+    success, _ = core.request_manual(True, 0.1)
+    assert success
+    assert core.manual_armed
+    assert core.state == FanControlState.MANUAL_WAITING_FOR_NEUTRAL
+    assert not core.update_manual_pair(1200, 1200, 0.11)
+    assert core.update_manual_pair(800, 800, 0.12)
+    assert core.state == FanControlState.MANUAL_WAITING
+    assert core.update_manual_pair(1200, 1210, 0.13)
+    assert core.control_tick(0.14).command_pwm == (1200, 1210)
+
+    assert core.request_manual(False, 0.15)[0]
+    assert core.command_pwm == (800, 800)
+    assert not core.manual_armed
+    assert core.request_manual(True, 0.16)[0]
+    assert not core.update_manual_pair(1200, 1200, 0.17)
+
+
+def test_unknown_motor_mode_invalidates_cache_and_all_authorizations() -> None:
+    core = FanControlCore(FanControlConfig())
+    core.update_e_stop(False, 0.0)
+    core.update_fan_enabled(True, 0.0)
+    core.update_motor_mode("MANUAL", 0.0)
+    assert core.request_manual(True, 0.01)[0]
+    assert core.update_manual_pair(800, 800, 0.02)
+    assert core.update_manual_pair(1100, 1100, 0.03)
+    assert core.control_tick(0.04).command_pwm == (1100, 1100)
+
+    assert not core.update_motor_mode("not-a-mode", 0.05)
+    assert core._motor_mode is None
+    assert core._motor_mode_at is None
+    assert not core.auto_requested
+    assert not core.manual_armed
+    assert core.command_pwm == (800, 800)
+
+    core.update_motor_mode("MANUAL", 0.06)
+    assert not core.update_manual_pair(1100, 1100, 0.07)
+    assert core.control_tick(0.08).command_pwm == (800, 800)

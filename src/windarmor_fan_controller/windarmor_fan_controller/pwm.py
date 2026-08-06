@@ -5,6 +5,17 @@ from dataclasses import dataclass
 from typing import Optional
 
 
+def validate_positive_finite_timeout(value) -> float:
+    """返回正有限超时；非法值不得被解释为关闭安全看门狗。"""
+    try:
+        timeout = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("command_timeout_sec 必须是正有限数值") from exc
+    if not math.isfinite(timeout) or timeout <= 0.0:
+        raise ValueError("command_timeout_sec 必须是正有限数值")
+    return timeout
+
+
 @dataclass(frozen=True)
 class PwmRange:
     """涵道风扇电调使用的 PWM 范围。"""
@@ -53,9 +64,9 @@ class FanCommandGate:
         self.timed_out = False
 
     def check_timeout(self, now: float, timeout: float) -> bool:
+        timeout = validate_positive_finite_timeout(timeout)
         if (
             not self.enabled
-            or timeout <= 0.0
             or self.last_command_time is None
         ):
             return False

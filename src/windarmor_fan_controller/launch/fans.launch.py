@@ -27,7 +27,9 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "require_motor_mode_for_manual",
                 default_value="false",
-                description="手动风扇是否要求新鲜且允许的电机模式",
+                description=(
+                    "兼容参数；显式手动授权始终要求新鲜合法电机模式"
+                ),
             ),
             Node(
                 package="windarmor_fan_controller",

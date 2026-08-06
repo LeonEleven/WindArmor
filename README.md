@@ -7,12 +7,12 @@ WindArmor 当前把两个已经过实机测试的前置项目整合为一个 ROS
 - 4 个小米 CyberGear 电机；
 - 2 个涵道风扇。
 
-当前稳定发布为 `v0.3.0`：统一相对姿态、电机模式状态、风扇手动/自动仲裁
-和强化急停恢复已经实现，并已由用户按 README 完成机器人功能验证。当前工作
-分支还包含 `v0.3.0` 标签之后的电机速度统一改进；该改进只完成软件实现和
-纯软件测试，新的三模式 `4.0 rad/s` 候选速度尚未实机验证，且不属于
-`v0.3.0` 标签内容。自动风扇仍默认关闭，`1200 μs` 起转值和 `1400 μs`
-自动上限也仍需按实际设备标定。
+当前稳定发布为 `v0.3.1`：它在 `v0.3.0` 的统一相对姿态、电机模式状态和
+风扇手动/自动仲裁基础上，包含统一 MANUAL/AUTO/HOME 电机推进速度、AUTO
+姿态增益和三种风扇响应曲线。当前开发工作区还包含 `v0.3.1` 之后的风扇控制
+安全与确定性加固；该加固只完成软件实现和纯软件测试，尚未提交，也未进行实机
+验证。三模式 `4.0 rad/s`、`1200 μs` 起转值和 `1400 μs` 自动上限仍需按
+实际设备验证或标定。
 
 ## 硬件默认配置
 
@@ -241,24 +241,33 @@ ros2 service call /fans/auto_enable \
 ros2 topic pub --once /e_stop std_msgs/msg/Bool "{data: true}"
 ```
 
-确认设备处于中位且异常原因已经排除后，按以下顺序恢复：
+确认设备处于中位且异常原因已经排除后，按以下顺序恢复。管理器急停锁存不会
+再被 enabled、motor mode 或姿态心跳自动清除，必须显式观察到
+`/e_stop=false` 并调用 `/fans/reset_e_stop`：
 
 ```bash
+ros2 topic pub --once /e_stop std_msgs/msg/Bool "{data: false}"
 ros2 service call /enable_motor \
   std_srvs/srv/SetBool \
   "{data: true}"
 ros2 service call /fans/enable \
   std_srvs/srv/SetBool \
   "{data: true}"
+ros2 service call /fans/reset_e_stop std_srvs/srv/Trigger "{}"
 ```
 
-`/enable_motor=true` 只恢复到 MANUAL。随后仍需：
+`/fans/reset_e_stop` 只复位管理器授权状态，不会调用底层启用服务，也不会恢复
+旧 AUTO、旧手动 PWM 或旧变化率目标；成功后仍保持 `[800, 800]`，MANUAL 和
+AUTO 都未授权。`/enable_motor=true` 只恢复到 MANUAL。随后必须重新选择一种
+控制路径：
 
-1. 在 launch 终端按一次 `m`，重新进入电机 AUTO；
-2. 确认 `/motors/control_mode=AUTO`；
-3. 再调用 `/fans/auto_enable=true`。
+1. AUTO：在 launch 终端按 `m` 进入电机 AUTO，确认新鲜状态和姿态后调用
+   `/fans/auto_enable=true`；或
+2. MANUAL：调用 `/fans/manual_enable=true`，先发送本次授权后的双路停止基线
+   `[800, 800]`，之后才发送新的非停止命令。
 
-系统不会在急停条件消失后偷偷恢复旧 AUTO 或旧 PWM。
+系统不会在急停条件消失后、收到普通心跳后或 AUTO 故障退出后偷偷恢复旧 AUTO、
+MANUAL 授权或旧 PWM。
 
 ### 正常结束
 
@@ -270,7 +279,17 @@ ros2 service call /fans/enable \
 ### 手动风扇键盘（非 AUTO）
 
 需要手动控制风扇时，可在另一个终端运行键盘节点，避免与电机键盘争用同一个
-终端输入。启用风扇 AUTO 后不要同时发送手动命令：
+终端输入。开始调节前必须确认急停未锁存、底层风扇 enabled 和电机模式状态
+均新鲜，然后显式授权管理器 MANUAL：
+
+```bash
+ros2 service call /fans/manual_enable std_srvs/srv/SetBool "{data: true}"
+```
+
+授权成功后进入 `MANUAL_WAITING_FOR_NEUTRAL`。键盘观察
+`/fans/control_state`，清除本地旧油门并发送 `[800, 800]` 停止基线；管理器
+收到这条本次授权后的双路停止命令后进入 `MANUAL_WAITING`，此后用户新的调节
+输入才可生效。启用风扇 AUTO 后不要同时发送手动命令：
 
 ```bash
 cd ~/workspace/WindArmor
@@ -285,7 +304,8 @@ ros2 run windarmor_fan_controller fan_keyboard
 - `↑` / `↓`：以 20 μs 步进增加或降低所选风扇；
 - `s`：两个风扇回到 800 μs；
 - `空格`：向 `/e_stop` 发布系统急停，电机和风扇都会停止；
-- `r`：重新启用风扇控制，但仍保持 800 μs；
+- `r`：只调用底层 `/fans/enable`，仍保持 800 μs；它不会复位管理器急停或
+  自动授权 MANUAL；
 - `q`：风扇回到 800 μs并退出键盘节点。
 
 电机键位沿用前置项目，详见
@@ -293,7 +313,10 @@ ros2 run windarmor_fan_controller fan_keyboard
 
 ## ROS 2 控制接口
 
-正常模式下，公共手动接口保持兼容。双路同时控制（数组顺序为左、右）：
+公共手动话题名称和消息类型保持兼容，但现在必须先通过
+`/fans/manual_enable=true` 显式授权并建立新的双路停止基线。未授权、等待停止
+基线、AUTO、急停、disabled 或安全停止状态会拒绝非停止命令。双路同时控制
+（数组顺序为左、右）：
 
 ```bash
 ros2 topic pub -r 10 /fans/pwm std_msgs/msg/Int32MultiArray \
@@ -304,9 +327,14 @@ ros2 topic pub -r 10 /fans/pwm std_msgs/msg/Int32MultiArray \
 通道时间；默认 `0.5 s` 后仅停止超时的一侧，一侧消息不会为另一侧续期。
 越界消息会被拒绝，不会静默限幅或刷新时间。
 
-这些公共话题只进入 `fan_command_manager`。管理器仲裁后通过内部
+这些公共话题只进入 `fan_command_manager`。普通回调只校验并更新缓存，不发布
+正常命令；唯一的 `control_rate_hz` 控制定时器每周期最多推进一次 AUTO 斜坡并
+通过内部
 `/fans/command_pwm` 向底层发送唯一正常命令；该内部话题不属于普通公共
-控制接口。底层仍保留最终限幅和默认 `1.0 s` 命令看门狗。当前实际输出可从
+控制接口。急停、disabled、未知模式、关键状态超时或姿态/零点失效仍会绕过
+普通斜坡并立即发送停止值。底层保留最终限幅和默认 `1.0 s` 命令看门狗；
+`command_timeout_sec` 必须是严格大于零的有限数值，非法值会在 GPIO 初始化前
+使节点构造失败，不能用 `0` 关闭看门狗。当前实际输出可从
 `/fans/status_pwm` 查看，底层接受状态可从 `/fans/enabled` 查看。
 
 ### 相对姿态、电机模式与风扇 AUTO
@@ -330,9 +358,16 @@ ros2 service call /fans/auto_enable std_srvs/srv/SetBool "{data: true}"
 `/fans/auto_target_pwm` 是变化率限制前的目标，
 `/fans/control_state` 是管理器状态。
 
+新增的公开状态包括 `MANUAL_DISARMED`（手动未授权）和
+`MANUAL_WAITING_FOR_NEUTRAL`（已授权但仍等待本次授权后的双路停止基线）。
+原有 `MANUAL_WAITING`、`MANUAL_ACTIVE`、`AUTO_WAITING`、`AUTO_ACTIVE`、
+`SAFE_STOP`、`DISABLED` 和 `EMERGENCY_STOP` 继续保留。
+
 AUTO 使用 `max()` 合成姿态活动量：正负 pitch 都同时提高左右目标；左倾只
 增加左侧 roll 分量，右倾只增加右侧 roll 分量。任一姿态、电机模式或底层
-状态超时都会立即停止、清除 AUTO 请求，条件恢复后也不会自动重新启用。
+状态超时都会立即停止、清除 AUTO 请求并取消 MANUAL 授权；条件恢复和后台
+手动心跳都不会自动重新启用。未知、空白或不受支持的电机模式会使旧模式缓存
+失效并进入安全停止，只能通过适用的显式授权路径恢复。
 
 活动角到 AUTO 目标 PWM 的响应曲线由以下参数选择：
 
@@ -379,17 +414,22 @@ ros2 service call /imu/set_zero std_srvs/srv/Trigger "{}"
 ros2 service call /motors/set_zero std_srvs/srv/Trigger "{}"
 ```
 
-急停后分别恢复电机与风扇（恢复时风扇仍保持最低油门和空命令缓存）：
+急停后分别恢复电机与底层风扇，再显式复位管理器（全过程保持最低油门和空命令
+缓存）：
 
 ```bash
+ros2 topic pub --once /e_stop std_msgs/msg/Bool "{data: false}"
 ros2 service call /enable_motor std_srvs/srv/SetBool "{data: true}"
 ros2 service call /fans/enable std_srvs/srv/SetBool "{data: true}"
+ros2 service call /fans/reset_e_stop std_srvs/srv/Trigger "{}"
 ```
 
 `/enable_motor=true` 成功后只恢复到 `MANUAL`，不会直接进入 AUTO。
 `/fans/enable=true` 会保持停止并等待新命令，绝不恢复旧 PWM。在统一
-`windarmor.launch.py` 模式中，单独恢复风扇还不能清除管理器的系统急停
-锁存；急停事件之后还必须收到新的、允许的电机 `MANUAL` 或 `AUTO` 状态。
+`windarmor.launch.py` 模式中，底层启用和新鲜合法电机模式也不能自动清除管理器
+急停；只有 `/fans/reset_e_stop` 可以显式复位。复位后还要选择
+`/fans/manual_enable=true` 或 `/fans/auto_enable=true`，两者都不会代替底层
+`/fans/enable`。
 
 只停止风扇而不影响电机（该服务会把底层锁存为 disabled）：
 
@@ -413,10 +453,11 @@ ros2 launch imu_cybergear_ros2 imu_cybergear_system.launch.py
 ros2 launch windarmor_fan_controller fans.launch.py
 ```
 
-`fans.launch.py` 启动一个管理器和一个底层控制器，默认
-`require_motor_mode_for_manual=false`，因此可独立接收公共手动命令；没有
-电机 AUTO 状态时仍不能启用风扇 AUTO。统一 `windarmor.launch.py` 会覆盖为
-`true`，手动风扇也要求新鲜的 `MANUAL` 或 `AUTO` 电机状态。
+`fans.launch.py` 启动一个管理器和一个底层控制器。为保持 launch 参数兼容，
+`require_motor_mode_for_manual` 仍存在且默认 `false`；安全加固后的显式
+`/fans/manual_enable=true` 仍始终要求新鲜合法的 `MANUAL` 或 `AUTO` 电机模式，
+因此不能再只靠独立风扇 launch 和后台 PWM 心跳进入手动输出。统一
+`windarmor.launch.py` 继续覆盖该兼容参数为 `true`。
 
 单独运行 `fan_controller` 只用于已授权的底层维护：它会占用 GPIO12/13、
 初始化电调，只订阅内部 `/fans/command_pwm`，且运行前必须确认管理器未运行。
