@@ -4,7 +4,7 @@ package_name = "imu_cybergear_ros2"
 
 setup(
     name=package_name,
-    version="0.2.0",
+    version="0.3.2",
     packages=find_packages(exclude=["test"]),
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
@@ -28,7 +28,7 @@ setup(
     zip_safe=True,
     maintainer="imu_cybergear_user",
     maintainer_email="user@example.com",
-    description="ROS 2 package for IMU-driven dynamic CyberGear motor control.",
+    description="ROS 2 package for IMU-driven CyberGear motor control with safety watchdog, emergency stop, motor feedback monitoring, and automatic reconnection.",
     license="Apache-2.0",
     tests_require=["pytest"],
     entry_points={

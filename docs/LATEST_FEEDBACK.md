@@ -1,4 +1,4 @@
-# 最新反馈：运行期通信断线检测与受控重连
+# 最新反馈：v0.3.2 Release Candidate 冻结与发布审计
 
 > 本文件只保留最近一次反馈。
 >
@@ -6,306 +6,339 @@
 
 ## 1. 执行结论
 
-- 已完成 USB-CAN 与 SocketCAN 的运行期 transport fault 检测、明确异常类型、
-  独立事件通道、connection generation 和 reader 退出语义。
-- `reconnect_on_disconnect` 已具有实际运行期语义：`false` 只执行故障响应和关闭，
-  `true` 启动最多一个有界、可取消的 transport-only recovery worker。
-- 通信恢复后固定进入 `RECONNECTED_LOCKED`，ControllerState 与
-  `/motors/control_mode` 继续保持 `ERROR`；不初始化电机、不恢复 MANUAL/AUTO/HOME、
-  不恢复机械零点流程，也不重发旧目标。
-- 初始连接重试与运行期重连保持分离，既有四电机初始化顺序和事务式回滚保持。
-- 新增 53 项 transport/reconnect 相关测试实例；电机包 `359 passed`，风扇关键
-  回归 `98 passed`，三包完整 `475 tests, 0 errors, 0 failures, 0 skipped`。
-- `./scripts/ci_software.sh` 完整通过。Codex 未运行真实硬件；用户自行完成
-  MANUAL/AUTO 实机正常功能回归并报告无问题。
-- 用户已授权本任务使用中文 commit 并 push；`docs/NEXT_COMMAND.md` 继续排除在
-  提交之外，tag 不变，实际 commit、push 和远端 CI 结果以最终终端汇报为准。
+- 已完成 `v0.3.1 -> cc9e75e` 的发布前审计、版本元数据统一、文档冻结、
+  公共接口/默认参数契约测试与完整纯软件回归。
+- 未发现未解决的 `v0.3.2` 发布阻塞项。
+- 三个 ROS 2 package 的 `package.xml` 与 `setup.py` 已全部统一为 `0.3.2`，
+  name、description、maintainer、email 和 license 在同一 package 内一致。
+- 公共 ROS 接口未发现非预期删除、重命名、类型或 QoS 变化；默认控制
+  参数未发现非预期变化。
+- 本 RC 不修改任何运行时控制算法、状态机、急停或 transport recovery 实现。
+- `./scripts/ci_software.sh` 完整通过：三包完整结果为
+  `480 tests, 0 errors, 0 failures, 0 skipped`。
+- 达到 RC 本地纯软件条件，建议在用户审查、授权 commit/push 且新 Hosted CI
+  green 后，进入用户最终整机正常功能回归。
 
 ## 2. 开始前 Git 与 CI 基线
 
 - 分支：`master`。
-- HEAD：`d97c51ada431fce5dda87bc2d2b7d9bda945dc71`。
-- upstream：`origin/master`，同为 `d97c51ada431fce5dda87bc2d2b7d9bda945dc71`。
+- HEAD：`cc9e75e0473bfdc1764577904e71c7f9bab21e93`。
+- upstream：`origin/master`，同为 `cc9e75e0473bfdc1764577904e71c7f9bab21e93`。
 - 本地领先/落后：`0/0`。
-- 开始时唯一工作区修改：`M docs/NEXT_COMMAND.md`，无未跟踪文件。
 - `v0.3.0` commit：`c3b3c3989674c2c1c902e940953da87fd5812db5`。
 - `v0.3.1` commit：`5d7bd0fbf0acac3be4f2354a616d109928d5091d`。
-- HEAD 位于 `v0.3.1` 后 7 个提交；开始时 describe 为
-  `v0.3.1-7-gd97c51a-dirty`。
-- 只读 `git ls-remote` 确认远端 `master` 和所有 tag 未漂移。
-- 开始时最新 GitHub Hosted `WindArmor Software CI` 为 run `31143934086`：
-  HEAD `d97c51a`、结论 `success`、全部 step 成功，并有 1 个未过期日志 artifact。
+- HEAD 位于 `v0.3.1` 后 8 个提交；开始时 describe 为 `v0.3.1-8-gcc9e75e-dirty`。
+- 开始时唯一工作区修改：`M docs/NEXT_COMMAND.md`，无未跟踪文件。
+- 只读 `git ls-remote` 确认 `origin/master` 与现有 tags 未漂移。
+- 开始时最新 GitHub Hosted `WindArmor Software CI` 为 run
+  `31157555077`：HEAD `cc9e75e`、`completed/success`、全部 steps 成功。
+- run `31157555077` 有 1 个未过期 artifact：
+  `windarmor-software-ci-logs-31157555077`，过期时间为 2026-08-17。
 
-## 3. 修改文件
+## 3. v0.3.1 到当前 HEAD 的变化审计
 
-### 3.1 任务前已有修改
+### 3.1 Fan safety
 
-- `docs/NEXT_COMMAND.md`：用户任务说明；本任务未修改、覆盖、暂存或还原。
+- 定时器是唯一正常 PWM slew 推进和内部命令发布路径。
+- e-stop 不再被 heartbeat 自动恢复，必须显式 `/fans/reset_e_stop`。
+- MANUAL 新增显式 `/fans/manual_enable` 授权和本次授权后的双路 neutral handshake。
+- 未知电机模式失效化缓存并立即安全停止。
+- 看门狗必须为正有限值，且在 GPIO 初始化前校验。
+- 死区、滞回、响应曲线、PWM 上下限与 slew 步长未发现非预期改变。
 
-### 3.2 本任务修改
+### 3.2 Motor command
 
-- `src/imu_cybergear_ros2/imu_cybergear_ros2/transport_recovery.py`：新增 transport
-  类型、事件、策略、状态快照和恢复协调器。
-- `cybergear_driver.py`：新增明确 transport exception/event/generation，并加固
-  USB-CAN、SocketCAN 的读写、connect、close 和 reader 生命周期。
-- `imu_motor_controller_node.py`：接入 transport fault、recovery、ROS 状态发布和
-  lifecycle 取消/清理。
-- `motor_manager.py`：接入 transport ERROR 锁存、普通命令阻断、目标同步、统一
-  stop claim 和键盘状态汇总。
-- `motor_config.py`、`controller_state.py`：新增重连参数契约与 transport 状态转换
-  reason/source。
-- `fake_motor_driver.py`：增加纯内存 transport event、generation 和可控 reconnect。
-- `test_transport_backends.py`、`test_transport_recovery.py`、
-  `test_transport_lifecycle.py`：新增纯软件故障注入测试。
-- `test_motor_config.py`、`test_motor_lifecycle.py`：补充参数与 callback 清理回归。
-- `imu_cybergear_params.yaml`：补充运行期重连参数及安全语义注释。
-- 根 `README.md`、电机包 `README.md`、`AGENTS.md`：同步行为、锁设计、测试能力与
-  硬件边界。
-- `docs/LATEST_FEEDBACK.md`：按本次实际结果完整覆盖。
+- `current_targets` 继续严格表示最近成功发送给驱动的目标。
+- position/speed 写入失败不提前提交软件状态或时间戳。
+- batch partial write 保留失败前已成功的前缀，失败后阻断普通命令。
+- command fault 尽力停止全部电机、进入 `ERROR` 并不自动恢复。
 
-## 4. 修改前通信架构
+### 3.3 Lifecycle
 
-- 初始连接调用链为 `MotorManager.connect_and_init_motors()` →
-  `CyberGearDriver.connect_with_retry(max_attempts=5, initial_delay=1.0)`。
-- 初始退避倍率为 `1.5`、最大 delay 为 `10.0s`；连接期间持有 driver I/O lock。
-- 初始连接成功后按 ID `[4,3,2,1]` 逐台写 run mode、目标速度、零目标并进入运控
-  模式；最终失败进入 `ERROR` 并由 configure 事务回滚已触及电机和资源。
-- USB reader 原先对串口关闭、`SerialException`、`OSError` 执行 sleep/continue，
-  控制层不知道传输已经异常；write 未连接只抛模糊 `RuntimeError`。
-- SocketCAN reader 原先对 bus 缺失和 `recv()` 异常执行 sleep/continue；
-  `recv(timeout)` 返回 `None` 正确表示无帧。send 异常没有独立 transport 分类。
-- `reconnect_on_disconnect` 原先只声明、校验并存入 `MotorSafetyConfig`，没有控制
-  任何运行期逻辑。
+- 部分初始化失败按已触及电机的反向顺序 best-effort stop，随后关闭 driver、
+  清 callback 并释放 ROS 资源。
+- configure 回滚、cleanup 和 shutdown 的释放流程幂等，单项失败不中断后续
+  清理。
+- 第二次 configure 使用全新 driver、callback、health/recovery session 和 ROS 资源。
 
-## 5. Transport error 类型
+### 3.4 State transition
 
-- 新增 `CyberGearTransportError` 和 `CyberGearDisconnectedError`。
-- 串口读写异常、串口关闭、SocketCAN bus 缺失及 send/recv transport failure
-  使用明确类型。
-- 参数错误、控制算法错误、普通非 transport driver 错误和 feedback callback
-  自身异常不会被归类为断线。
+- 转换结果为 `CHANGED`、`NO_CHANGE`、`REJECTED`，同状态请求幂等。
+- 合法转换表显式；`ERROR` 不能回到运行态，`SHUTTING_DOWN` 为 terminal。
+- reason/source 和最近转换快照保持，callback 在不持状态锁时执行。
 
-## 6. Transport event 通道
+### 3.5 Config
 
-- 新增独立 `TransportEvent`/`TransportEventType`，与 `MotorStatus` feedback 及
-  feedback-error callback 完全分离。
-- 事件包含 backend、operation、message/exception、单调时间、connection
-  generation，并可包含 attempt/max attempts。
-- 支持 `DISCONNECTED`、`READ_ERROR`、`WRITE_ERROR`、`CLOSE_ERROR`、
-  `RECONNECTING`、`RECONNECTED`、`RECONNECT_FAILED`。
-- driver 提供 transport callback 注册和清除 API；cleanup 后不保留节点 callback。
+- 电机数组长度、ID 范围/唯一性、sign、软限位、control axes、键盘冲突、
+  backend 和 ROS/safety 参数在驱动创建前集中校验。
+- deprecated 标量电机参数的非默认值明确失败并指向列表参数。
+- USB 新参数优先，仅在新值为空/零时显式 fallback 到旧值。
 
-## 7. USB-CAN 断线检测
+### 3.6 Motor health
 
-- reader 遇到串口关闭、`SerialException` 或读 `OSError` 时只报告该 generation
-  的首个 transport fault，然后退出，不再 sleep/continue 刷同一错误。
-- write/flush 异常及关闭状态向调用者抛明确 transport exception，并报告事件。
-- reader 不执行 close、退避、reconnect 或电机初始化。
-- connect 会替换旧 reader；close 先请求退出、释放串口，再在锁外限时 join。
-  reader 未在 timeout 内退出会阻止新连接，避免并存两个有效 reader。
+- 非法反馈不覆盖最近合法反馈，未配置 motor ID 不污染状态。
+- firmware fault bit、temperature warning/critical、无效帧计数和 fault latch 语义与测试一致。
+- `motor_feedback_timeout_sec: 0.0` 默认仍关闭强制超时。
+- 0x02 没有已验证的 `current_a`，不从 torque 推导 current。
 
-## 8. SocketCAN 断线检测
+### 3.7 Parser
 
-- `recv()` 抛异常或 bus 缺失会报告当前 generation 的 fault 并退出 reader。
-- `recv(timeout)` 返回 `None` 明确保留为正常无帧，不触发 ERROR/reconnect。
-- send 异常和 bus 缺失抛明确 transport exception；不会自动重发原命令。
-- connect/close 会替换、shutdown 和限时 join 旧 reader；重复 close 幂等。
+- 0x02 feedback 的 position、speed、torque 和 temperature 四个 `uint16`
+  继续使用大端序解析。
+- 该端序有独立 parser 测试和用户正常实机复测记录；本 RC 没有再次修改。
 
-## 9. 系统级 transport fault 路径
+### 3.8 CI
 
-- 首次当前 generation fault 原子锁存 immutable snapshot。
-- 立即把 `_init_complete` 置 false，阻断普通命令，停止 MANUAL/AUTO/HOME，令
-  motion source 为 `IDLE`，并把 `desired_targets` 同步到最近成功发送的
-  `current_targets`。
-- recovery fault-response 阶段复用一次性主 stop claim，逐台 best-effort 停止；
-  stop 失败不会阻止 ERROR、close 或后续有界重连。
-- ControllerState 转为 `ERROR` 并发布 `/motors/control_mode = ERROR`。
-- `/motor/status` 继续用 `std_msgs/String` 发布明确 `motor_transport:*` 状态，未新增
-  自定义 ROS message。
+- `.github/workflows/ci.yml` 使用 GitHub hosted `ubuntu-24.04` 和 ROS 2 Jazzy。
+- 仅 `contents: read`，无 self-hosted、secrets、设备映射、`--privileged`、真实 CAN/GPIO、
+  硬件节点或 launch。
+- Actions 均用 40 位 commit SHA 固定；artifact 设为 `if-no-files-found: error`。
+- `scripts/check_ci_safety.py` 同时约束 workflow 和 `scripts/ci_software.sh`。
 
-## 10. 与 command fault 的关系
+### 3.9 Transport recovery
 
-- transport write exception 同时记录 command 诊断和 transport snapshot。
-- command fault、reader fault 和重复 fault 共享 `_fault_stop_batch_claimed`、transport
-  latch 与 coordinator lock，因此只有一个主 stop batch、一个真实 ERROR 转换和
-  一个 recovery worker。
-- 普通非 transport 的位置/速度写错误保持原 command-fault ERROR 语义，不启动
-  reconnect。
+- transport fault 与 motor health fault 分离，USB-CAN/SocketCAN 异常有明确类型与独立
+  event 通道。
+- generation 屏蔽旧 reader 事件，重连使用有界次数和可取消退避。
+- 重连成功后为 `RECONNECTED_LOCKED`，ControllerState 仍为 `ERROR`。
+- 不重新初始化电机、不 `enter_control_mode`、不恢复 MANUAL/AUTO/HOME/旧目标。
+- cleanup/shutdown/deactivate 可取消 worker，取消期间晚到的 connect success 会再次 close。
 
-## 11. reconnect_on_disconnect 语义
+## 4. 发布阻塞项审计
 
-- `false`：锁存 ERROR、丢弃运动、best-effort stop、关闭失效 transport，不调用
-  connect，不创建 reconnect worker。
-- `true`：完成同一故障响应后启动最多一个 recovery worker，只尝试重开 backend
-  connection 和 reader。
-- 两种配置都不会自动恢复控制或清除故障。
+### 阻塞问题
 
-## 12. 重连协调器
+未发现。
 
-- 状态：`IDLE`、`FAULT_LATCHED`、`RECONNECTING`、`RECONNECTED_LOCKED`、
-  `FAILED`、`CANCELLED`。
-- 首次 reconnect attempt 立即执行；失败间隔按 initial delay、multiplier 和 max
-  delay 有界退避。
-- backoff 使用 cancel event wait，不使用不可取消长时间 sleep。
-- generation 校验忽略旧 reader 晚到事件；并发 request 通过 lock/state 只允许
-  一个 worker。
-- lifecycle cancel 与正在进行的 connect 竞态时，若 connect 在取消后才成功，
-  worker 会再次 close，绝不在 deactivate/cleanup 后遗留重开连接。
+### 非阻塞技术债
 
-## 13. 重连成功后的锁定状态
+- package 的 maintainer/email 包含历史占位值；同一 package 内部一致，本 RC 不随意
+  改变责任人元数据。
+- 部分资源释放和诊断路径使用 best-effort `except Exception`；静态复核显示这些路径
+  不绕过已建立的安全状态，且现有故障注入覆盖后续清理，因此不扩大 RC
+  重构。
+- 结构化 `DiagnosticArray`、真实数值 `current_a`、空闲反馈周期能力和物理标定继续
+  作为后续任务。
 
-- recovery state 为 `RECONNECTED_LOCKED`，ControllerState 和公开模式保持 `ERROR`。
-- 不设置 `_init_complete=true`，不清除 command/motor/transport fault。
-- 不调用 `connect_and_init_motors()`、SDO run mode/速度/位置、`enter_control_mode()`、
-  `set_zero()`，不 enable 电机。
-- 不重发旧目标，不恢复 MANUAL、AUTO、HOME 或机械零点流程。
-- 必须 lifecycle cleanup/configure 或重启节点才能重新初始化并恢复控制。
+## 5. Package 版本
 
-## 14. 重连失败
+| Package | package.xml | setup.py | 其他版本源 |
+|---|---:|---:|---|
+| `imu_cybergear_ros2` | `0.3.2` | `0.3.2` | 无 `pyproject.toml` / `__version__` |
+| `windarmor_fan_controller` | `0.3.2` | `0.3.2` | 无 `pyproject.toml` / `__version__` |
+| `windarmor_bringup` | `0.3.2` | `0.3.2` | 无 `pyproject.toml` / `__version__` |
 
-- 达到 `reconnect_max_attempts` 后进入 `FAILED`，ControllerState 继续为 `ERROR`。
-- 不超过最大次数，不高速无限重试，不自动开始第二轮，也不回到运行态。
+- 三包 name、description、maintainer/email 和 license 已做内部一致性测试。
+- dependencies/test dependencies、entry points/console scripts 和 data files 已静态审计；未发现
+  会阻塞当前构建、安装或入口的错误，本 RC 不做无关美化。
+- `src/imu_cybergear_ros2/docs/项目总览与功能清单.md` 的过时“当前版本 v0.2.0”已更正，
+  并明确该页保留早期 v0.2 功能分区。
 
-## 15. lifecycle 和线程清理
+## 6. 公共 ROS 接口冻结
 
-- deactivate、cleanup、shutdown 和 configure 回滚先禁止新 recovery request，设置
-  cancel event 并 join worker。
-- 然后停止 motion/watchdog/feedback monitor，清 feedback 与 transport callbacks，
-  停止 reader、close backend，再销毁 ROS 资源。
-- 正常 deactivate 后可正常 re-activate；若已有 transport fault/recovery，则取消后
-  re-activate 不会恢复重连或运动。
-- cleanup 后可重新 configure，使用新 driver、reader、callback、fault snapshot 和
-  coordinator；旧会话不污染新会话。
-- 初始化期间若 reader 报 transport fault，配置立即中止并走既有事务式回滚，不把
-  它误当运行期重连，也不继续发送初始化命令。
+| 接口 | 类型 | 相比 v0.3.1 |
+|---|---|---|
+| `/imu/data_raw` | `sensor_msgs/msg/Imu` | 不变 |
+| `/imu/relative_roll_pitch` | `geometry_msgs/msg/Vector3Stamped` | 不变 |
+| `/imu/zero_generation` | `std_msgs/msg/UInt64` | 不变 |
+| `/motors/control_mode` | `std_msgs/msg/String` | 不变 |
+| `/motors/manual_targets` | `std_msgs/msg/Float64MultiArray` | 不变 |
+| `/motor/status` | `std_msgs/msg/String` | 不变 |
+| `/e_stop` topic | `std_msgs/msg/Bool` | 不变 |
+| `/e_stop` service | `std_srvs/srv/Trigger` | 不变 |
+| `/enable_motor` | `std_srvs/srv/SetBool` | 不变 |
+| `/imu/set_zero` | `std_srvs/srv/Trigger` | 不变 |
+| `/motors/set_zero` | `std_srvs/srv/Trigger` | 不变 |
+| `/fans/pwm` | `std_msgs/msg/Int32MultiArray` | 不变 |
+| `/fans/left/pwm`, `/fans/right/pwm` | `std_msgs/msg/Int32` | 不变 |
+| `/fans/status_pwm`, `/fans/auto_target_pwm` | `std_msgs/msg/Int32MultiArray` | 不变 |
+| `/fans/enabled`, `/fans/auto_enabled`, `/fans/auto_active` | `std_msgs/msg/Bool` | 不变 |
+| `/fans/control_state` | `std_msgs/msg/String` | 新增两个状态值，接口未改名 |
+| `/fans/enable`, `/fans/auto_enable` | `std_srvs/srv/SetBool` | 不变 |
+| `/fans/stop` | `std_srvs/srv/Trigger` | 不变 |
+| `/fans/manual_enable` | `std_srvs/srv/SetBool` | 有意新增 |
+| `/fans/reset_e_stop` | `std_srvs/srv/Trigger` | 有意新增 |
 
-## 16. 锁与并发
+- 公开电机模式仍为 `MANUAL`、`AUTO`、`EMERGENCY_STOP`、`DISABLED`、`ERROR`。
+- 风扇有意新增公开状态值 `MANUAL_DISARMED` 与 `MANUAL_WAITING_FOR_NEUTRAL`。
+- 零点代次、电机模式和风扇状态仍使用 reliable、transient-local QoS；其他关键
+  命令接口的 QoS 未发现非预期变化。
+- `/fans/command_pwm` 仍是管理器到底层控制器的内部路由，不是普通公共控制入口。
 
-- 节点 state lock 只保护内存状态；绝不持有它等待 recovery lock 或 driver I/O lock。
-- coordinator lock 只保护状态、attempt、worker 引用；调用 stop/close/connect 和
-  join 时不持有该锁。
-- driver I/O lock 串行化单次驱动操作；普通命令、stop、close、connect 都不在持有
-  node state lock 时等待它。
-- backend resource lock 不在 reader join 或 transport callback 分发时持有。
-- transport callback 只做状态锁存和提交 worker；worker 才执行 stop/close/connect，
-  避免 reader 自己 close/join/reconnect。
+## 7. 默认参数冻结
 
-## 17. 与 motor health / temperature / feedback timeout 的关系
+### 电机
 
-- 固件 fault bit、临界温度、连续无效反馈继续走 motor safety ERROR，不启动
-  transport reconnect。
-- warning 温度仍只告警，不自动降速。
-- `motor_feedback_timeout_sec` 默认保持 `0.0`。即使显式开启并触发 timeout，没有
-  backend transport error 证据时也不启动 reconnect。
-- 0x02 parser、fault bit 定义、反馈健康和数值电流能力边界均未修改。
+- `motor_ids: [4, 3, 2, 1]`
+- `motor_signs: [-1.0, 1.0, -1.0, 1.0]`
+- `motor_limits_min: [-1.57, -1.57, -1.57, 0.0]`
+- `motor_limits_max: [0.0, 1.57, 1.57, 1.57]`
+- `command_interval_sec: 0.02`；`max_position_step: 0.4`
+- MANUAL/AUTO/HOME motion speed：全部 `4.0 rad/s`
+- `motion_dt_max_sec: 0.05`；`target_reached_tolerance_rad: 0.001`
+- `manual_step_deg: 3.0`；`manual_repeat_gap_sec: 0.8`；
+  `manual_repeat_dt_max_sec: 0.08`
+- `default_speed: 10.0`；AUTO roll/pitch gain：`1.0/1.0`
+- temperature warning/critical：`80.0/90.0 °C`
+- `motor_current_limit_a: 5.0`；只作保留参数，不执行数值电流比较。
+- `motor_feedback_timeout_sec: 0.0`；默认关闭强制超时。
+- `reconnect_on_disconnect: true`；策略为 `30 / 0.5 / 10.0 / 1.5`。
 
-## 18. 急停与机械零点交互
+### 风扇
 
-- MANUAL/AUTO 中的 transport fault 进入 ERROR；EMERGENCY_STOP 中发生 transport
-  fault 也从急停转为 ERROR。
-- `/enable_motor=true`、键盘 `r` 和普通急停恢复不能清除 transport ERROR。
-- 机械零点中发生 transport write failure 会立即中止，不执行后续电机或恢复写入；
-  重连成功后不会自动继续，必须重新配置后由用户重新明确发起。
+- deadband on/off：`5.0/3.0 deg`；`fan_full_scale_deg: 45.0`。
+- stop/start/AUTO max：`800/1200/1400 μs`。
+- `control_rate_hz: 20.0`；rise/fall step：`10/20 μs`。
+- `fan_response_curve: smoothstep`。
 
-## 19. 参数
+实际 YAML 与代码默认值已由 RC 契约测试同时冻结。本任务未调整任何上述
+控制参数。
 
-新增并集中校验：
+## 8. v0.3.2 Release Notes
 
-```yaml
-reconnect_on_disconnect: true
-reconnect_max_attempts: 30
-reconnect_initial_delay_sec: 0.5
-reconnect_max_delay_sec: 10.0
-reconnect_backoff_multiplier: 1.5
-```
+- 新增 `docs/RELEASE_NOTES_v0.3.2.md`。
+- 定位为“安全性、确定性与运行可靠性版本”，不声称为性能调优或最终标定版本。
+- 包含风扇、电机命令、lifecycle、config/state contract、motor health、温度/fault bit、
+  0x02 端序、CI 与 transport recovery 的用户向变化。
+- 明确数值电流保护、feedback timeout 默认、重连后锁定和真实故障注入边界。
 
-- attempts 必须为正整数；delay 必须有限且非负；max delay 不小于 initial delay；
-  multiplier 必须有限且不小于 1.0。
-- 默认值沿用原 driver 的 30、0.5、10.0、1.5，没有无依据改变退避策略。
+## 9. README / package README / YAML
 
-## 20. 保持不变的产品行为
+- 根 `README.md` 已区分稳定标签 `v0.3.1` 与 `master` 上的 `v0.3.2` release candidate，
+  明确 `v0.3.2` tag 尚未创建。
+- 电机包 `README.md` 已标明 package RC 版本 `0.3.2`，并将 `4.0 rad/s` 描述修正为
+  已进入正常功能回归、但尚未完成精确机械速度标定。
+- 电机 YAML 的三模式速度注释已同步为 RC 冻结与标定边界。
+- `motor_current_limit_a`、`motor_feedback_timeout_sec`、reconnect、温度、
+  `fan_auto_max_pwm_us` 和 `fan_full_scale_deg` 现有 YAML 注释与实际行为一致，
+  没有伪称最终物理标定。
+- 风扇包和 bringup 没有独立 package README，本 RC 不凭空新建。
 
-- MANUAL/AUTO/HOME 算法、三模式 `4.0 rad/s`、dt/step/tolerance、键盘重复算法和
-  AUTO 姿态增益保持。
-- motor IDs `[4,3,2,1]`、signs、软限位、默认速度、初始化零目标保持。
-- 温度阈值 `80/90°C`、电流保留参数 `5.0A`、feedback timeout `0.0` 保持。
-- IMU、统一零点、0x02 大端序 parser、fault bit、feedback health 保持。
-- 风扇算法、PWM、GPIO12/GPIO13 未修改。
-- 所有既有 ROS 公共话题、服务、参数和消息类型保持；未新增自动恢复服务。
+## 10. 已知验证边界
 
-## 21. 测试
+### 纯软件故障注入
 
-- 新增三个 transport/reconnect 测试文件共收集 `47 tests`；在既有配置测试中新增
-  6 个非法重连参数实例，合计新增 `53` 项测试实例。
-- USB：正常帧、SerialException、OSError、关闭、write/flush、generation、reader
-  替换和幂等 close 均覆盖。
-- SocketCAN：正常 message、`None`、recv/send exception、bus 缺失、generation、
-  reader 替换和幂等 close 均覆盖。
-- coordinator：disabled、两次失败后成功、close failure、exhaustion、backoff、
-  cancel、connect/cancel race、generation、并发单 worker/stop 均覆盖。
-- lifecycle：configure、activate、fault、reconnecting、deactivate/cleanup/shutdown、
-  configure again、初始化期断线均覆盖。
-- 运动与安全：MANUAL/AUTO/HOME 旧目标、command fault 幂等、非 transport command
-  error、急停、机械零点、motor fault、临界温度和 feedback timeout 均覆盖。
-- 电机包 targeted/full：`359 passed`。
-- 风扇关键回归：`98 passed`。
-- 三包 build：`3 packages finished`。
-- 三包完整 colcon：`475 tests, 0 errors, 0 failures, 0 skipped`。
+- pure logic、fake driver、fake feedback、fake clock、fake USB/SocketCAN backend 和可控事件
+  已覆盖命令失败、初始化回滚、清理、状态转换、motor health、transport fault 和受控重连。
+- 这些是纯软件故障注入，不是真实硬件认证。
+
+### 用户此前正常实机验证
+
+- 用户此前完成统一 launch、MANUAL、AUTO、机械零点与风扇正常功能验证。
+- 0x02 大端序修正后，用户完成正常机械零点/手动控制复测。
+- 这些是用户报告的正常功能路径，不是极限、全部异常或故障注入认证。
+
+### 未执行的真实故障注入
+
+- 欠压、过流、真实 90 °C 过温、编码器 fault、feedback timeout。
+- USB-CAN 拔线、CAN 断线、破坏串口、真实自动重连认证。
+- `stop_motor` 失败、真实 cleanup 故障或机械卡死。
+
+这些不阻塞 `v0.3.2`，但需要后续专门硬件故障验证任务和单独授权。
+
+## 11. RC 自动化测试
+
+- RC release contract 专项：`5 passed`。
+  - release metadata：1 项；
+  - 关键接口/公开模式/QoS：2 项；
+  - 电机/风扇默认参数：2 项。
 - CI infrastructure：`16 passed`。
-- `./scripts/ci_software.sh`：完整通过，包括 safety checker、whitespace、compile、
-  build、两组 targeted tests、full colcon 和 test-result。
-- `git diff --check -- . ':(exclude)docs/NEXT_COMMAND.md'`：通过。
-- 完整 `git diff --check`：通过；用户版 NEXT_COMMAND 未产生 whitespace error。
-- 首次手工 targeted pytest 因设置 `PYTHONPATH` 时覆盖 ROS 路径而 collection 失败；
-  改为追加 ROS `PYTHONPATH` 后通过。该问题不是产品、测试断言或硬件故障。
+- 电机包 pytest：`359 passed`。
+- 风扇关键回归：`98 passed`。
+- 三包隔离 build：`3 packages finished`。
+- 三包完整 colcon：`480 tests, 0 errors, 0 failures, 0 skipped`。
+- CI safety checker：通过，检查 2 个目标文件。
+- Python compile：通过。
+- whitespace：统一 CI 检查通过；
+  `git diff --check -- . ':(exclude)docs/NEXT_COMMAND.md'` 通过。
+- 失败：0；错误：0；跳过：0。
 
-## 22. 硬件安全声明
+## 12. scripts/ci_software.sh
 
-- 未执行 `ros2 run`、`ros2 launch`、`ros2 topic`、`ros2 service`、`sudo` 或
-  `scripts/setup_can.sh`。
-- 未打开 `/dev/imu_usb`、`/dev/ttyUSB*` 或任何真实串口。
-- 未创建、配置或访问真实 SocketCAN/can10，未连接 CyberGear。
-- 未写真实 SDO、未 enable/stop/控制真实电机，未进行拔线、断电或带电测试。
-- 未启动或 spin IMU、电机、风扇硬件节点。
-- 未访问 GPIO12/GPIO13，未创建 Servo、解锁电调、输出 PWM 或控制风扇。
-- 构建、fake/mock 测试和本地等价 CI 只属于纯软件验证，不表述为实机验证。
-- 上述“未执行”均指 Codex 的操作。用户在软件完成后自行完成 MANUAL/AUTO 实机
-  正常功能回归并报告无问题；该结果不包含拔线、断电、transport fault 或重连
-  恢复的实机故障注入。
+`./scripts/ci_software.sh` 已完整执行并通过，包括：
 
-## 23. 提交范围与 Git 状态约束
+1. CI safety checker；
+2. Git whitespace checker；
+3. Python compile；
+4. 三 package 隔离 colcon build；
+5. 电机 package pytest；
+6. 风扇 safety regression；
+7. 三 package 完整 colcon test；
+8. `colcon test-result --verbose`。
 
-- 任务开始时分支为 `master`，HEAD/upstream 均为 `d97c51a`，领先/落后 `0/0`。
-- `docs/NEXT_COMMAND.md` 仍是任务前用户修改，未被本任务改动或暂存。
-- 本次中文提交只包含本任务修改的 13 个既有文件和 4 个新增文件；实际 commit SHA、
-  push 和最终状态以终端汇报为准。
-- 未执行 tag、checkout、switch、reset、clean、restore、stash、rebase 或 merge。
-- `v0.3.0`、`v0.3.1` 及其他 tag 未修改。
+该脚本使用隔离临时 build/install/log/ROS log 目录，未使用真实硬件 I/O。
 
-## 24. GitHub Hosted CI
+## 13. GitHub Hosted CI
 
-- 开始时远端基线 run `31143934086` 为 success；它不包含本地未提交改动。
-- 本地等价 CI 已通过；本次 push 触发的新 `WindArmor Software CI` 必须按实际 run
-  结论汇报，不能用基线 run 或本地结果代替。
+- 开始基线 run `31157555077` 对 HEAD `cc9e75e` 为 `success`，有 1 个未过期
+  日志 artifact。
+- 本 RC 工作区未 commit、未 push，因此尚未触发包含当前 RC 修改的新
+  GitHub Hosted CI。
+- 本地等价 CI 的通过不代替 push 后 Hosted CI green。
 
-## 25. 未完成或限制
+## 14. 用户最终整机回归清单
 
-- 无纯软件实现或验收阻塞项。
-- 按任务禁令未进行真实串口、真实 CAN、拔线或带电 fault injection；真实 backend
-  的设备断开表现、OS connect 延迟和 reader join 时序仍等待另行授权后的实机验证。
-- recovery 可即时取消 backoff；若底层 OS open 调用本身正在阻塞，只能在该调用
-  返回后完成关闭，软件已覆盖“取消期间晚到成功必须重新 close”的竞态。
+- 新增 `docs/V0.3.2_RC_HARDWARE_CHECKLIST.md`。
+- 范围仅包含启动前、系统启动、IMU/机械零点、MANUAL、HOME、小幅 AUTO、
+  风扇 MANUAL/AUTO、急停、普通急停恢复与正常退出。
+- 清单明确排除拔线、真实欠压/过流/过温、编码器故障、机械卡死、故意
+  stop 失败和极限推力测试。
+- 实际通电前仍必须完成 `AGENTS.md` 十项授权门槛。
 
-## 26. 额外发现
+## 15. 硬件安全声明
 
-- transport fault 可能在 configure 连接成功、四电机初始化开始前由 reader 到达；
-  本任务显式处理了该边界：停止初始化并事务回滚，不启动运行期 worker。
-- backend close 若 reader 在 timeout 内不退出，现在会拒绝继续 connect，避免为了
-  重连留下两个有效 reader。
+Codex 本任务未：
 
-## 27. 后续建议
+- 执行 `ros2 run`、`ros2 launch`、`ros2 topic`、`ros2 service`、`sudo` 或
+  `scripts/setup_can.sh`；
+- 访问 IMU、`/dev/imu_usb`、真实串口或任何硬件设备文件；
+- 创建、配置或访问 SocketCAN/`can10`；
+- 初始化 CyberGear，写真实 SDO，使能、停止或控制真实电机；
+- 访问 GPIO12/GPIO13，初始化 Servo/电调，输出 PWM 或控制风扇；
+- 启动硬件节点或 launch；
+- 执行带电测试或真实硬件故障注入。
 
-- push 后检查新的 `WindArmor Software CI` 及日志 artifact，明确区分远端结果与
-  本地等价 CI。
-- 如后续确需真实断线验证，必须重新提出硬件测试方案并满足 AGENTS.md 十项带电
-  授权门槛；本任务授权不包含该操作。
+构建、静态契约、pure logic 和 fake/mock 测试只是纯软件验证，不表述为实机验证。
+
+## 16. 任务完成但提交前 Git 状态
+
+- branch：`master`。
+- HEAD/upstream：均为 `cc9e75e0473bfdc1764577904e71c7f9bab21e93`，ahead/behind `0/0`。
+- `docs/NEXT_COMMAND.md` 仍是任务前用户修改；Codex 未修改、覆盖、暂存或还原。
+- `docs/NEXT_COMMAND.md` 任务前与最终 SHA-256 均为
+  `30613c6f4457dd479ac41b6694cb54c5ce5b1fddf4b41c97a1291c52fcfa39c9`。
+- 本任务修改 11 个已跟踪文件，新增 3 个文件；另有用户原有
+  `M docs/NEXT_COMMAND.md`。
+- 未执行 `git add`、commit、push、tag、checkout、switch、reset、clean、restore、stash、
+  rebase 或 merge。
+- `v0.3.2` tag 未创建；`v0.3.0`/`v0.3.1` 未修改。
+
+## 17. 是否可以进入最终实机回归
+
+**YES**。
+
+当前建议是：先由用户审查本 RC 工作区，再单独授权 commit/push；确认新
+GitHub Hosted CI green 后，按 `docs/V0.3.2_RC_HARDWARE_CHECKLIST.md` 进行一次正常整机
+功能回归。本结论不授权 Codex 执行硬件操作，也不等于已完成实机回归。
+
+## 18. v0.3.2 尚缺步骤
+
+1. 用户审查当前 RC 工作区差异。
+2. 用户单独授权 RC commit 和 push。
+3. 等待并确认新 GitHub Hosted CI green 及日志 artifact。
+4. 用户完成 RC 正常整机功能回归并报告结果。
+5. 执行最终发布审查。
+6. 用户单独明确授权创建 annotated `v0.3.2` tag。
+7. push tag；根据用户决定可选创建 GitHub Release。
+
+## 19. 后续版本建议
+
+只记录，本 RC 未实施：
+
+- 结构化 `DiagnosticArray`；
+- 经协议与实机验证的 `current_a` 数据能力；
+- 电机空闲反馈周期能力验证；
+- 风扇 PWM/推力与 `fan_full_scale_deg` 物理标定；
+- MANUAL/AUTO/HOME 三模式实际机械速度标定；
+- 真实 transport 断线/重连与其他危险故障注入；
+- 高级姿态控制、动态平衡和 PID 优化。

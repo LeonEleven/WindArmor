@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>windarmor_bringup</name>
-  <version>0.1.0</version>
+  <version>0.3.2</version>
   <description>Unified ROS 2 bringup for the WindArmor robot.</description>
   <maintainer email="h-goal@todo.todo">h-goal</maintainer>
   <license>Apache-2.0</license>

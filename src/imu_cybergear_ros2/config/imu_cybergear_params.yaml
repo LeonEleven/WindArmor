@@ -124,7 +124,7 @@ imu_motor_controller_node:
     command_interval_sec: 0.02
 
     # MANUAL、AUTO、HOME 的软件目标位置变化率（rad/s）。
-    # 初始候选值相同，尚未经过本轮实机验证。
+    # RC 冻结值相同；已进行正常功能回归，但尚未完成精确机械速度标定。
     manual_motion_speed_rad_s: 4.0
     auto_motion_speed_rad_s: 4.0
     home_motion_speed_rad_s: 4.0
