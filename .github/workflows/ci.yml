@@ -1,0 +1,92 @@
+name: WindArmor Software CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  software-ci:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      ROS_DISTRO: jazzy
+      WINDARMOR_CI_OUTPUT_ROOT: ${{ runner.temp }}/windarmor-ci
+      GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      GITHUB_EVENT_BEFORE: ${{ github.event.before }}
+
+    steps:
+      - name: Checkout repository
+        # actions/checkout v6.1.0
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up ROS 2 Jazzy
+        # ros-tooling/setup-ros 0.7.18
+        uses: ros-tooling/setup-ros@77bcad67a6cb15f6192d61464d99bbab658e4ca9
+        with:
+          required-ros-distributions: jazzy
+
+      - name: Install declared dependencies
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          rosdep update
+          rosdep install \
+            --from-paths src \
+            --ignore-src \
+            --rosdistro jazzy \
+            -r \
+            -y
+
+      - name: Check CI hardware safety contract
+        run: ./scripts/ci_software.sh safety
+
+      - name: Check committed whitespace
+        run: ./scripts/ci_software.sh whitespace
+
+      - name: Compile Python sources
+        run: ./scripts/ci_software.sh py-compile
+
+      - name: Build three ROS packages
+        run: ./scripts/ci_software.sh build
+
+      - name: Run motor package tests
+        run: ./scripts/ci_software.sh motor-tests
+
+      - name: Run fan safety regression
+        run: ./scripts/ci_software.sh fan-tests
+
+      - name: Run full three-package tests
+        run: ./scripts/ci_software.sh full-tests
+
+      - name: Report colcon test results
+        if: always()
+        run: ./scripts/ci_software.sh test-result
+
+      - name: Upload test logs
+        if: always()
+        # actions/upload-artifact v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: windarmor-software-ci-logs-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/windarmor-ci/log
+            ${{ runner.temp }}/windarmor-ci/ros-logs
+            ${{ runner.temp }}/windarmor-ci/build/*/Testing
+          if-no-files-found: ignore
+          retention-days: 10

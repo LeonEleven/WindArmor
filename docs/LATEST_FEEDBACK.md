@@ -1,4 +1,4 @@
-# 最新反馈：电机反馈健康、故障位与温度保护加固
+# 最新反馈：GitHub Actions 无硬件 CI 与纯软件回归基线
 
 > 本文件只保留最近一次反馈。
 >
@@ -6,39 +6,36 @@
 
 ## 1. 执行结论
 
-- 已完成电机反馈来源、合法性、故障位、温度和新鲜度的纯软件安全链加固。
-- 任意已配置电机的非零固件故障位、临界温度、连续达到限制的无效反馈，以及
-  显式启用后的反馈超时，都会锁存系统级故障、停止全部电机并进入 `ERROR`。
-- 严重故障不会被下一帧正常反馈、温度回落、键盘 `r`、
-  `/enable_motor=true`、MANUAL/AUTO/HOME 自动恢复；恢复要求受控 lifecycle
-  重新配置或重启。
-- 反馈 timeout 框架已实现，但默认 `0.0`（关闭强制超时）。原因是代码和现有
-  协议实现不能证明电机空闲且没有新目标命令时仍持续周期上报。
-- 0x02 反馈没有真实数值 `current_a`；没有从 torque 或其他字段推导电流。
-  实际过流保护来自电机固件的过流 fault bit。
-- 用户自行实机操作暴露了 0x02 四个 `uint16` 的端序错误：旧 parser 把合理的
-  `35.9/35.3/34.6 °C` 解析成 `2636.9/2483.3/2304.1 °C`。公共 parser 已改为
-  大端序，position、speed、torque、temperature 同步修正。
-- 机械零点流程在反馈安全故障锁存后不再继续恢复运控或输出虚假成功日志。
-- 3 个包构建成功；电机包最终 `306 passed`；风扇关键回归 `98 passed`；三包
-  完整测试 `406 tests, 0 errors, 0 failures, 0 skipped`。
-- Codex 未运行或 spin 任何硬件节点，未访问真实硬件。修正后用户再次自行完成统一
-  launch、机械零点和手动控制实机复测，并报告未再出现无效反馈或其他问题。
+- 已新增 GitHub Actions 无硬件软件 CI、统一的本地/Hosted CI 脚本、提交范围
+  whitespace 检查和 CI 自身硬件安全检查。
+- workflow 使用 GitHub 托管 `ubuntu-24.04` 和 ROS 2 Jazzy，支持 `master`
+  push、面向 `master` 的 pull request 以及 `workflow_dispatch`。
+- workflow 只有 `contents: read` 权限，不使用 secret、自托管 runner、设备映射、
+  privileged container 或写权限。
+- 本地等价 CI 最终完成 3 包构建；电机包 `306 passed`；风扇关键回归
+  `98 passed`；三包完整 `422 tests, 0 errors, 0 failures, 0 skipped`。
+- 新增 16 项 CI infrastructure 测试，覆盖安全 checker、统一脚本和 workflow
+  contract。
+- 未修改任何产品控制算法、硬件参数、安全阈值、ROS 公共接口或硬件映射。
+- Codex 未启动或 spin 任何硬件节点，未访问 IMU、串口、CAN、CyberGear、GPIO
+  或 PWM。
+- GitHub Hosted CI 尚未触发，不能声称远端 CI green。
 
 ## 2. 开始前 Git 基线
 
 - 分支：`master`。
-- HEAD：`80391d107d9727dad556c05f8df3bc97d2306f8b`。
+- HEAD：`fae3a08fc1010b0c5b72314470e5359b087a4752`。
 - upstream：`origin/master`，同为
-  `80391d107d9727dad556c05f8df3bc97d2306f8b`。
+  `fae3a08fc1010b0c5b72314470e5359b087a4752`。
 - 本地领先/落后：`0/0`。
-- 最近提交：`80391d1 加固：完善电机配置契约与状态转换确定性`。
+- 最近提交：`fae3a08 加固：完善电机反馈安全并修正状态帧端序`。
 - `v0.3.0` commit：`c3b3c3989674c2c1c902e940953da87fd5812db5`。
 - `v0.3.1` commit：`5d7bd0fbf0acac3be4f2354a616d109928d5091d`。
-- HEAD 位于 `v0.3.1` 后 3 个提交；开始时 describe 为
-  `v0.3.1-3-g80391d1-dirty`。
+- HEAD 位于 `v0.3.1` 后 4 个提交；开始时 describe 为
+  `v0.3.1-4-gfae3a08-dirty`。
 - 任务开始前唯一工作区修改为 `M docs/NEXT_COMMAND.md`，无未跟踪文件；该文件
   是用户任务说明，本任务未修改、暂存、覆盖或还原。
+- 任务开始时不存在 `.github/workflows`。
 
 ## 3. 修改文件
 
@@ -46,247 +43,206 @@
 
 - `docs/NEXT_COMMAND.md`：用户任务说明，原样保留。
 
-### 3.2 本任务产品代码与配置
+### 3.2 本任务新增或更新
 
-- `motor_health.py`：新增不依赖 ROS/硬件的反馈合法性、故障分类、温度判断、
-  连续无效计数、本地新鲜度与不可变故障快照核心。
-- `safety_monitor.py`：接入健康决策、限频诊断、反馈 timer lifecycle、严重故障
-  入口，并修正急停不得清除反馈保护。
-- `motor_manager.py`：统一反馈安全故障锁存、普通命令阻断、目标同步、全电机
-  best-effort stop、ERROR 转换和并发 stop 批次仲裁；零点流程在锁存后立即中止。
-- `controller_state.py`：新增稳定的故障位、临界温度、超时和无效反馈原因，以及
-  `DRIVER_FEEDBACK` 来源。
-- `motor_config.py`、`imu_motor_controller_node.py`：声明、预校验和应用新增参数，
-  管理健康会话资源并输出数值电流能力边界提示。
-- `cybergear_driver.py`：两个后端均增加 feedback callback 异常诊断；异常不会
-  杀死读取线程，后续 callback 继续执行，cleanup 清空回调；公共 0x02 parser
-  将四个 `uint16` 按大端序解析。
-- `imu_cybergear_params.yaml`：新增反馈合法性/新鲜度参数及准确注释；受保护默认
-  参数未改变。
+- `.github/workflows/ci.yml`：新增 GitHub Actions 软件 CI。
+- `scripts/ci_software.sh`：新增可分阶段运行的统一纯软件 CI 入口。
+- `scripts/check_ci_safety.py`：新增 workflow/CI 脚本硬件能力拒绝检查。
+- `scripts/check_git_whitespace.py`：新增 GitHub event commit range 和本地工作区
+  whitespace 检查。
+- `src/windarmor_bringup/test/test_ci_infrastructure.py`：新增 16 项 CI 基础设施
+  契约测试。
+- `src/imu_cybergear_ros2/package.xml`：补充既有测试实际需要的
+  `python3-pytest` test dependency。
+- `README.md`：修正反馈健康功能仍为工作区修改的过时描述，新增纯软件 CI 说明。
+- `AGENTS.md`：最小增加 GitHub Actions 硬件安全边界，未削弱既有规则。
+- `docs/LATEST_FEEDBACK.md`：按本次结果完整覆盖。
 
-### 3.3 测试和文档
+## 4. CI 架构
 
-- 新增 `test_motor_health.py`、`test_motor_safety.py`、
-  `test_motor_feedback_callbacks.py` 和 `test_cybergear_feedback_parser.py`。
-- 更新 `fake_motor_driver.py`、`test_controller_state.py`、
-  `test_motor_config.py`、`test_motor_lifecycle.py` 和
-  `test_state_call_sites.py`。
-- 更新根 `README.md`、电机包 `README.md` 和本文件。
-- 未修改 `AGENTS.md`、风扇产品代码或 bringup 产品代码。
+- 单 job workflow 在 GitHub 托管 `ubuntu-24.04` 上运行，明确超时 45 分钟。
+- `ros-tooling/setup-ros` 安装 ROS 2 Jazzy、colcon 和 rosdep 基础环境。
+- `rosdep install --from-paths src --ignore-src --rosdistro jazzy -r -y` 根据三包
+  manifest 安装声明依赖；未使用全局 pip workaround。
+- workflow 和本地开发者均调用 `scripts/ci_software.sh`。workflow 按阶段调用以
+  形成可诊断 step，本地无参数调用依次完成全部阶段。
+- build/install/log/ROS log 使用隔离输出根目录；本地默认使用 `mktemp`，不读取、
+  覆盖或依赖仓库已有 `build/`、`install/`、`log/`。
+- 测试日志无论成功或失败均上传，范围只包括 colcon log、ROS log 和各包
+  `Testing` 目录，保留 10 天，不上传整个 build/install。
 
-## 4. 当前反馈协议能力
+## 5. GitHub Actions 触发规则
 
-- `MotorStatus` 全部字段为：`motor_id`；`raw_position`、`raw_speed`、
-  `raw_torque`、`raw_temp`；`position_rad`、`speed_rad_s`、`torque_nm`、
-  `temperature`；`mode`、`fault_flags`、`timestamp`。
-- 0x02 帧 8 字节数据实际包含大端 uint16 位置、速度、力矩和温度；29-bit CAN ID
-  包含电机 ID、2-bit mode 和 6-bit fault flags。用户现场数值的逐字节反推与此
-  一致；SDO 发送字段具有不同布局，本次没有做无依据的全局端序替换。
-- `timestamp` 在公共 parser 中以 `time.monotonic()` 生成，仅用于诊断；强制
-  新鲜度使用反馈回调本地记录的单调接收时刻。
-- USB-CAN 和 SocketCAN 后端均由后台线程被动读取并过滤 0x02，然后使用同一
-  parser 和回调语义。
-- 当前代码没有主动状态查询，也不能证明反馈属于可靠周期主动上报还是命令响应；
-  尤其不能保证空闲且无新目标命令时持续反馈。
-- 0x02 没有数值安培电流字段，仓库也没有经过协议验证的其他 `current_a` 来源。
+- `push`：仅 `master`。
+- `pull_request`：目标分支仅 `master`，未使用 `pull_request_target`。
+- `workflow_dispatch`：允许人工触发。
+- 未增加 `schedule` 或 `repository_dispatch`。
+- concurrency 使用 workflow 与 PR number/ref 组合；同一 PR 或分支的新运行取消
+  旧运行，PR 与 master 不会共用同一 key。
 
-## 5. 反馈合法性
+## 6. 权限与供应链
 
-- 未配置 motor ID 的反馈只限频 warning，不写入 `_motor_feedback`、不刷新时间、
-  不改变保护或全局状态。
-- position、speed、torque、temperature、timestamp 必须为有限数值；position、
-  speed 和 torque 必须位于 0x02 协议量程，温度必须位于 `[-40, 200] °C` 的
-  解析后物理合理范围，timestamp 必须非负。
-- mode 只接受 0/1/2；fault flags 只允许 bit0～bit5。
-- 单个无效帧被拒绝且增加逐电机连续计数；合法帧在触发前清零计数。默认连续
-  3 帧无效触发系统级 `ERROR`。无效帧不会覆盖最近合法反馈或刷新新鲜度。
-- `ERROR` 后合法帧不会清除全局 latch、首次故障快照或 protection flag。
+- 顶层权限只有 `contents: read`；没有 contents/packages/actions/PR/id-token 写权限。
+- 未配置、读取或创建 repository/environment secret、PAT、deploy key 或 GitHub App
+  credential；checkout 设置 `persist-credentials: false`。
+- `actions/checkout` v6.1.0 固定为
+  `d23441a48e516b6c34aea4fa41551a30e30af803`。
+- `ros-tooling/setup-ros` 0.7.18 固定为
+  `77bcad67a6cb15f6192d61464d99bbab658e4ca9`。
+- `actions/upload-artifact` v7.0.1 固定为
+  `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a`。
+- 三个 `uses:` 均来自 GitHub Actions 官方组织或 ROS Tooling Working Group，且
+  使用完整不可变 commit SHA；未使用 `@main`、`@master` 或浮动 major tag。
+- CI 不 commit、push、tag、release、修改 PR 或自动改代码。
 
-## 6. 电机故障位保护
+## 7. CI 硬件安全边界
 
-- bit0 欠压：`MOTOR_FAULT_UNDERVOLTAGE`。
-- bit1 过流：`MOTOR_OVERCURRENT_FAULT`。
-- bit2 过温：`MOTOR_OVERTEMPERATURE_FAULT`。
-- bit3 磁编码、bit4 HALL 编码：`MOTOR_FAULT_ENCODER`。
-- bit5 未标定：`MOTOR_FAULT_UNCALIBRATED`。
-- 多 bit：记录全部故障名称和原始 mask，使用 `MOTOR_FAULT_MULTIPLE`。
-- 上述任一非零 bit 都立即停止全部电机并进入 `ERROR`。重复或并发帧只执行一次
-  主 stop batch；后续触发电机仍会锁存自己的 protection flag。
+- 使用 GitHub hosted Ubuntu runner，不使用 Raspberry Pi、机器人或开发电脑作为
+  runner。
+- workflow 不使用 privileged、host network、device mount、`/dev` passthrough
+  或 Docker device option。
+- 统一脚本只运行 py_compile、colcon build、直接 pytest 和 colcon test；没有
+  `ros2 run/launch/topic/service`，不会启动节点或 lifecycle spin。
+- 测试只使用 pure logic、fake driver、fake feedback、fake clock、伪终端、
+  monkeypatch 和未连接 backend 对象。
+- 不访问 `/dev/imu_usb` 或任何真实串口，不创建 SocketCAN，不配置或访问
+  `can10`，不连接/初始化 CyberGear，不写 SDO。
+- 不导入或构造真实底层风扇控制器，不访问 GPIO12/GPIO13，不创建 Servo，不解锁
+  电调，不输出 PWM。
+- CI safety checker 会在构建和测试前拒绝上述高风险命令或 runner/container 配置。
 
-## 7. 温度保护
+## 8. 统一 CI 脚本
 
-- `temperature < 80.0 °C`：正常接受。
-- `80.0 <= temperature < 90.0 °C`：按电机限频 warning，在状态汇总标记；不
-  自动降速、不修改三模式速度和 `default_speed`、不停止电机、不进入 ERROR。
-- `temperature >= 90.0 °C`：一条完整合法反馈立即停止全部电机、锁存并进入
-  `ERROR`。
-- 固件过温 bit 独立立即生效，不受数值温度影响；临界后温度回落不自动恢复。
+`scripts/ci_software.sh` 使用 `set -euo pipefail`，从自身路径解析仓库根目录，并
+按以下顺序执行：
 
-## 8. 电流保护能力边界
+1. CI safety check；
+2. commit/local whitespace check；
+3. Python py_compile；
+4. 三包隔离 colcon build；
+5. 电机包全量 pytest；
+6. 风扇四文件关键安全回归；
+7. 三包完整 colcon test；
+8. `colcon test-result --verbose`。
 
-- 固件过流 fault bit 已实际接入立即系统级保护。
-- `motor_current_limit_a: 5.0` 继续保留和校验，但没有真实 `current_a`，因此不
-  参与任何数值阈值比较；configure 输出一次明确能力边界 warning。
-- 未新增电流 SDO 或 parser；未从 `torque_nm`、`raw_torque`、速度或其他字段
-  推导电流，也未假定固定转矩常数。
+脚本支持 workflow 按上述 stage 名单独调用。任一命令失败由 `set -e` 传播为非零；
+不存在 `|| true`。ROS 官方 setup 脚本 source 的短暂区间关闭 nounset，source 后
+立即恢复 `set -u`，避免 `AMENT_TRACE_SETUP_FILES` 未定义导致环境加载失败。
 
-## 9. 反馈新鲜度
+## 9. Whitespace 检查策略
 
-- 每台电机记录首次合法反馈状态、最近本地单调接收时间和反馈年龄；反馈对象自带
-  timestamp 不作为超时依据。
-- 新增 `motor_feedback_timeout_sec: 0.0`、
-  `motor_feedback_startup_grace_sec: 3.0`、
-  `motor_feedback_check_rate_hz: 10.0`。
-- 默认 timeout 关闭，因为无法证明空闲周期反馈；关闭时仍可在状态汇总查看年龄。
-- 显式设置正 timeout 后，每次 activate 建立新会话；startup grace 结束仍缺首帧，
-  或已反馈电机年龄严格超过 timeout，都会停止全部电机并进入 `ERROR`。恰好等于
-  timeout 不触发。
-- 无效帧不刷新时间；deactivate 停止检查，cleanup/shutdown 幂等销毁 timer；
-  重新 configure/activate 不继承旧反馈时间或连续无效计数。
+- pull request：检查 `base...head` 整个 PR range。
+- push：正常分支更新检查 `before..head`；新分支零 before 时至少对当前 HEAD 使用
+  `git diff-tree --check --root -r`。
+- workflow_dispatch：对当前 HEAD 使用 `git diff-tree --check --root -r`。
+- workflow 使用 `fetch-depth: 0`，确保需要的提交范围可用。
+- 本地无 event 环境时检查当前 HEAD、暂存区和未暂存区；只在本地未暂存检查中
+  排除禁止修改的 `docs/NEXT_COMMAND.md`。GitHub checkout 的 commit range 检查
+  不使用该排除 workaround。
+- 没有使用干净 checkout 中无意义的普通无参数 `git diff --check`。
 
-## 10. 统一安全故障路径
+## 10. CI safety checker
 
-1. 在节点状态锁内原子锁存首个不可变故障快照；
-2. 设置触发电机 protection flag，并阻断新的普通位置/速度命令；
-3. 清除 MANUAL/AUTO/HOME 未完成运动，将 `desired_targets` 同步到最近成功发送的
-   `current_targets`；
-4. 释放状态锁后，按 `motor_ids` 对全部电机执行 best-effort stop；
-5. 一台 stop 失败会记录但不阻止其他电机；
-6. 使用稳定 reason/source 转换到 `ERROR`，状态回调发布公共 `ERROR`；
-7. 转换被拒绝时仍保留 latch 和停止结果，并输出高优先级错误。
+- 检查范围为 `.github/workflows/*.yml|yaml` 和 `scripts/ci_software.sh`。
+- 对 YAML 只提取实际 `run:` scalar/block，并单独检查 runs-on、container options
+  和 device mapping；对 shell 忽略完整注释行，避免文档式禁令文字误报。
+- 拒绝 ROS node execution、CAN setup、`can10`、IMU device、CAN link configuration、
+  modprobe、GPIO write、privileged/device passthrough 和 self-hosted runner。
+- 自身测试覆盖合法 workflow、`ros2 launch`、setup_can、can10 配置、`/dev`
+  device mount、self-hosted、privileged 以及注释不误报。
 
-急停、命令故障和反馈安全故障共享原子主 stop batch 仲裁。反馈线程不会在节点
-状态锁内等待 driver I/O 锁；重复或并发事件不会反向获取锁或重复刷 stop 命令。
-设置机械零点这一直接流程也会在每个步骤前后检查 latch；锁存后立即失败返回，
-不再发送后续 `set_zero`、SDO 或进入运控命令，也不会打印“全部电机机械零点已设置”。
+## 11. 本地等价 CI 测试结果
 
-## 11. 急停和恢复交互
-
-- 正常、未伴随反馈安全故障的 `EMERGENCY_STOP` 仍可在真实恢复流程成功后显式
-  进入 MANUAL，并允许以后独立的急停批次。
-- 急停不再无条件清除 `_motor_protection_flags`。
-- 急停期间收到严重反馈会锁存并转换到 `ERROR`。
-- latch 存在时 `/enable_motor=true` 和键盘恢复均失败；只有 lifecycle 重新配置
-  或重启建立干净健康状态。
-
-## 12. 状态转换原因
-
-新增稳定原因：`MOTOR_FEEDBACK_FAULT`、`MOTOR_FAULT_UNDERVOLTAGE`、
-`MOTOR_OVERCURRENT_FAULT`、`MOTOR_OVERTEMPERATURE_FAULT`、
-`MOTOR_FAULT_ENCODER`、`MOTOR_FAULT_UNCALIBRATED`、
-`MOTOR_FAULT_MULTIPLE`、`MOTOR_CRITICAL_TEMPERATURE`、
-`MOTOR_FEEDBACK_TIMEOUT`、`MOTOR_INVALID_FEEDBACK`。反馈来源为
-`DRIVER_FEEDBACK`，新鲜度超时来源为 `WATCHDOG`。
-
-## 13. 保持不变的行为
-
-- MANUAL/AUTO/HOME 推进算法、三模式 `4.0 rad/s`、dt/step/tolerance、手动按键
-  增量和重复字符算法均未改变。
-- AUTO roll/pitch 映射、deadband、`1.0` 增益、软限位和 HOME 目标未改变。
-- `default_speed: 10.0` 和初始化写入 `0.0` 的策略未改变。
-- `motor_ids`、`motor_signs`、`motor_limits_min/max` 保持受保护默认值。
-- IMU 四元数、轴向、统一零点、公共 ROS 名称/类型均未改变。
-- 风扇产品代码、状态机、曲线、PWM、GPIO12/GPIO13 均未修改。
-- 未增加运行期自动重连或自动温度降速。
-
-## 14. 测试
-
-### 14.1 新增覆盖
-
-- pure health：全部数值/量程/mode/fault/timestamp 非法矩阵、未知 ID、连续无效计数、
-  温度五个边界、六类 fault 和多 bit、电流能力边界。
-- fake clock：timeout 0、startup grace、缺少首帧、逐电机年龄、等于/超过 timeout、
-  无效帧不刷新、deactivate 和新激活重置。
-- fake driver：全电机 stop、单台 stop 失败、命令阻断、目标同步、ERROR 发布语义、
-  普通急停恢复、急停中严重反馈、lifecycle 重配置。
-- 确定性并发：双电机同时故障、fault 与临界温度、在途目标写与反馈故障、反馈
-  故障与急停；均不使用 `sleep()` 猜测同步。
-- 两个 backend callback：异常可诊断、读取分发继续、后续 callback 继续、cleanup
-  清空反馈和错误 callback。
-- 公共 parser：四个 0x02 `uint16` 大端解析、现场三组室温字节回归、短帧拒绝。
-- 零点流程：初始停止后注入反馈安全锁存，断言不再发送零点、SDO 或运控恢复命令，
-  且不输出成功日志。
-
-### 14.2 实际命令与结果
-
-- `colcon build --symlink-install`：3 packages finished。
-- 电机包最终：`306 passed`。
+- `bash -n scripts/ci_software.sh`：通过。
+- checker/helper `py_compile`：通过。
+- `python3 scripts/check_ci_safety.py`：通过。
+- CI infrastructure targeted tests：`16 passed`。
+- 本地 whitespace（排除用户 `NEXT_COMMAND`）：通过。
+- 最终全工作区 `git diff --check`：通过；当前用户版 `NEXT_COMMAND` 没有触发
+  whitespace error，但本地 helper 仍按任务保护要求不把它纳入本任务检查范围。
+- `./scripts/ci_software.sh`：最终通过。
+- Python compile：通过，覆盖两个产品 Python 包、三个 launch 目录和两个 CI helper。
+- 三包 build：`3 packages finished`。
+- 电机包全量：`306 passed`。
 - 风扇关键回归：`98 passed`。
-- 三包完整：`406 tests, 0 errors, 0 failures, 0 skipped`。
-- `python3 -m py_compile src/imu_cybergear_ros2/imu_cybergear_ros2/*.py`：通过。
-- `git diff --check -- . ':(exclude)docs/NEXT_COMMAND.md'`：通过。
-- 全仓 `git diff --check`：未通过；仅因用户保留的 `docs/NEXT_COMMAND.md` 附加
-  实机日志含 10 处行尾空格。任务文档禁止修改该文件，因此原样保留并明确报告。
+- 三包完整：`422 tests, 0 errors, 0 failures, 0 skipped`。
+- 相对原 406 项完整基线新增 16 项 CI infrastructure 测试；产品既有测试未删除、
+  skip、xfail 或降低断言。
 
-中间电机全量首轮为 `298 passed, 1 failed`：既有测试的 `SimpleNamespace` fake
-缺少新增 stop 仲裁复位接口，导致成功急停恢复路径 `AttributeError`。补齐 fake
-接口后最终电机包 `300 passed`。这不是产品运行失败，也未访问硬件。
+首轮 checker 自测为 `12 passed, 4 failed`，暴露 YAML `- run:` 短写和 container
+options 提取遗漏；修正 checker 后为 `16 passed`。统一脚本首轮在 build 前因 ROS
+官方 setup 与 nounset 兼容问题退出，未开始构建或测试；限制 nounset 关闭范围后
+最终整套通过。这两项均为新增 CI 基础设施问题，不是产品测试或硬件故障。
 
-## 15. 文档更新
+## 12. GitHub Hosted CI 状态
 
-- 根 README 更新实际 HEAD 与 `v0.3.1` 关系、系统级 fault/温度保护、默认
-  timeout 依据、电流能力边界、0x02 端序纠正和纯软件验证范围。
-- 电机包 README 补充 MotorStatus、0x02 物理量、合法性、fault bit、温度、
-  新鲜度、锁存、恢复、callback、端序和电流边界。
-- YAML 注释与参数验证及运行语义一致；受保护默认值未改变。
-- 本文件已按模板完整覆盖；`docs/NEXT_COMMAND.md` 未修改。
+- 用户已在审查后明确授权创建中文 commit，但尚未授权 push，因此新 workflow
+  尚未在 GitHub Hosted Actions 上触发。
+- 当前只能确认 workflow 静态契约和本地等价 CI 通过，不能声称远端 CI green。
 
-## 16. 硬件安全声明
+## 13. README 和 AGENTS 更新
+
+- README 不再把已提交的反馈健康/端序修正描述为工作区修改，并概括 `v0.3.1`
+  后四项已提交加固及用户正常功能实机复测边界。
+- README 新增 runner、ROS 版本、触发条件、无硬件范围和本地统一入口，不把测试
+  数量硬编码为永久保证。
+- AGENTS 只新增 GitHub Actions 纯软件/hosted runner 安全边界；原硬件安全、
+  带电授权门槛和 Git 权限限制均保留。
+
+## 14. 保持不变的产品行为
+
+- 未修改 MANUAL/AUTO/HOME 算法、推进速度、dt/step/tolerance、键盘算法或 AUTO
+  映射/增益。
+- 未修改 motor IDs、directions、软限位、初始化目标、默认速度或其他硬件配置。
+- 未修改 feedback health、fault bit、温度 warning/critical、feedback timeout、
+  电流能力边界或 0x02 大端序 parser。
+- 未修改 IMU 协议、轴向、姿态换算或零点。
+- 未修改风扇状态机、activity、响应曲线、PWM、GPIO12/GPIO13 或电调行为。
+- 未修改 ROS 公共话题、服务、参数、消息类型或 launch 产品接口。
+- 唯一 manifest 行为变化是准确声明已有 pytest 测试依赖。
+
+## 15. 硬件安全声明
 
 - 未执行 `ros2 run`、`ros2 launch`、`ros2 topic`、`ros2 service`、`sudo` 或
   `scripts/setup_can.sh`。
-- 未启动或 spin 真实 IMU、电机、风扇节点或 hardware launch。
+- 未启动或 spin IMU、电机、风扇节点或任何 hardware launch。
 - 未打开 `/dev/imu_usb` 或任何真实串口。
-- 未创建或连接真实 SocketCAN bus，未访问或配置 `can10`。
-- 未构造用于真实连接的 CyberGear driver，未初始化/使能/控制电机，未写真实
-  SDO。
-- 未访问 GPIO12/GPIO13，未创建 Servo，未初始化/解锁电调，未输出 PWM，未
-  控制风扇。
-- lifecycle 测试使用内存 fake driver 且不 spin；backend callback 测试只构造
-  未连接对象并直接测试内存分发方法。
-- 用户自行执行的整机操作访问了真实 IMU、CAN、电机和风扇；首次日志暴露端序
-  错误，修正后再次复测统一 launch、机械零点和手动控制并报告正常。这些命令均
-  不是 Codex 执行的，也不构成后续硬件授权。
+- 未创建、连接或配置真实 SocketCAN，未访问 `can10`。
+- 未构造用于真实连接的 CyberGear driver，未初始化/使能/控制电机，未写 SDO。
+- 未访问 GPIO12/GPIO13，未创建 Servo，未初始化/解锁电调，未输出 PWM 或控制
+  风扇。
+- 未给电机或风扇通电，未进行任何带电测试。
+- 本地 build/test/py_compile/whitespace/checker 都是纯软件验证，不表述为实机验证。
 
-## 17. 最终 Git 状态
+## 16. 用户授权提交时 Git 状态
 
 - 分支仍为 `master`；HEAD/upstream 仍为
-  `80391d107d9727dad556c05f8df3bc97d2306f8b`，领先/落后仍为 `0/0`。
-- `docs/NEXT_COMMAND.md` 保留任务前用户修改且未暂存。
-- 用户已在修正后实机复测并审查结果后，明确授权使用中文 commit 并推送到
-  GitHub；提交 SHA 和 push 结果以本次会话最终终端报告为准。
+  `fae3a08fc1010b0c5b72314470e5359b087a4752`，领先/落后仍为 `0/0`。
+- `docs/NEXT_COMMAND.md` 保留任务前用户修改，未修改或暂存。
+- 用户已明确授权将本任务改动创建为中文 commit；本文件写入时 commit 尚未生成，
+  最终提交 SHA 以会话终端汇报为准。
+- `docs/NEXT_COMMAND.md` 明确排除在暂存和提交范围之外。
+- 未获 push 或 tag 授权；未创建 release，也未修改任何既有 tag。
 - 未 checkout、switch、reset、clean、restore、stash、rebase 或 merge。
-- `v0.3.0`、`v0.3.1` 未创建、移动、删除或重建。
-- 最终详细 status 和 diff 统计以本次会话终端报告为准。
+- 最终详细 `git status` 与 diff 统计以本次会话终端汇报为准。
 
-## 18. 未完成或受协议限制的内容
+## 17. 未完成或限制
 
-- 没有真实数值电流字段，`motor_current_limit_a` 尚不能形成 5.0 A 软件阈值保护；
-  只有固件过流 bit 已生效。
-- 无法由当前代码证明空闲周期反馈，因此强制 feedback timeout 默认不启用；启用
-  前仍需协议依据或受控实机确认。
-- 未执行真实 fault bit、过温、过流、反馈中断、无效帧、CAN 断线、stop 失败或
-  异常恢复实机注入。
-- 大端 parser 已由用户在正常机械零点和手动控制路径中实机复测；零点流程在真实
-  安全故障并发锁存时的中止语义，以及 fault/过温/超时等故障注入仍未实机验证。
-- 全仓 `git diff --check` 仍被禁止修改的 `docs/NEXT_COMMAND.md` 行尾空格阻塞；
-  除该文件外检查通过。
+- GitHub Hosted CI 因尚未 push 而未实际运行；Hosted runner 上的依赖下载、构建
+  耗时和 artifact 上传仍等待推送后验证。
+- 本任务没有也不需要真实 IMU、CAN、电机、GPIO 或风扇验证；真实 fault、过温、
+  反馈中断等硬件故障注入边界与上一基线相同。
 
-## 19. 额外发现
+## 18. 额外发现
 
-- 两个驱动后端原先静默吞掉 feedback callback 异常，可能隐藏安全回调问题；现已
-  在本任务范围内增加错误回调诊断，同时保留读取线程存活和后续 callback 规则。
-- 原反馈故障只跳过单台电机并在正常帧后自动清除；该行为不符合系统级锁存语义，
-  现已替换为全局 ERROR 路径。
-- 0x02 parser 原先以小端读取所有 `uint16`。这不仅造成温度假高，也会同时扭曲
-  position、speed 和 torque；现已统一修正并增加精确字节向量测试。
-- 现场日志还显示安全故障已经进入 `ERROR` 后，零点流程仍继续并打印成功；现已
-  在本任务安全路径范围内修复并以 fake driver 验证。
+- 电机包此前未在 `package.xml` 声明测试实际使用的 `python3-pytest`；本任务按
+  manifest-first 原则补齐，避免 CI 依赖开发机手工环境。
+- ROS Jazzy 的 setup 脚本与调用者启用 nounset 时需要受控兼容区间；统一脚本已把
+  该区间限制在 source 操作内。
+- 原仓库没有 GitHub Actions workflow。
 
-## 20. 后续建议
+## 19. 后续建议
 
-- 如需默认启用 feedback timeout，应先取得官方周期上报依据，或在重新满足硬件
-  授权门槛后验证两种后端在静止、无 SDO 目标时的实际反馈周期。
-- 如需数值安培保护，应使用官方验证的真实字段或 SDO，统一两个后端 parser 与
-  单位测试；不得从力矩推导。
-- 本任务不执行、也不建议顺带开始运行期自动重连任务。
+- 本次中文 commit 创建后，如用户另行授权 push，再观察第一次 GitHub Hosted CI，
+  确认 dependency setup、总耗时和 artifact 内容。
+- Hosted CI 确认后再独立评估运行期断线与受控重连；本任务未顺带实现。

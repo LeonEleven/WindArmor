@@ -9,10 +9,9 @@ WindArmor 当前把两个已经过实机测试的前置项目整合为一个 ROS
 
 当前稳定发布为 `v0.3.1`：它在 `v0.3.0` 的统一相对姿态、电机模式状态和
 风扇手动/自动仲裁基础上，包含统一 MANUAL/AUTO/HOME 电机推进速度、AUTO
-姿态增益和三种风扇响应曲线。当前任务开始时 `master` HEAD 为 `80391d1`，与
-`origin/master` 一致，位于 `v0.3.1` 后三个提交：其后依次完成风扇安全、
-电机命令/lifecycle 可靠性，以及电机配置和状态转换契约加固；三项均已提交并
-推送。本节所述反馈健康加固当前是该 HEAD 之上的工作区修改。
+姿态增益和三种风扇响应曲线。当前 `master` 开发基线在 `v0.3.1` 之后又依次
+提交了风扇安全与确定性、电机命令/lifecycle 可靠性、电机配置和状态转换契约，
+以及电机反馈健康、故障位、温度保护和 CyberGear 0x02 状态帧大端序修正。
 
 用户在上述加固后自行运行统一 launch，测试 MANUAL/AUTO 和风扇功能并报告基本
 正常。当前电机配置集中校验、显式状态转换契约和废弃参数兼容规则完成纯软件
@@ -190,6 +189,26 @@ rosdep install --from-paths src --ignore-src -r -y
 colcon build --symlink-install
 source install/setup.bash
 ```
+
+## 纯软件 CI
+
+仓库的 GitHub Actions 软件 CI 使用 GitHub 托管的 Ubuntu 24.04 runner 和
+ROS 2 Jazzy。向 `master` push、向 `master` 提交 pull request，或手动执行
+`workflow_dispatch` 都会触发。CI 只执行 Python 编译、三包构建、fake/mock
+单元与故障注入测试、三包完整测试、提交 whitespace 检查和 CI 自身安全检查；
+它不使用机器人或自托管 runner，不访问串口、CAN、CyberGear、GPIO 或 PWM，
+也不启动 ROS 硬件节点或 launch。
+
+已经安装 ROS 2 Jazzy 和仓库声明依赖的本地环境可运行同一入口：
+
+```bash
+cd ~/workspace/WindArmor
+./scripts/ci_software.sh
+```
+
+脚本把 `build`、`install`、`log` 和 ROS 日志放在隔离的临时目录，不依赖仓库中
+已有的构建产物。历史纯软件基线曾包含 406 项完整测试；实际数量会随测试增加
+而变化，不作为脚本中的固定通过条件。
 
 每次树莓派开机后，初始化一次 `can10`：
 

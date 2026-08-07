@@ -119,6 +119,16 @@ python3 -m pytest \
 串口或 GPIO 的自动验证，风扇底层 GPIO 控制器也不得在默认测试中实例化。不得
 把 fake/mock 覆盖表述为真实硬件验证，硬件测试不得加入默认测试命令。
 
+### GitHub Actions 安全边界
+
+GitHub Actions 只能使用 GitHub 托管 runner 执行纯软件构建，以及 pure
+logic、fake/mock、未连接 backend 和无硬件进程内 lifecycle 测试。仓库统一
+入口为 `scripts/ci_software.sh`，并由 `scripts/check_ci_safety.py` 约束 workflow
+和该入口。CI 禁止使用机器人或其他 self-hosted runner，禁止映射或访问真实
+`/dev`、配置 SocketCAN 或 `can10`、初始化 CyberGear、GPIO 或电调、输出 PWM、
+运行硬件节点/launch，或使用 secret 执行任何硬件操作。现有 fake motor driver、
+fake feedback 和 fake clock 不构成真实硬件验证。
+
 ### 非默认：真实硬件验证
 
 - **真实 IMU：** `ros2 launch imu_cybergear_ros2
