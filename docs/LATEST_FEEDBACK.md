@@ -1,371 +1,292 @@
-# 最新反馈：电机配置契约与状态转换确定性加固
+# 最新反馈：电机反馈健康、故障位与温度保护加固
 
 > 本文件只保留最近一次反馈。
 >
-> 日期：2026-08-06
+> 日期：2026-08-07
 
 ## 1. 执行结论
 
-- `docs/NEXT_COMMAND.md` 规定的状态转换契约、集中配置校验、废弃参数策略、
-  私有耦合清理、测试和文档目标均已完成。
-- 状态请求现在返回 `CHANGED`、`NO_CHANGE` 或 `REJECTED`，真实转换携带稳定的
-  reason/source 并保存不可变快照；非法转换和同状态请求均无状态回调副作用。
-- 所有关键参数在 driver factory、反馈回调和 ROS 运行资源创建前完成纯函数
-  校验。代表性非法配置测试明确断言上述创建入口均为 0 次调用。
-- 旧 ID、方向和软限位标量参数非默认时明确失败；USB 旧端口/波特率保留有警告
-  的 fallback，新参数始终优先。
-- 3 个包构建成功；电机包 `237 passed`；风扇关键回归 `98 passed`；三包完整
-  测试 `337 tests, 0 errors, 0 failures, 0 skipped`。
-- Codex 未运行或 spin 任何硬件节点，未运行 launch，也未访问真实硬件。软件完成
-  后，用户自行启动整个系统并完成 MANUAL/AUTO 功能实机测试。
-- 用户已在审查和实机功能测试后明确授权使用中文 commit 并推送到 GitHub；提交
-  SHA 和 push 结果以本次会话最终终端报告为准。
+- 已完成电机反馈来源、合法性、故障位、温度和新鲜度的纯软件安全链加固。
+- 任意已配置电机的非零固件故障位、临界温度、连续达到限制的无效反馈，以及
+  显式启用后的反馈超时，都会锁存系统级故障、停止全部电机并进入 `ERROR`。
+- 严重故障不会被下一帧正常反馈、温度回落、键盘 `r`、
+  `/enable_motor=true`、MANUAL/AUTO/HOME 自动恢复；恢复要求受控 lifecycle
+  重新配置或重启。
+- 反馈 timeout 框架已实现，但默认 `0.0`（关闭强制超时）。原因是代码和现有
+  协议实现不能证明电机空闲且没有新目标命令时仍持续周期上报。
+- 0x02 反馈没有真实数值 `current_a`；没有从 torque 或其他字段推导电流。
+  实际过流保护来自电机固件的过流 fault bit。
+- 用户自行实机操作暴露了 0x02 四个 `uint16` 的端序错误：旧 parser 把合理的
+  `35.9/35.3/34.6 °C` 解析成 `2636.9/2483.3/2304.1 °C`。公共 parser 已改为
+  大端序，position、speed、torque、temperature 同步修正。
+- 机械零点流程在反馈安全故障锁存后不再继续恢复运控或输出虚假成功日志。
+- 3 个包构建成功；电机包最终 `306 passed`；风扇关键回归 `98 passed`；三包
+  完整测试 `406 tests, 0 errors, 0 failures, 0 skipped`。
+- Codex 未运行或 spin 任何硬件节点，未访问真实硬件。修正后用户再次自行完成统一
+  launch、机械零点和手动控制实机复测，并报告未再出现无效反馈或其他问题。
 
 ## 2. 开始前 Git 基线
 
 - 分支：`master`。
-- HEAD：`aa22ea3dfe5214c8091a4905aa42a98e82db77dd`。
-- upstream：`origin/master`，提交同为 `aa22ea3dfe5214c8091a4905aa42a98e82db77dd`。
+- HEAD：`80391d107d9727dad556c05f8df3bc97d2306f8b`。
+- upstream：`origin/master`，同为
+  `80391d107d9727dad556c05f8df3bc97d2306f8b`。
 - 本地领先/落后：`0/0`。
-- 最近提交：`aa22ea3 修复：加固电机命令一致性与生命周期可靠性`。
-- `v0.3.0` 指向提交 `c3b3c3989674c2c1c902e940953da87fd5812db5`。
-- `v0.3.1` 指向提交 `5d7bd0fbf0acac3be4f2354a616d109928d5091d`。
-- HEAD 位于 `v0.3.1` 后两个提交；开始时 describe 为
-  `v0.3.1-2-gaa22ea3-dirty`。
-- 任务开始前工作区唯一修改是 `M docs/NEXT_COMMAND.md`，无未跟踪文件。
-- 该任务说明的原有 diff 为 `1155 insertions, 959 deletions`，本任务未修改、
-  暂存、覆盖或还原该文件。
+- 最近提交：`80391d1 加固：完善电机配置契约与状态转换确定性`。
+- `v0.3.0` commit：`c3b3c3989674c2c1c902e940953da87fd5812db5`。
+- `v0.3.1` commit：`5d7bd0fbf0acac3be4f2354a616d109928d5091d`。
+- HEAD 位于 `v0.3.1` 后 3 个提交；开始时 describe 为
+  `v0.3.1-3-g80391d1-dirty`。
+- 任务开始前唯一工作区修改为 `M docs/NEXT_COMMAND.md`，无未跟踪文件；该文件
+  是用户任务说明，本任务未修改、暂存、覆盖或还原。
 
 ## 3. 修改文件
 
 ### 3.1 任务前已有修改
 
-- `docs/NEXT_COMMAND.md`：用户提供的任务说明；保持原样。
+- `docs/NEXT_COMMAND.md`：用户任务说明，原样保留。
 
 ### 3.2 本任务产品代码与配置
 
-- `controller_state.py`：显式合法转换表、结果/原因/来源枚举、不可变最近转换
-  快照、幂等语义、非法转换拒绝和受控回调注册。
-- `motor_config.py`：新增不可变分层配置对象及完整纯函数解析/校验。
-- `imu_motor_controller_node.py`：重排 configure 顺序，在任何驱动或 ROS 资源
-  创建前校验；迁移 lifecycle 状态原因；使用公开回调注册接口。
-- `motor_manager.py`：迁移初始化、命令故障、HOME、机械零点等状态调用点，检查
-  关键结果，并在状态汇总中显示最近转换。
-- `safety_monitor.py`：移除私有状态锁访问；区分 watchdog、话题/服务急停、远程
-  disable 和显式恢复；恢复状态提交失败时重新停止电机。
-- `keyboard_handler.py`：区分键盘模式、急停和恢复来源，并检查转换结果。
-- `imu_cybergear_params.yaml`：更新校验、废弃参数和未生效参数边界注释；所有受
-  保护默认值保持不变。
+- `motor_health.py`：新增不依赖 ROS/硬件的反馈合法性、故障分类、温度判断、
+  连续无效计数、本地新鲜度与不可变故障快照核心。
+- `safety_monitor.py`：接入健康决策、限频诊断、反馈 timer lifecycle、严重故障
+  入口，并修正急停不得清除反馈保护。
+- `motor_manager.py`：统一反馈安全故障锁存、普通命令阻断、目标同步、全电机
+  best-effort stop、ERROR 转换和并发 stop 批次仲裁；零点流程在锁存后立即中止。
+- `controller_state.py`：新增稳定的故障位、临界温度、超时和无效反馈原因，以及
+  `DRIVER_FEEDBACK` 来源。
+- `motor_config.py`、`imu_motor_controller_node.py`：声明、预校验和应用新增参数，
+  管理健康会话资源并输出数值电流能力边界提示。
+- `cybergear_driver.py`：两个后端均增加 feedback callback 异常诊断；异常不会
+  杀死读取线程，后续 callback 继续执行，cleanup 清空回调；公共 0x02 parser
+  将四个 `uint16` 按大端序解析。
+- `imu_cybergear_params.yaml`：新增反馈合法性/新鲜度参数及准确注释；受保护默认
+  参数未改变。
 
-### 3.3 测试与文档
+### 3.3 测试和文档
 
-- `test_controller_state.py`：覆盖全部合法转换、关键非法转换、幂等、回调、快照、
-  并发读取和注册规则。
-- `test_motor_config.py`：覆盖默认值、所有主要非法配置、废弃参数和 USB fallback。
-- `test_state_call_sites.py`：覆盖 watchdog、键盘模式、话题/服务/键盘急停和键盘
-  恢复来源。
-- `test_motor_lifecycle.py`：增加配置失败零副作用、fallback 单次警告和 shutdown
-  原因测试。
-- `test_motor_manager.py`、`test_motor_reliability.py`：迁移状态调用签名并断言 HOME、
-  命令故障、连接/初始化和机械零点原因。
-- `test_control_interfaces.py`：确认产品模块不再访问状态管理器私有锁/回调字段。
-- 根 `README.md`、电机包 `README.md`：更新 Git 基线、配置与状态契约、废弃参数、
-  用户既有功能验证和硬件验证边界。
-- `AGENTS.md`：修正“没有 fake driver/lifecycle 测试”的过时描述，未削弱任何
-  硬件安全或 Git 规则。
-- `docs/LATEST_FEEDBACK.md`：完整覆盖为本次反馈。
+- 新增 `test_motor_health.py`、`test_motor_safety.py`、
+  `test_motor_feedback_callbacks.py` 和 `test_cybergear_feedback_parser.py`。
+- 更新 `fake_motor_driver.py`、`test_controller_state.py`、
+  `test_motor_config.py`、`test_motor_lifecycle.py` 和
+  `test_state_call_sites.py`。
+- 更新根 `README.md`、电机包 `README.md` 和本文件。
+- 未修改 `AGENTS.md`、风扇产品代码或 bringup 产品代码。
 
-## 4. 状态转换表
+## 4. 当前反馈协议能力
 
-全部同状态请求均允许，但只返回 `NO_CHANGE`，不算真实转换。真实合法转换为：
+- `MotorStatus` 全部字段为：`motor_id`；`raw_position`、`raw_speed`、
+  `raw_torque`、`raw_temp`；`position_rad`、`speed_rad_s`、`torque_nm`、
+  `temperature`；`mode`、`fault_flags`、`timestamp`。
+- 0x02 帧 8 字节数据实际包含大端 uint16 位置、速度、力矩和温度；29-bit CAN ID
+  包含电机 ID、2-bit mode 和 6-bit fault flags。用户现场数值的逐字节反推与此
+  一致；SDO 发送字段具有不同布局，本次没有做无依据的全局端序替换。
+- `timestamp` 在公共 parser 中以 `time.monotonic()` 生成，仅用于诊断；强制
+  新鲜度使用反馈回调本地记录的单调接收时刻。
+- USB-CAN 和 SocketCAN 后端均由后台线程被动读取并过滤 0x02，然后使用同一
+  parser 和回调语义。
+- 当前代码没有主动状态查询，也不能证明反馈属于可靠周期主动上报还是命令响应；
+  尤其不能保证空闲且无新目标命令时持续反馈。
+- 0x02 没有数值安培电流字段，仓库也没有经过协议验证的其他 `current_a` 来源。
 
-```text
-UNINITIALIZED
-  → INITIALIZING
-  → ERROR
-  → SHUTTING_DOWN
+## 5. 反馈合法性
 
-INITIALIZING
-  → MANUAL_RUNNING
-  → EMERGENCY_STOP
-  → ERROR
-  → SHUTTING_DOWN
+- 未配置 motor ID 的反馈只限频 warning，不写入 `_motor_feedback`、不刷新时间、
+  不改变保护或全局状态。
+- position、speed、torque、temperature、timestamp 必须为有限数值；position、
+  speed 和 torque 必须位于 0x02 协议量程，温度必须位于 `[-40, 200] °C` 的
+  解析后物理合理范围，timestamp 必须非负。
+- mode 只接受 0/1/2；fault flags 只允许 bit0～bit5。
+- 单个无效帧被拒绝且增加逐电机连续计数；合法帧在触发前清零计数。默认连续
+  3 帧无效触发系统级 `ERROR`。无效帧不会覆盖最近合法反馈或刷新新鲜度。
+- `ERROR` 后合法帧不会清除全局 latch、首次故障快照或 protection flag。
 
-MANUAL_RUNNING
-  → AUTO_RUNNING
-  → EMERGENCY_STOP
-  → ERROR
-  → SHUTTING_DOWN
+## 6. 电机故障位保护
 
-AUTO_RUNNING
-  → MANUAL_RUNNING
-  → EMERGENCY_STOP
-  → ERROR
-  → SHUTTING_DOWN
+- bit0 欠压：`MOTOR_FAULT_UNDERVOLTAGE`。
+- bit1 过流：`MOTOR_OVERCURRENT_FAULT`。
+- bit2 过温：`MOTOR_OVERTEMPERATURE_FAULT`。
+- bit3 磁编码、bit4 HALL 编码：`MOTOR_FAULT_ENCODER`。
+- bit5 未标定：`MOTOR_FAULT_UNCALIBRATED`。
+- 多 bit：记录全部故障名称和原始 mask，使用 `MOTOR_FAULT_MULTIPLE`。
+- 上述任一非零 bit 都立即停止全部电机并进入 `ERROR`。重复或并发帧只执行一次
+  主 stop batch；后续触发电机仍会锁存自己的 protection flag。
 
-EMERGENCY_STOP
-  → MANUAL_RUNNING（仅 EXPLICIT_ESTOP_RECOVERY）
-  → ERROR
-  → SHUTTING_DOWN
+## 7. 温度保护
 
-ERROR
-  → SHUTTING_DOWN
+- `temperature < 80.0 °C`：正常接受。
+- `80.0 <= temperature < 90.0 °C`：按电机限频 warning，在状态汇总标记；不
+  自动降速、不修改三模式速度和 `default_speed`、不停止电机、不进入 ERROR。
+- `temperature >= 90.0 °C`：一条完整合法反馈立即停止全部电机、锁存并进入
+  `ERROR`。
+- 固件过温 bit 独立立即生效，不受数值温度影响；临界后温度回落不自动恢复。
 
-SHUTTING_DOWN
-  → 无其他状态
-```
+## 8. 电流保护能力边界
 
-`UNINITIALIZED → ERROR` 保留用于配置前异常语义，并由真实 `StateManager` 行为
-测试覆盖。公开模式仍只使用 `MANUAL`、`AUTO`、`EMERGENCY_STOP`、`DISABLED`
-和 `ERROR`，消息类型与 QoS 未变。
+- 固件过流 fault bit 已实际接入立即系统级保护。
+- `motor_current_limit_a: 5.0` 继续保留和校验，但没有真实 `current_a`，因此不
+  参与任何数值阈值比较；configure 输出一次明确能力边界 warning。
+- 未新增电流 SDO 或 parser；未从 `torque_nm`、`raw_torque`、速度或其他字段
+  推导电流，也未假定固定转矩常数。
 
-## 5. 转换结果、原因和来源
+## 9. 反馈新鲜度
 
-- `TransitionOutcome`：`CHANGED`、`NO_CHANGE`、`REJECTED`。
-- `TransitionResult`：包含 outcome、旧状态、请求状态、reason 和 source。
-- 原因覆盖配置开始/成功/失败、驱动连接失败、电机初始化失败、用户模式切换、
-  HOME、watchdog、键盘/话题/服务急停、远程停用、显式恢复、位置/速度写失败、
-  机械零点失败和 shutdown。
-- 来源覆盖 lifecycle、motor manager、safety monitor、keyboard、service、topic 和
-  watchdog。
-- 初始化完成、急停、恢复、命令 ERROR 和 shutdown 等关键调用方都检查转换结果；
-  被拒绝时记录高优先级错误，不继续报告虚假成功。
+- 每台电机记录首次合法反馈状态、最近本地单调接收时间和反馈年龄；反馈对象自带
+  timestamp 不作为超时依据。
+- 新增 `motor_feedback_timeout_sec: 0.0`、
+  `motor_feedback_startup_grace_sec: 3.0`、
+  `motor_feedback_check_rate_hz: 10.0`。
+- 默认 timeout 关闭，因为无法证明空闲周期反馈；关闭时仍可在状态汇总查看年龄。
+- 显式设置正 timeout 后，每次 activate 建立新会话；startup grace 结束仍缺首帧，
+  或已反馈电机年龄严格超过 timeout，都会停止全部电机并进入 `ERROR`。恰好等于
+  timeout 不触发。
+- 无效帧不刷新时间；deactivate 停止检查，cleanup/shutdown 幂等销毁 timer；
+  重新 configure/activate 不继承旧反馈时间或连续无效计数。
 
-## 6. 幂等与非法转换
+## 10. 统一安全故障路径
 
-- `STATE_X → STATE_X` 返回 `NO_CHANGE`，不更新序号/快照，不调用状态变化回调，
-  不停止 HOME，也不清除普通运动。
-- 非法请求返回 `REJECTED`，原状态保持不变；结果和错误日志记录 old/new、reason
-  和 source，最近真实转换快照保持不变。
-- `ERROR` 不能回到 MANUAL/AUTO；`SHUTTING_DOWN` 不能离开；急停恢复必须使用
-  显式恢复原因。
-- 回调在状态锁外分别执行。回调异常会被记录，不回滚已经原子提交的状态，也不
-  阻止另一个回调按规则执行。
+1. 在节点状态锁内原子锁存首个不可变故障快照；
+2. 设置触发电机 protection flag，并阻断新的普通位置/速度命令；
+3. 清除 MANUAL/AUTO/HOME 未完成运动，将 `desired_targets` 同步到最近成功发送的
+   `current_targets`；
+4. 释放状态锁后，按 `motor_ids` 对全部电机执行 best-effort stop；
+5. 一台 stop 失败会记录但不阻止其他电机；
+6. 使用稳定 reason/source 转换到 `ERROR`，状态回调发布公共 `ERROR`；
+7. 转换被拒绝时仍保留 latch 和停止结果，并输出高优先级错误。
 
-## 7. 最近转换快照
+急停、命令故障和反馈安全故障共享原子主 stop batch 仲裁。反馈线程不会在节点
+状态锁内等待 driver I/O 锁；重复或并发事件不会反向获取锁或重复刷 stop 命令。
+设置机械零点这一直接流程也会在每个步骤前后检查 latch；锁存后立即失败返回，
+不再发送后续 `set_zero`、SDO 或进入运控命令，也不会打印“全部电机机械零点已设置”。
 
-- `TransitionRecord` 是 frozen dataclass，字段包括 sequence、old/new state、
-  reason、source 和 monotonic timestamp。
-- 只有真实变化递增 sequence 并替换快照；幂等或拒绝请求不覆盖。
-- 读取在状态锁下返回完整不可变对象，测试覆盖外部修改失败、可控单调时钟以及
-  多线程并发读取不会观察到部分更新。
-- 键盘 `p` 状态汇总现在附带最近转换序号、状态、原因、来源和单调时间；没有
-  新增 ROS message 或 topic。
+## 11. 急停和恢复交互
 
-## 8. 私有耦合清理
+- 正常、未伴随反馈安全故障的 `EMERGENCY_STOP` 仍可在真实恢复流程成功后显式
+  进入 MANUAL，并允许以后独立的急停批次。
+- 急停不再无条件清除 `_motor_protection_flags`。
+- 急停期间收到严重反馈会锁存并转换到 `ERROR`。
+- latch 存在时 `/enable_motor=true` 和键盘恢复均失败；只有 lifecycle 重新配置
+  或重启建立干净健康状态。
 
-- 主节点通过 `register_stop_auto_zero_callback()` 完成受控一次性注册，不再写
-  `_stop_auto_zero_callback`。
-- 首次注册成功；相同回调重复注册是明确幂等；不同回调覆盖被拒绝并有测试。
-- `SafetyMonitor` 使用公共 `is_in()`、状态属性和结构化 `transition_to()`，不再
-  访问 `_state_lock`；锁没有被公开。
-- 产品代码结构测试确认上述私有访问已经消失。
+## 12. 状态转换原因
 
-## 9. 配置对象和校验顺序
-
-新增 frozen 配置层：
-
-- `MotorChannelConfig`；
-- `MotorCommunicationConfig`；
-- `MotorControlConfig`（复用既有 `MotionParameters`）；
-- `MotorSafetyConfig`；
-- `MotorRosInterfaceConfig`；
-- `MotorKeyboardConfig`；
-- `MotorNodeConfig`。
-
-configure 顺序为：
-
-```text
-读取 ROS 参数
-→ 兼容参数处理
-→ build_motor_node_config() 完整纯函数校验
-→ 保存已验证配置和初始化内存状态
-→ 创建 driver
-→ 创建子模块并注册 fake/真实驱动反馈回调
-→ 创建 ROS 资源
-→ 连接和初始化电机
-→ 非零 watchdog 才创建定时器
-```
-
-代表性重复 ID、非默认废弃参数和非法告警限频均验证 driver factory、publisher、
-subscription、service、timer 调用次数为 0；driver、callback、watchdog、keyboard
-和电机命令均未创建或启动。`watchdog_timeout_ms=0` 明确保留禁用语义。
-
-## 10. 电机列表校验
-
-- 至少一台电机，八个列表长度必须完全一致；错误列出全部实际长度。
-- motor ID 必须为唯一的 `1～127` 整数；master ID 为 `0～255` 且不得冲突。
-- 名称去除首尾空白后非空且唯一。
-- sign 必须是有限的 `+1.0` 或 `-1.0`。
-- 软限位必须有限、`min < max`，并处于驱动明确的 `[-4π, +4π]` 协议范围。
-- control axis 只接受 `roll_left`、`roll_right` 和 `pitch`。
-- 前后键必须是全局唯一的小写单字符；固定控制键、相同前后键和所有数字选择键
-  均拒绝，不能再静默覆盖 `_key_to_motor`。
-- 默认 `[4,3,2,1]`、方向和软限位完全保持原值。
-
-## 11. 通信、ROS 和安全参数校验
-
-- 后端只接受 `socketcan_hat`、`usb_can_serial`；SocketCAN 要求非空 channel 和
-  bustype；USB 要求最终端口非空、波特率为正整数。本任务不检查设备是否存在。
-- 五个可配置话题拒绝空白、空值和明显非法名称，不创建 ROS 实体做校验。
-- 发布频率、IMU 零点新鲜度、键盘频率、位置误差阈值和告警限频均为正有限值。
-- 既有 motion/gain 校验继续复用；deadband 非负，roll/pitch sign 严格为 +/-1。
-- watchdog 是非负整数，0 禁用；温度阈值有限且 critical 严格大于 limit；电流、
-  位置误差和告警限频阈值必须为正。
-- 当前温度、电流和 `reconnect_on_disconnect` 参数只被解析校验，尚未直接实现
-  独立温度降速/停机、电流暂停或运行期重连算法；YAML 和 README 已明确这一点。
-
-## 12. 废弃参数兼容
-
-- 旧 motor ID、sign、`m1_min/m1_max` 至 `m4_min/m4_max` 保持默认时允许配置。
-- 任一旧标量非默认时立即 `ValueError`，错误同时给出旧参数名和新的列表参数名。
-- `usb_port` 非空、`usb_baud` 非零时始终优先，即使 legacy 参数不同也无警告。
-- 仅当新端口为空或新波特率为 0 时使用 `motor_port`/`motor_baud`；解析后的端口和
-  波特率仍须合法，并合并输出一次明确废弃警告。
-- lifecycle fallback 测试注入 `FakeMotorDriver`，确认传给 factory 的解析结果，
-  没有打开串口。
+新增稳定原因：`MOTOR_FEEDBACK_FAULT`、`MOTOR_FAULT_UNDERVOLTAGE`、
+`MOTOR_OVERCURRENT_FAULT`、`MOTOR_OVERTEMPERATURE_FAULT`、
+`MOTOR_FAULT_ENCODER`、`MOTOR_FAULT_UNCALIBRATED`、
+`MOTOR_FAULT_MULTIPLE`、`MOTOR_CRITICAL_TEMPERATURE`、
+`MOTOR_FEEDBACK_TIMEOUT`、`MOTOR_INVALID_FEEDBACK`。反馈来源为
+`DRIVER_FEEDBACK`，新鲜度超时来源为 `WATCHDOG`。
 
 ## 13. 保持不变的行为
 
-- MANUAL/AUTO/HOME 软件推进算法、速度、dt 上限、单步上限和容差未变。
-- AUTO roll/pitch 映射、死区、增益和统一目标推进器未变。
-- 电机 ID、方向、软限位、初始化 `0.0` 目标和 HOME 目标未变。
-- IMU 四元数、轴向、相对姿态和统一零点算法未变。
-- `/e_stop`、看门狗、软限位、停用、ERROR 和安全退出机制未删除或弱化。
-- 风扇产品代码、状态机、曲线、PWM 和 GPIO12/GPIO13 未修改。
-- ROS 公共话题、服务、类型和模式值未删除或重命名；没有新增自动恢复路径。
+- MANUAL/AUTO/HOME 推进算法、三模式 `4.0 rad/s`、dt/step/tolerance、手动按键
+  增量和重复字符算法均未改变。
+- AUTO roll/pitch 映射、deadband、`1.0` 增益、软限位和 HOME 目标未改变。
+- `default_speed: 10.0` 和初始化写入 `0.0` 的策略未改变。
+- `motor_ids`、`motor_signs`、`motor_limits_min/max` 保持受保护默认值。
+- IMU 四元数、轴向、统一零点、公共 ROS 名称/类型均未改变。
+- 风扇产品代码、状态机、曲线、PWM、GPIO12/GPIO13 均未修改。
+- 未增加运行期自动重连或自动温度降速。
 
 ## 14. 测试
 
 ### 14.1 新增覆盖
 
-- 全合法转换表、关键非法转换、ERROR/SHUTTING_DOWN 终态、急停恢复原因；
-- 幂等/拒绝副作用、锁外回调、回调异常、序号/单调时间/不可变和并发快照；
-- 默认配置及空列表、长度、ID、名称、sign、软限位、轴、键、后端、话题、频率、
-  watchdog、温度、电流、位置误差和告警限频非法矩阵；
-- 配置失败零 driver/ROS/runtime 副作用；
-- 废弃参数迁移、新参数优先、legacy fallback 和单次警告；
-- watchdog、HOME、键盘切换、三种急停、恢复、命令故障、初始化和 shutdown 来源；
-- 既有命令提交、初始化回滚、lifecycle、并发锁、IMU 和运动回归。
+- pure health：全部数值/量程/mode/fault/timestamp 非法矩阵、未知 ID、连续无效计数、
+  温度五个边界、六类 fault 和多 bit、电流能力边界。
+- fake clock：timeout 0、startup grace、缺少首帧、逐电机年龄、等于/超过 timeout、
+  无效帧不刷新、deactivate 和新激活重置。
+- fake driver：全电机 stop、单台 stop 失败、命令阻断、目标同步、ERROR 发布语义、
+  普通急停恢复、急停中严重反馈、lifecycle 重配置。
+- 确定性并发：双电机同时故障、fault 与临界温度、在途目标写与反馈故障、反馈
+  故障与急停；均不使用 `sleep()` 猜测同步。
+- 两个 backend callback：异常可诊断、读取分发继续、后续 callback 继续、cleanup
+  清空反馈和错误 callback。
+- 公共 parser：四个 0x02 `uint16` 大端解析、现场三组室温字节回归、短帧拒绝。
+- 零点流程：初始停止后注入反馈安全锁存，断言不再发送零点、SDO 或运控恢复命令，
+  且不输出成功日志。
 
-### 14.2 实际命令与最终结果
+### 14.2 实际命令与结果
 
-纯软件构建：
+- `colcon build --symlink-install`：3 packages finished。
+- 电机包最终：`306 passed`。
+- 风扇关键回归：`98 passed`。
+- 三包完整：`406 tests, 0 errors, 0 failures, 0 skipped`。
+- `python3 -m py_compile src/imu_cybergear_ros2/imu_cybergear_ros2/*.py`：通过。
+- `git diff --check -- . ':(exclude)docs/NEXT_COMMAND.md'`：通过。
+- 全仓 `git diff --check`：未通过；仅因用户保留的 `docs/NEXT_COMMAND.md` 附加
+  实机日志含 10 处行尾空格。任务文档禁止修改该文件，因此原样保留并明确报告。
 
-```bash
-source /opt/ros/jazzy/setup.bash
-colcon build --symlink-install
-```
-
-结果：3 个包构建成功。
-
-电机包全量：
-
-```bash
-source /opt/ros/jazzy/setup.bash
-source install/setup.bash
-ROS_LOG_DIR=/tmp python3 -m pytest src/imu_cybergear_ros2/test -q
-```
-
-结果：`237 passed`。
-
-风扇关键回归：
-
-```bash
-source /opt/ros/jazzy/setup.bash
-source install/setup.bash
-python3 -m pytest \
-  src/windarmor_fan_controller/test/test_fan_control.py \
-  src/windarmor_fan_controller/test/test_pwm.py \
-  src/windarmor_fan_controller/test/test_fan_keyboard.py \
-  src/windarmor_fan_controller/test/test_interface_routing.py -q
-```
-
-结果：`98 passed`。
-
-三包完整测试：
-
-```bash
-source /opt/ros/jazzy/setup.bash
-source install/setup.bash
-ROS_LOG_DIR=/tmp colcon test --packages-select \
-  imu_cybergear_ros2 windarmor_fan_controller windarmor_bringup
-colcon test-result --verbose
-```
-
-结果：
-
-- 总数：337；
-- passed：337；
-- failed：0；
-- errors：0；
-- skipped：0。
-
-Python `py_compile` 通过；最终 `git diff --check` 通过。
-
-### 14.3 中间诊断
-
-- 风扇回归首轮命令未加载工作区 setup，在 pytest 收集阶段以
-  `ModuleNotFoundError: windarmor_fan_controller` 结束；没有执行测试逻辑。
-- 加载 ROS 和 `install/setup.bash` 后同一测试集最终 `98 passed`。这属于测试
-  环境加载问题，不是产品失败，也未触发任何硬件访问。
-
-全部自动结果均为纯软件验证，不是实机验证。
+中间电机全量首轮为 `298 passed, 1 failed`：既有测试的 `SimpleNamespace` fake
+缺少新增 stop 仲裁复位接口，导致成功急停恢复路径 `AttributeError`。补齐 fake
+接口后最终电机包 `300 passed`。这不是产品运行失败，也未访问硬件。
 
 ## 15. 文档更新
 
-- 根 README 已更新当前 HEAD 与 `v0.3.1` 关系、上一项已提交/推送状态、用户既有
-  功能验证、配置契约、状态契约和废弃参数行为。
-- 电机包 README 已补充分层配置、列表/键位/后端规则、watchdog 0、温度关系、
-  合法转换、原因/来源、fallback 和未生效参数边界。
-- YAML 注释与实际校验一致；受保护默认值未改。
-- AGENTS 仅修正 fake driver/lifecycle 覆盖描述，安全门槛不变。
-- 本文件已完整更新；`docs/NEXT_COMMAND.md` 未修改。
+- 根 README 更新实际 HEAD 与 `v0.3.1` 关系、系统级 fault/温度保护、默认
+  timeout 依据、电流能力边界、0x02 端序纠正和纯软件验证范围。
+- 电机包 README 补充 MotorStatus、0x02 物理量、合法性、fault bit、温度、
+  新鲜度、锁存、恢复、callback、端序和电流边界。
+- YAML 注释与参数验证及运行语义一致；受保护默认值未改变。
+- 本文件已按模板完整覆盖；`docs/NEXT_COMMAND.md` 未修改。
 
 ## 16. 硬件安全声明
 
 - 未执行 `ros2 run`、`ros2 launch`、`ros2 topic`、`ros2 service`、`sudo` 或
   `scripts/setup_can.sh`。
-- 未启动或 spin 真实 IMU/电机/风扇节点。
-- 未打开 `/dev/imu_usb` 或任何真实串口，未创建真实 SocketCAN bus，未访问或
-  配置 `can10`。
-- 未构造用于连接硬件的真实 CyberGear driver，未初始化、使能或控制电机，未
-  写真实 SDO。
-- 未访问 GPIO12/GPIO13，未创建 Servo，未解锁电调，未输出 PWM，未控制风扇。
-- lifecycle 测试创建的 ROS 资源不 spin、不激活硬件，driver 始终为内存 fake。
-- 软件完成后，用户报告自行启动了整个系统并完成 MANUAL/AUTO 功能实机测试。
-  这是用户执行的正常功能验证，不是 Codex 硬件操作，也不代表配置拒绝、非法
-  状态转换、SDO、初始化、stop/close、资源销毁等故障路径完成实机注入。
-- 带电故障注入、极限和标定测试仍未执行；上述用户测试不能替代这些验证，也不
-  构成 Codex 后续硬件操作授权。
+- 未启动或 spin 真实 IMU、电机、风扇节点或 hardware launch。
+- 未打开 `/dev/imu_usb` 或任何真实串口。
+- 未创建或连接真实 SocketCAN bus，未访问或配置 `can10`。
+- 未构造用于真实连接的 CyberGear driver，未初始化/使能/控制电机，未写真实
+  SDO。
+- 未访问 GPIO12/GPIO13，未创建 Servo，未初始化/解锁电调，未输出 PWM，未
+  控制风扇。
+- lifecycle 测试使用内存 fake driver 且不 spin；backend callback 测试只构造
+  未连接对象并直接测试内存分发方法。
+- 用户自行执行的整机操作访问了真实 IMU、CAN、电机和风扇；首次日志暴露端序
+  错误，修正后再次复测统一 launch、机械零点和手动控制并报告正常。这些命令均
+  不是 Codex 执行的，也不构成后续硬件授权。
 
 ## 17. 最终 Git 状态
 
-- 分支仍为 `master`；HEAD 仍为
-  `aa22ea3dfe5214c8091a4905aa42a98e82db77dd`，upstream 未变。
-- `docs/NEXT_COMMAND.md` 仍保留任务前 `1155/959` diff，未被本任务修改或暂存。
-- 工作区包含本任务产品、测试和文档修改，以及 3 个本任务新增文件：
-  `motor_config.py`、`test_motor_config.py`、`test_state_call_sites.py`。
-- 用户已明确授权把本任务改动使用中文 commit 并推送到 GitHub；任务前已有的
-  `docs/NEXT_COMMAND.md` 继续排除在暂存和提交之外。实际 commit SHA、push 和
-  提交后工作区状态以本次会话最终终端报告为准。
-- 未执行 checkout、switch、reset、clean、restore、stash、rebase 或 merge。
+- 分支仍为 `master`；HEAD/upstream 仍为
+  `80391d107d9727dad556c05f8df3bc97d2306f8b`，领先/落后仍为 `0/0`。
+- `docs/NEXT_COMMAND.md` 保留任务前用户修改且未暂存。
+- 用户已在修正后实机复测并审查结果后，明确授权使用中文 commit 并推送到
+  GitHub；提交 SHA 和 push 结果以本次会话最终终端报告为准。
+- 未 checkout、switch、reset、clean、restore、stash、rebase 或 merge。
 - `v0.3.0`、`v0.3.1` 未创建、移动、删除或重建。
-- 最终详细 `git status --short --branch` 和 diff 统计以终端最终报告为准。
+- 最终详细 status 和 diff 统计以本次会话终端报告为准。
 
-## 18. 额外发现
+## 18. 未完成或受协议限制的内容
 
-- 原 YAML 把温度阈值描述为自动降速/停机、把电流阈值描述为暂停目标，但当前
-  产品代码没有直接使用这些数值实现对应算法；本任务仅集中校验并修正文档，未
-  越界新增保护算法。
-- `reconnect_on_disconnect` 同样保持兼容声明并校验布尔类型，但当前控制节点尚未
-  用它切换运行期重连策略。
-- 没有发现需要越过任务边界顺带修改的其他产品问题。
+- 没有真实数值电流字段，`motor_current_limit_a` 尚不能形成 5.0 A 软件阈值保护；
+  只有固件过流 bit 已生效。
+- 无法由当前代码证明空闲周期反馈，因此强制 feedback timeout 默认不启用；启用
+  前仍需协议依据或受控实机确认。
+- 未执行真实 fault bit、过温、过流、反馈中断、无效帧、CAN 断线、stop 失败或
+  异常恢复实机注入。
+- 大端 parser 已由用户在正常机械零点和手动控制路径中实机复测；零点流程在真实
+  安全故障并发锁存时的中止语义，以及 fault/过温/超时等故障注入仍未实机验证。
+- 全仓 `git diff --check` 仍被禁止修改的 `docs/NEXT_COMMAND.md` 行尾空格阻塞；
+  除该文件外检查通过。
 
-## 19. 后续建议
+## 19. 额外发现
 
-- 本任务提交后继续保留未暂存的 `docs/NEXT_COMMAND.md` 用户修改；后续是否单独
-  处理该文件仍由用户决定。
-- 若后续要让温度、电流或运行期重连参数真正参与保护，应作为独立控制安全任务，
-  明确故障语义、锁边界、mock 测试和硬件授权，不应从“已校验”推断“已生效”。
-- 任何真实 CAN、串口、带电电机或风扇验证仍必须重新满足仓库十项授权门槛。
+- 两个驱动后端原先静默吞掉 feedback callback 异常，可能隐藏安全回调问题；现已
+  在本任务范围内增加错误回调诊断，同时保留读取线程存活和后续 callback 规则。
+- 原反馈故障只跳过单台电机并在正常帧后自动清除；该行为不符合系统级锁存语义，
+  现已替换为全局 ERROR 路径。
+- 0x02 parser 原先以小端读取所有 `uint16`。这不仅造成温度假高，也会同时扭曲
+  position、speed 和 torque；现已统一修正并增加精确字节向量测试。
+- 现场日志还显示安全故障已经进入 `ERROR` 后，零点流程仍继续并打印成功；现已
+  在本任务安全路径范围内修复并以 fake driver 验证。
+
+## 20. 后续建议
+
+- 如需默认启用 feedback timeout，应先取得官方周期上报依据，或在重新满足硬件
+  授权门槛后验证两种后端在静止、无 SDO 目标时的实际反馈周期。
+- 如需数值安培保护，应使用官方验证的真实字段或 SDO，统一两个后端 parser 与
+  单位测试；不得从力矩推导。
+- 本任务不执行、也不建议顺带开始运行期自动重连任务。

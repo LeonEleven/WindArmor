@@ -6,6 +6,7 @@ from rclpy.lifecycle import TransitionCallbackReturn
 from rclpy.parameter import Parameter
 
 from imu_cybergear_ros2.cybergear_driver import (
+    MotorStatus,
     SDO_RUN_MODE,
     SDO_TARGET_POS,
     SDO_TARGET_SPEED,
@@ -108,6 +109,7 @@ def assert_fully_released(node, driver):
     assert node._current_speeds == {}
     assert all(getattr(node, attr) is None for attr in RESOURCE_ATTRS)
     assert driver.feedback_callback is None
+    assert driver.feedback_error_callback is None
 
 
 @pytest.mark.parametrize(
@@ -174,6 +176,70 @@ def test_usb_legacy_fallback_warns_once_and_still_uses_fake_driver():
         ]
         assert len(warnings) == 1
         assert node.on_cleanup(None) == TransitionCallbackReturn.SUCCESS
+    finally:
+        node.destroy_node()
+
+
+def test_feedback_timer_starts_only_when_enabled_and_is_destroyed_on_deactivate():
+    driver = FakeMotorDriver()
+    node = ImuMotorControllerNode(
+        driver_factory=DriverFactory([driver]), sleep_fn=lambda _seconds: None
+    )
+    try:
+        assert all(
+            result.successful
+            for result in node.set_parameters(
+                [Parameter("motor_feedback_timeout_sec", value=1.0)]
+            )
+        )
+        assert node.on_configure(None) == TransitionCallbackReturn.SUCCESS
+        assert node._safety.feedback_timer is None
+        assert node.on_activate(None) == TransitionCallbackReturn.SUCCESS
+        assert node._safety.feedback_timer is not None
+        assert node.on_deactivate(None) == TransitionCallbackReturn.SUCCESS
+        assert node._safety.feedback_timer is None
+        assert node.on_cleanup(None) == TransitionCallbackReturn.SUCCESS
+        assert_fully_released(node, driver)
+    finally:
+        node.destroy_node()
+
+
+def test_reconfigure_replaces_feedback_health_session_and_callbacks():
+    first = FakeMotorDriver()
+    second = FakeMotorDriver()
+    node = ImuMotorControllerNode(
+        driver_factory=DriverFactory([first, second]), sleep_fn=lambda _seconds: None
+    )
+    try:
+        assert node.on_configure(None) == TransitionCallbackReturn.SUCCESS
+        first_health = node._safety.health_core
+        assert node.on_activate(None) == TransitionCallbackReturn.SUCCESS
+        first.emit_feedback(
+            MotorStatus(
+                motor_id=4,
+                mode=2,
+                timestamp=1.0,
+                temperature=25.0,
+                fault_flags=0x01,
+            )
+        )
+        assert any(item.has_feedback for item in first_health.freshness_snapshot(now=10**9))
+        assert node._motor_safety_fault_active
+        assert node.on_deactivate(None) == TransitionCallbackReturn.SUCCESS
+        assert node.on_cleanup(None) == TransitionCallbackReturn.SUCCESS
+        assert first.feedback_callback is None
+
+        assert node.on_configure(None) == TransitionCallbackReturn.SUCCESS
+        second_health = node._safety.health_core
+        assert second_health is not first_health
+        assert not node._motor_safety_fault_active
+        assert not any(node._motor_protection_flags.values())
+        assert all(
+            not item.has_feedback
+            for item in second_health.freshness_snapshot(now=10**9)
+        )
+        assert node.on_cleanup(None) == TransitionCallbackReturn.SUCCESS
+        assert_fully_released(node, second)
     finally:
         node.destroy_node()
 

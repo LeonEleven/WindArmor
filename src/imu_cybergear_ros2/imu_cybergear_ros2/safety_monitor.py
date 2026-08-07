@@ -1,7 +1,7 @@
 """安全监控：看门狗、电机反馈监控、急停系统。"""
 
 import time
-from typing import Dict
+from typing import Callable, Dict
 
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger, SetBool
@@ -13,6 +13,13 @@ from .controller_state import (
     TransitionSource,
 )
 from .cybergear_driver import MotorStatus
+from .motor_health import (
+    MotorHealthAction,
+    MotorHealthConfig,
+    MotorHealthCore,
+    MotorHealthReason,
+    MotorSafetyFaultSnapshot,
+)
 
 
 class SafetyMonitor:
@@ -29,18 +36,39 @@ class SafetyMonitor:
         motor_mgr: MotorManager 实例（用于急停时停止电机）。
     """
 
-    def __init__(self, node, state_mgr, motor_mgr):
+    def __init__(
+        self,
+        node,
+        state_mgr,
+        motor_mgr,
+        *,
+        monotonic_fn: Callable[[], float] = time.monotonic,
+    ):
         self._node = node
         self._state = state_mgr
         self._motor_mgr = motor_mgr
+        self._monotonic = monotonic_fn
         self._watchdog_timer = None
+        self._feedback_timer = None
         self._last_warning_time: Dict[str, float] = {}
+        self._health = MotorHealthCore(
+            MotorHealthConfig(
+                motor_ids=tuple(node._motor_ids),
+                temp_warning_deg_c=getattr(node, "_motor_temp_limit_deg_c", 80.0),
+                temp_critical_deg_c=getattr(node, "_motor_temp_critical_deg_c", 90.0),
+                invalid_feedback_limit=getattr(node, "_motor_invalid_feedback_limit", 3),
+                feedback_timeout_sec=getattr(node, "_motor_feedback_timeout_sec", 0.0),
+                feedback_startup_grace_sec=getattr(
+                    node, "_motor_feedback_startup_grace_sec", 3.0
+                ),
+            )
+        )
 
     def _warn_throttled(self, key: str, message: str) -> None:
         """按告警类型限频，避免高频电机反馈导致日志刷屏。"""
-        now = time.monotonic()
-        previous = self._last_warning_time.get(key, 0.0)
-        if now - previous >= self._node._warning_throttle_sec:
+        now = self._monotonic()
+        previous = self._last_warning_time.get(key)
+        if previous is None or now - previous >= self._node._warning_throttle_sec:
             self._node.get_logger().warn(message)
             self._last_warning_time[key] = now
 
@@ -91,6 +119,42 @@ class SafetyMonitor:
     # 电机反馈监控
     # ------------------------------------------------------------------
 
+    @property
+    def feedback_timer(self):
+        return self._feedback_timer
+
+    @property
+    def health_core(self) -> MotorHealthCore:
+        return self._health
+
+    def start_feedback_monitor(self) -> None:
+        """Start a fresh activation window; create a timer only when enabled."""
+        self.stop_feedback_monitor()
+        self._health.activate(self._monotonic())
+        if self._health.timeout_enabled:
+            self._feedback_timer = self._node.create_timer(
+                1.0 / getattr(self._node, "_motor_feedback_check_rate_hz", 10.0),
+                self._feedback_watchdog_check,
+            )
+
+    def stop_feedback_monitor(self) -> None:
+        timer = self._feedback_timer
+        self._feedback_timer = None
+        self._health.deactivate()
+        if timer is not None:
+            self._node.destroy_timer(timer)
+
+    def _feedback_watchdog_check(self) -> None:
+        if not self._node._is_active:
+            return
+        if getattr(self._node, "_motor_safety_fault_active", False):
+            return
+        try:
+            for decision in self._health.check_freshness(now=self._monotonic()):
+                self._trip_motor_safety(decision)
+        except Exception as exc:
+            self._node.get_logger().error(f"电机反馈新鲜度检查异常: {exc}")
+
     def on_motor_feedback(self, status: MotorStatus) -> None:
         """电机反馈回调函数。
 
@@ -100,9 +164,47 @@ class SafetyMonitor:
         if not self._node._is_active:
             return
         try:
-            mid = status.motor_id
+            received_at = self._monotonic()
+            decision = self._health.evaluate(status, received_at=received_at)
+            mid = decision.motor_id
+
+            if decision.action is MotorHealthAction.IGNORE:
+                self._warn_throttled(
+                    f"feedback:{decision.reason.value}:{mid}",
+                    decision.diagnostic_message,
+                )
+                return
+            if decision.reason is MotorHealthReason.INVALID_FEEDBACK:
+                self._warn_throttled(
+                    f"feedback:invalid:{mid}", decision.diagnostic_message
+                )
+                self._trip_motor_safety(decision)
+                return
+
+            # Only a complete valid frame may replace the most recent feedback.
             with self._node._lock:
                 self._node._motor_feedback[mid] = status
+                warning_flags = getattr(
+                    self._node, "_motor_temperature_warning_flags", None
+                )
+                if warning_flags is None:
+                    warning_flags = {}
+                    self._node._motor_temperature_warning_flags = warning_flags
+                warning_flags[mid] = (
+                    status.temperature
+                    >= getattr(self._node, "_motor_temp_limit_deg_c", 80.0)
+                    and status.temperature
+                    < getattr(self._node, "_motor_temp_critical_deg_c", 90.0)
+                )
+
+            # Safety decisions precede optional ROS publication, so a publisher
+            # failure can never suppress an ERROR trip.
+            if decision.action is MotorHealthAction.WARNING:
+                self._warn_throttled(
+                    f"temperature:{mid}", decision.diagnostic_message
+                )
+            elif decision.action is MotorHealthAction.TRIP:
+                self._trip_motor_safety(decision)
 
             # 发布格式化的电机状态字符串
             status_msg = String()
@@ -115,25 +217,11 @@ class SafetyMonitor:
                 f"{status.mode_name},"
                 f"0x{status.fault_flags:02X}"
             )
-            if self._node._motor_status_pub is not None:
-                self._node._motor_status_pub.publish(status_msg)
-
-            # 故障检查
-            if status.has_fault:
-                self._warn_throttled(
-                    f"fault:{mid}",
-                    f"电机 ID{mid} 故障: {status.fault_names}, "
-                    f"温度={status.temperature:.1f}°C",
-                )
-                with self._node._lock:
-                    self._node._motor_protection_flags[mid] = True
-            else:
-                with self._node._lock:
-                    was_protected = self._node._motor_protection_flags.get(mid, False)
-                    if was_protected:
-                        self._node._motor_protection_flags[mid] = False
-                if was_protected:
-                    self._node.get_logger().info(f"电机 ID{mid} 故障已清除，恢复目标更新")
+            try:
+                if self._node._motor_status_pub is not None:
+                    self._node._motor_status_pub.publish(status_msg)
+            except Exception as exc:
+                self._node.get_logger().error(f"发布电机反馈状态失败: {exc}")
 
             # 位置误差检查
             with self._node._lock:
@@ -160,6 +248,25 @@ class SafetyMonitor:
 
         except Exception as exc:
             self._node.get_logger().error(f"处理电机反馈时发生异常: {exc}")
+
+    def _trip_motor_safety(self, decision) -> None:
+        snapshot = MotorSafetyFaultSnapshot(
+            motor_id=decision.motor_id,
+            reason=decision.reason,
+            observed_value=decision.observed_value,
+            threshold=decision.threshold,
+            fault_flags=decision.fault_flags,
+            fault_names=decision.fault_names,
+            first_triggered_at=decision.timestamp,
+            diagnostic_message=decision.diagnostic_message,
+        )
+        first = self._motor_mgr.enter_safety_error(snapshot)
+        if not first:
+            self._warn_throttled(
+                f"latched:{decision.reason.value}:{decision.motor_id}",
+                "反馈安全故障已锁存，记录后续事件但不重复执行停止批次: "
+                + decision.diagnostic_message,
+            )
 
     # ------------------------------------------------------------------
     # 急停系统
@@ -240,6 +347,11 @@ class SafetyMonitor:
 
     def recover_from_emergency_stop(self, *, source: TransitionSource) -> bool:
         """完成真实电机恢复后，以显式原因进入 MANUAL。"""
+        if getattr(self._node, "_motor_safety_fault_active", False):
+            self._node.get_logger().error(
+                "电机反馈安全故障已锁存；只能通过 lifecycle 重新配置或重启恢复"
+            )
+            return False
         if not self._state.is_in(ControllerState.EMERGENCY_STOP):
             self._node.get_logger().error("仅允许从 EMERGENCY_STOP 显式恢复")
             return False
@@ -251,6 +363,7 @@ class SafetyMonitor:
             source=source,
         )
         if result.outcome is TransitionOutcome.CHANGED:
+            self._motor_mgr.reset_fault_stop_batch_after_recovery()
             return True
 
         self._node.get_logger().error(
@@ -285,11 +398,7 @@ class SafetyMonitor:
         self._node.get_logger().error("【急停】正在停止全部电机！")
         # 普通推进必须先停，不能让速度限制或并发定时器延迟急停。
         self._motor_mgr.halt_motion()
-        self._motor_mgr.stop_motors_best_effort(reason="emergency_stop")
-        with self._node._lock:
-            for mid in self._node._motor_ids:
-                self._node._motor_protection_flags[mid] = False
-
+        self._motor_mgr.stop_motors_for_fault_once(reason="emergency_stop")
         result = self._state.transition_to(
             ControllerState.EMERGENCY_STOP,
             reason=reason,

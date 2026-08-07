@@ -57,6 +57,12 @@ class MotorManager:
         self.stop_reasons.append(reason)
         return True
 
+    def stop_motors_for_fault_once(self, *, reason):
+        return self.stop_motors_best_effort(reason=reason)
+
+    def reset_fault_stop_batch_after_recovery(self):
+        return None
+
 
 def running_state(node, target=ControllerState.MANUAL_RUNNING):
     state = StateManager(node)

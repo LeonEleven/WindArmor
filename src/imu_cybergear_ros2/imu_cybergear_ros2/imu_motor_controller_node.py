@@ -5,9 +5,9 @@
   2. 支持 AUTO（IMU 闭环跟随）和 MANUAL（键盘手动控制）两种操作模式。
   3. 内置完整的控制状态机，统一管理节点生命周期。
   4. 看门狗机制监控 IMU 数据时效性，超时自动切换手动模式。
-  5. 实时监控电机反馈（温度/电流/位置误差），多层保护机制。
+  5. 实时监控电机反馈（合法性/故障位/温度/位置误差），多层保护机制。
   6. 三重急停通道：键盘 [空格]、话题 /e_stop、服务 /e_stop。
-  7. 断线自动重连，异常全面日志记录。
+  7. 初始连接重试与异常全面日志记录（不含运行期自动重连）。
 
 子模块分工：
   - controller_state.py  — 状态枚举与状态管理器
@@ -85,7 +85,7 @@ from .safety_monitor import SafetyMonitor
 class ImuMotorControllerNode(LifecycleNode):
     """IMU 驱动的 CyberGear 电机控制节点（LifecycleNode）。
 
-    实现完整的控制状态机、通信看门狗、电机反馈监控、多层保护、急停和自动重连。
+    实现完整的控制状态机、通信看门狗、电机反馈监控、多层保护和急停。
     具体逻辑委托给 StateManager、MotorManager、SafetyMonitor、KeyboardHandler。
     """
 
@@ -194,6 +194,10 @@ class ImuMotorControllerNode(LifecycleNode):
         self.declare_parameter("motor_temp_limit_degC", 80.0)
         self.declare_parameter("motor_temp_critical_degC", 90.0)
         self.declare_parameter("motor_current_limit_a", 5.0)
+        self.declare_parameter("motor_invalid_feedback_limit", 3)
+        self.declare_parameter("motor_feedback_timeout_sec", 0.0)
+        self.declare_parameter("motor_feedback_startup_grace_sec", 3.0)
+        self.declare_parameter("motor_feedback_check_rate_hz", 10.0)
         self.declare_parameter("position_error_threshold_rad", 0.3)
         self.declare_parameter("warning_throttle_sec", 2.0)
         self.declare_parameter("reconnect_on_disconnect", True)
@@ -247,10 +251,14 @@ class ImuMotorControllerNode(LifecycleNode):
         self._selected_motor_id = 1
         self._motor_feedback = {}
         self._motor_protection_flags: Dict[int, bool] = {}
+        self._motor_temperature_warning_flags: Dict[int, bool] = {}
+        self._motor_safety_fault_active = False
+        self._motor_safety_fault_snapshot = None
         self._init_complete = False
         self._last_target_change_time: Dict[int, float] = {}
         self._command_failure_counts: Dict[int, int] = {}
         self._command_fault_active = False
+        self._fault_stop_batch_claimed = False
 
         # IMU 运行时状态
         self._imu_zero_roll = 0.0
@@ -351,6 +359,10 @@ class ImuMotorControllerNode(LifecycleNode):
                 self._motor_mgr.stop_auto_zero
             )
             self._driver.register_feedback_callback(self._safety.on_motor_feedback)
+            if hasattr(self._driver, "register_feedback_error_callback"):
+                self._driver.register_feedback_error_callback(
+                    self._on_driver_feedback_error
+                )
 
             # ---- 创建 ROS 资源 ----
             ros_config = config.ros
@@ -419,6 +431,10 @@ class ImuMotorControllerNode(LifecycleNode):
             if self._watchdog_timeout_s > 0.0:
                 watchdog_period = max(0.01, self._watchdog_timeout_s / 2.0)
                 self._safety.start_watchdog(watchdog_period)
+            self.get_logger().warn(
+                "motor_current_limit_a 当前仅为保留参数：0x02 反馈没有数值电流；"
+                "软件依赖电机固件过流故障 bit，且不会从 torque 推导电流"
+            )
             driver_backend = self._driver.backend_name
         except Exception as exc:
             self.get_logger().error(f"配置阶段发生异常，开始事务式回滚: {exc}")
@@ -486,6 +502,18 @@ class ImuMotorControllerNode(LifecycleNode):
         self._manual_period = 1.0 / config.keyboard.manual_loop_hz
         self._keyboard_device = config.keyboard.device
         self._watchdog_timeout_s = config.safety.watchdog_timeout_ms / 1000.0
+        self._motor_temp_limit_deg_c = config.safety.motor_temp_limit_deg_c
+        self._motor_temp_critical_deg_c = config.safety.motor_temp_critical_deg_c
+        self._motor_invalid_feedback_limit = (
+            config.safety.motor_invalid_feedback_limit
+        )
+        self._motor_feedback_timeout_sec = config.safety.motor_feedback_timeout_sec
+        self._motor_feedback_startup_grace_sec = (
+            config.safety.motor_feedback_startup_grace_sec
+        )
+        self._motor_feedback_check_rate_hz = (
+            config.safety.motor_feedback_check_rate_hz
+        )
         self._position_error_threshold = (
             config.safety.position_error_threshold_rad
         )
@@ -503,6 +531,11 @@ class ImuMotorControllerNode(LifecycleNode):
         self._motor_protection_flags = {
             motor_id: False for motor_id in self._motor_ids
         }
+        self._motor_temperature_warning_flags = {
+            motor_id: False for motor_id in self._motor_ids
+        }
+        self._motor_safety_fault_active = False
+        self._motor_safety_fault_snapshot = None
         self._init_complete = False
         self._last_target_change_time = {
             motor_id: 0.0 for motor_id in self._motor_ids
@@ -511,6 +544,7 @@ class ImuMotorControllerNode(LifecycleNode):
             motor_id: 0 for motor_id in self._motor_ids
         }
         self._command_fault_active = False
+        self._fault_stop_batch_claimed = False
         self._last_imu_time = 0.0
         self._imu_sequence = 0
         self._imu_zero_sequence = 0
@@ -518,6 +552,8 @@ class ImuMotorControllerNode(LifecycleNode):
     def on_activate(self, state: State) -> TransitionCallbackReturn:
         """激活阶段：启动键盘线程。"""
         self.get_logger().info("控制节点正在激活...")
+        # 先建立本次激活的新鲜度时间原点；节点仍 inactive，后台反馈不会抢先计入。
+        self._safety.start_feedback_monitor()
         self._is_active = True
         self._running = True
         self._publish_control_mode()
@@ -541,6 +577,7 @@ class ImuMotorControllerNode(LifecycleNode):
         self._running = False
         self._publish_control_mode()
         self._motor_mgr.stop_motion_timer()
+        self._safety.stop_feedback_monitor()
         self._keyboard.stop()
         self.get_logger().info("控制节点已停用")
         return TransitionCallbackReturn.SUCCESS
@@ -591,6 +628,7 @@ class ImuMotorControllerNode(LifecycleNode):
                 attempt("stop_keyboard", keyboard.stop)
             if safety is not None:
                 attempt("stop_watchdog", safety.stop_watchdog)
+                attempt("stop_feedback_monitor", safety.stop_feedback_monitor)
 
             ids_to_stop = list(self._motor_ids if motor_ids is None else motor_ids)
             if attempt_motor_stop and self._driver is not None:
@@ -657,6 +695,9 @@ class ImuMotorControllerNode(LifecycleNode):
             with self._lock:
                 self._init_complete = False
                 self._command_fault_active = False
+                self._fault_stop_batch_claimed = False
+                self._motor_safety_fault_active = False
+                self._motor_safety_fault_snapshot = None
                 self._current_targets = {}
                 self._desired_targets = {}
                 self._current_speeds = {}
@@ -670,6 +711,7 @@ class ImuMotorControllerNode(LifecycleNode):
             self._key_to_motor = {}
             self._motor_feedback = {}
             self._motor_protection_flags = {}
+            self._motor_temperature_warning_flags = {}
             self._state_mgr = None
             self._motor_mgr = None
             self._safety = None
@@ -759,6 +801,10 @@ class ImuMotorControllerNode(LifecycleNode):
             active=self._is_active,
         )
         self._motor_mode_pub.publish(msg)
+
+    def _on_driver_feedback_error(self, exc: Exception) -> None:
+        """Keep reader threads alive while making callback failures diagnosable."""
+        self.get_logger().error(f"电机反馈回调异常（读取线程继续运行）: {exc}")
 
     def _on_motor_zero_service(
         self, _request: Trigger.Request, response: Trigger.Response

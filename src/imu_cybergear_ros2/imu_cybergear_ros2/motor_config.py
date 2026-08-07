@@ -91,6 +91,10 @@ DEFAULT_PARAMETER_VALUES = {
     "motor_temp_limit_degC": 80.0,
     "motor_temp_critical_degC": 90.0,
     "motor_current_limit_a": 5.0,
+    "motor_invalid_feedback_limit": 3,
+    "motor_feedback_timeout_sec": 0.0,
+    "motor_feedback_startup_grace_sec": 3.0,
+    "motor_feedback_check_rate_hz": 10.0,
     "position_error_threshold_rad": 0.3,
     "warning_throttle_sec": 2.0,
     "reconnect_on_disconnect": True,
@@ -158,6 +162,10 @@ class MotorSafetyConfig:
     motor_temp_limit_deg_c: float
     motor_temp_critical_deg_c: float
     motor_current_limit_a: float
+    motor_invalid_feedback_limit: int
+    motor_feedback_timeout_sec: float
+    motor_feedback_startup_grace_sec: float
+    motor_feedback_check_rate_hz: float
     position_error_threshold_rad: float
     warning_throttle_sec: float
     reconnect_on_disconnect: bool
@@ -461,6 +469,27 @@ def build_motor_node_config(raw: Mapping[str, object]) -> MotorNodeConfig:
     )
     if current_limit <= 0.0:
         raise ValueError("motor_current_limit_a 必须大于 0")
+    invalid_feedback_limit = _require_integer(
+        "motor_invalid_feedback_limit", raw["motor_invalid_feedback_limit"]
+    )
+    if invalid_feedback_limit <= 0:
+        raise ValueError("motor_invalid_feedback_limit 必须是正整数")
+    feedback_timeout = _require_finite_number(
+        "motor_feedback_timeout_sec", raw["motor_feedback_timeout_sec"]
+    )
+    if feedback_timeout < 0.0:
+        raise ValueError("motor_feedback_timeout_sec 不得小于 0；0 表示禁用")
+    feedback_startup_grace = _require_finite_number(
+        "motor_feedback_startup_grace_sec",
+        raw["motor_feedback_startup_grace_sec"],
+    )
+    if feedback_startup_grace <= 0.0:
+        raise ValueError("motor_feedback_startup_grace_sec 必须大于 0")
+    feedback_check_rate = _require_finite_number(
+        "motor_feedback_check_rate_hz", raw["motor_feedback_check_rate_hz"]
+    )
+    if feedback_check_rate <= 0.0:
+        raise ValueError("motor_feedback_check_rate_hz 必须大于 0")
     position_error = _require_finite_number(
         "position_error_threshold_rad", raw["position_error_threshold_rad"]
     )
@@ -519,6 +548,10 @@ def build_motor_node_config(raw: Mapping[str, object]) -> MotorNodeConfig:
             motor_temp_limit_deg_c=temp_limit,
             motor_temp_critical_deg_c=temp_critical,
             motor_current_limit_a=current_limit,
+            motor_invalid_feedback_limit=invalid_feedback_limit,
+            motor_feedback_timeout_sec=feedback_timeout,
+            motor_feedback_startup_grace_sec=feedback_startup_grace,
+            motor_feedback_check_rate_hz=feedback_check_rate,
             position_error_threshold_rad=position_error,
             warning_throttle_sec=warning_throttle,
             reconnect_on_disconnect=raw["reconnect_on_disconnect"],

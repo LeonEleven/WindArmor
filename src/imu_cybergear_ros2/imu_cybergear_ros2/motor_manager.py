@@ -19,6 +19,7 @@ from .motor_motion import (
     manual_event_increment,
     speed_for_source,
 )
+from .motor_health import MotorHealthReason, MotorSafetyFaultSnapshot
 
 
 def clamp(value: float, low: float, high: float) -> float:
@@ -253,7 +254,7 @@ class MotorManager:
 
         with self._node._lock:
             source = self._motion_source
-            if self._node._command_fault_active or source == MotionSource.IDLE:
+            if self._ordinary_commands_blocked_locked() or source == MotionSource.IDLE:
                 return
             if source == MotionSource.AUTO and not is_auto:
                 self._halt_motion_locked()
@@ -266,7 +267,7 @@ class MotorManager:
         all_reached = True
         for mid in self._node._motor_ids:
             with self._node._lock:
-                if self._node._command_fault_active or self._motion_source != source:
+                if self._ordinary_commands_blocked_locked() or self._motion_source != source:
                     return
                 current = self._node._current_targets[mid]
                 desired = self._node._desired_targets[mid]
@@ -322,18 +323,18 @@ class MotorManager:
         low, high = self._node._limits[motor_id]
         command = clamp(target, low, high)
         with self._node._lock:
-            if self._node._command_fault_active:
+            if self._ordinary_commands_blocked_locked():
                 self._node.get_logger().error(
-                    f"拒绝电机 ID{motor_id} 位置命令：命令故障已锁存"
+                    f"拒绝电机 ID{motor_id} 位置命令：安全或命令故障已锁存"
                 )
                 return False
 
         try:
             with self._node._driver_io_lock:
                 # 等待 I/O 锁期间可能已由另一命令锁存故障；不得在停止批次间插入新命令。
-                if self._node._command_fault_active:
+                if self._ordinary_commands_blocked_unlocked():
                     self._node.get_logger().error(
-                        f"拒绝电机 ID{motor_id} 位置命令：命令故障已锁存"
+                        f"拒绝电机 ID{motor_id} 位置命令：安全或命令故障已锁存"
                     )
                     return False
                 if self._node._driver is None:
@@ -387,6 +388,8 @@ class MotorManager:
         if not self._state.is_manual_running():
             raise ValueError("绝对期望目标只允许在 MANUAL 模式设置")
         with self._node._lock:
+            if self._ordinary_commands_blocked_locked():
+                raise ValueError("安全或命令故障已锁存，拒绝 MANUAL 目标")
             if not self._state.is_manual_running():
                 raise ValueError("设置目标期间已离开 MANUAL 模式")
             clamped = self._set_desired_targets_locked(targets)
@@ -399,6 +402,8 @@ class MotorManager:
         if not self._state.is_auto_running():
             return False
         with self._node._lock:
+            if self._ordinary_commands_blocked_locked():
+                return False
             if not self._state.is_auto_running():
                 return False
             self._set_desired_targets_locked(targets)
@@ -418,6 +423,8 @@ class MotorManager:
         event_time = time.monotonic() if now is None else now
         direction = 1.0 if direction > 0.0 else -1.0
         with self._node._lock:
+            if self._ordinary_commands_blocked_locked():
+                return False
             if not self._state.is_manual_running():
                 return False
             if self._motion_source == MotionSource.HOME:
@@ -462,16 +469,16 @@ class MotorManager:
             speed, self._node._manual_speed_min, self._node._manual_speed_max
         )
         with self._node._lock:
-            if self._node._command_fault_active:
+            if self._ordinary_commands_blocked_locked():
                 self._node.get_logger().error(
-                    f"拒绝电机 ID{motor_id} 速度命令：命令故障已锁存"
+                    f"拒绝电机 ID{motor_id} 速度命令：安全或命令故障已锁存"
                 )
                 return False
         try:
             with self._node._driver_io_lock:
-                if self._node._command_fault_active:
+                if self._ordinary_commands_blocked_unlocked():
                     self._node.get_logger().error(
-                        f"拒绝电机 ID{motor_id} 速度命令：命令故障已锁存"
+                        f"拒绝电机 ID{motor_id} 速度命令：安全或命令故障已锁存"
                     )
                     return False
                 if self._node._driver is None:
@@ -533,7 +540,7 @@ class MotorManager:
             f"电机命令故障: ID{motor_id}, type={command_type}, error={exc}; "
             "已丢弃未完成运动并尝试停止全部电机"
         )
-        self.stop_motors_best_effort(reason=f"command_fault:{command_type}")
+        self.stop_motors_for_fault_once(reason=f"command_fault:{command_type}")
         transition_reason = (
             TransitionReason.SPEED_COMMAND_WRITE_FAILURE
             if command_type == "speed_limit"
@@ -548,6 +555,78 @@ class MotorManager:
             self._node.get_logger().error(
                 "关键状态转换被拒绝：运行时命令故障后无法进入 ERROR"
             )
+
+    def enter_safety_error(self, snapshot: MotorSafetyFaultSnapshot) -> bool:
+        """Latch one feedback-safety fault and execute exactly one stop batch.
+
+        The node state lock is released before any driver I/O.  Concurrent or
+        repeated feedback faults retain the first immutable snapshot and do not
+        issue another stop batch.
+        """
+        with self._node._lock:
+            if getattr(self._node, "_motor_safety_fault_active", False):
+                if snapshot.motor_id in self._node._motor_protection_flags:
+                    self._node._motor_protection_flags[snapshot.motor_id] = True
+                return False
+            self._node._motor_safety_fault_active = True
+            self._node._motor_safety_fault_snapshot = snapshot
+            if snapshot.motor_id in self._node._motor_protection_flags:
+                self._node._motor_protection_flags[snapshot.motor_id] = True
+            self._halt_motion_locked()
+
+        self._node.get_logger().error(
+            "电机反馈安全故障已锁存；已丢弃普通运动并尝试停止全部电机: "
+            f"ID{snapshot.motor_id}, reason={snapshot.reason.value}, "
+            f"detail={snapshot.diagnostic_message}"
+        )
+        self.stop_motors_for_fault_once(
+            reason=f"motor_safety:{snapshot.reason.value}"
+        )
+        transition_reason = self._transition_reason_for_safety(snapshot)
+        result = self._state.transition_to(
+            ControllerState.ERROR,
+            reason=transition_reason,
+            source=(
+                TransitionSource.WATCHDOG
+                if snapshot.reason is MotorHealthReason.FEEDBACK_TIMEOUT
+                else TransitionSource.DRIVER_FEEDBACK
+            ),
+        )
+        if result.outcome is TransitionOutcome.REJECTED:
+            self._node.get_logger().error(
+                "关键状态转换被拒绝：反馈安全故障已锁存且电机已停止，但无法进入 ERROR"
+            )
+        return True
+
+    @staticmethod
+    def _transition_reason_for_safety(
+        snapshot: MotorSafetyFaultSnapshot,
+    ) -> TransitionReason:
+        mapping = {
+            MotorHealthReason.MOTOR_FAULT_UNDERVOLTAGE: TransitionReason.MOTOR_FAULT_UNDERVOLTAGE,
+            MotorHealthReason.MOTOR_FAULT_OVERCURRENT: TransitionReason.MOTOR_OVERCURRENT_FAULT,
+            MotorHealthReason.MOTOR_FAULT_OVERTEMPERATURE: TransitionReason.MOTOR_OVERTEMPERATURE_FAULT,
+            MotorHealthReason.MOTOR_FAULT_ENCODER: TransitionReason.MOTOR_FAULT_ENCODER,
+            MotorHealthReason.MOTOR_FAULT_UNCALIBRATED: TransitionReason.MOTOR_FAULT_UNCALIBRATED,
+            MotorHealthReason.MOTOR_FAULT_MULTIPLE: TransitionReason.MOTOR_FAULT_MULTIPLE,
+            MotorHealthReason.CRITICAL_TEMPERATURE: TransitionReason.MOTOR_CRITICAL_TEMPERATURE,
+            MotorHealthReason.FEEDBACK_TIMEOUT: TransitionReason.MOTOR_FEEDBACK_TIMEOUT,
+            MotorHealthReason.INVALID_FEEDBACK: TransitionReason.MOTOR_INVALID_FEEDBACK,
+        }
+        return mapping.get(snapshot.reason, TransitionReason.MOTOR_FEEDBACK_FAULT)
+
+    def _ordinary_commands_blocked_locked(self) -> bool:
+        return bool(
+            self._node._command_fault_active
+            or getattr(self._node, "_motor_safety_fault_active", False)
+        )
+
+    def _ordinary_commands_blocked_unlocked(self) -> bool:
+        """Read latch booleans while holding the driver I/O lock, never state lock."""
+        return bool(
+            self._node._command_fault_active
+            or getattr(self._node, "_motor_safety_fault_active", False)
+        )
 
     def stop_motors_best_effort(
         self,
@@ -574,12 +653,29 @@ class MotorManager:
                 )
         return all_stopped
 
+    def stop_motors_for_fault_once(self, *, reason: str) -> bool:
+        """Claim and run the session's one main emergency/error stop batch."""
+        with self._node._lock:
+            if getattr(self._node, "_fault_stop_batch_claimed", False):
+                return False
+            self._node._fault_stop_batch_claimed = True
+        self.stop_motors_best_effort(reason=reason)
+        return True
+
+    def reset_fault_stop_batch_after_recovery(self) -> None:
+        """Permit a later independent e-stop only after successful normal recovery."""
+        with self._node._lock:
+            if not getattr(self._node, "_motor_safety_fault_active", False):
+                self._node._fault_stop_batch_claimed = False
+
     def move_motor_to_90_deg(self, motor_id: int, positive: bool) -> bool:
         """设置选中电机的 +/-90° 期望目标，不直接写位置命令。"""
         if not self._state.is_manual_running():
             self._node.get_logger().warn("90度快捷目标只允许在 MANUAL 模式使用")
             return False
         with self._node._lock:
+            if self._ordinary_commands_blocked_locked():
+                return False
             if self._motion_source == MotionSource.HOME:
                 self._sync_desired_to_current_locked()
             self._clear_motor_repeat_locked(motor_id)
@@ -599,6 +695,9 @@ class MotorManager:
 
     def go_all_to_zero(self) -> bool:
         """设置 HOME 目标；AUTO 中会先显式切换为 MANUAL。"""
+        if self._ordinary_commands_blocked_unlocked():
+            self._node.get_logger().warn("安全或命令故障已锁存，拒绝 HOME")
+            return False
         if self._state.is_auto_running():
             result = self._state.transition_to(
                 ControllerState.MANUAL_RUNNING,
@@ -663,37 +762,57 @@ class MotorManager:
 
     def set_all_motor_zero_reference(self) -> bool:
         """将全部电机当前位置设为机械零点，返回是否全部成功。"""
+        if self._zero_reference_fault_latched():
+            return False
         self.halt_motion()
         success = True
         success = self.stop_motors_best_effort(reason="set_zero") and success
         self._node._sleep(0.2)
+        if self._zero_reference_fault_latched():
+            return False
         for mid in self._node._motor_ids:
             try:
                 with self._node._driver_io_lock:
+                    if self._zero_reference_fault_latched():
+                        return False
                     self._node._driver.set_zero(mid)
                 self._node._sleep(0.05)
+                if self._zero_reference_fault_latched():
+                    return False
             except Exception as exc:
                 success = False
                 self._node.get_logger().error(f"设置电机 ID{mid} 零点时发生异常: {exc}")
         self._node._sleep(0.3)
+        if self._zero_reference_fault_latched():
+            return False
         for mid in self._node._motor_ids:
             try:
                 with self._node._driver_io_lock:
+                    if self._zero_reference_fault_latched():
+                        return False
                     self._node._driver.write_sdo_int(mid, SDO_RUN_MODE, 1)
                 with self._node._driver_io_lock:
+                    if self._zero_reference_fault_latched():
+                        return False
                     self._node._driver.write_sdo_float(mid, SDO_TARGET_POS, 0.0)
                 with self._node._driver_io_lock:
+                    if self._zero_reference_fault_latched():
+                        return False
                     self._node._driver.enter_control_mode(mid)
                 with self._node._lock:
                     self._node._current_targets[mid] = 0.0
                     self._node._desired_targets[mid] = 0.0
                     self._node._last_target_change_time[mid] = time.monotonic()
                 self._node._sleep(0.03)
+                if self._zero_reference_fault_latched():
+                    return False
             except Exception as exc:
                 success = False
                 self._node.get_logger().error(
                     f"恢复电机 ID{mid} 运控模式时发生异常: {exc}"
                 )
+        if self._zero_reference_fault_latched():
+            return False
         if success:
             self._node.get_logger().info("全部电机机械零点已设置")
         else:
@@ -708,6 +827,15 @@ class MotorManager:
                     "关键状态转换被拒绝：机械零点失败后无法进入 ERROR"
                 )
         return success
+
+    def _zero_reference_fault_latched(self) -> bool:
+        """Abort the direct zeroing flow once any session fault is latched."""
+        if not self._ordinary_commands_blocked_unlocked():
+            return False
+        self._node.get_logger().error(
+            "设置机械零点流程已中止：安全或命令故障已锁存"
+        )
+        return True
 
     def hold_current_targets_and_recover(self) -> bool:
         """从急停恢复运控模式，保持最近发送的软件位置。"""
@@ -754,13 +882,31 @@ class MotorManager:
         state_name = self._state.state_name
         transition = self._state.last_transition
         with self._node._lock:
+            safety_snapshot = getattr(
+                self._node, "_motor_safety_fault_snapshot", None
+            )
             summary_lines = [
                 "===== 节点状态汇总 =====",
                 f"状态: {state_name}，内部运动源: {self._motion_source.value}",
                 f"IMU Roll: {math.degrees(self._node._latest_roll):.2f}°, "
                 f"Pitch: {math.degrees(self._node._latest_pitch):.2f}°",
                 f"选中电机: ID{self._node._selected_motor_id}",
+                "反馈超时保护: "
+                + (
+                    f"启用 ({self._node._motor_feedback_timeout_sec:.3f}s)"
+                    if getattr(self._node, "_motor_feedback_timeout_sec", 0.0) > 0.0
+                    else "禁用（仅记录本地反馈年龄）"
+                ),
+                "反馈安全故障锁存: "
+                + ("是" if getattr(self._node, "_motor_safety_fault_active", False) else "否"),
             ]
+        if safety_snapshot is not None:
+            summary_lines.append(
+                "首次反馈安全故障: "
+                f"reason={safety_snapshot.reason.value}, ID{safety_snapshot.motor_id}, "
+                f"monotonic={safety_snapshot.first_triggered_at:.6f}, "
+                f"flags=0x{safety_snapshot.fault_flags:02X}"
+            )
         if transition is not None:
             summary_lines.append(
                 "最近状态转换: "
@@ -770,6 +916,18 @@ class MotorManager:
                 f"monotonic={transition.monotonic_timestamp:.6f}"
             )
         summary_lines.append("各电机当前状态:")
+        freshness = {}
+        safety = getattr(self._node, "_safety", None)
+        if safety is not None:
+            try:
+                freshness = {
+                    item.motor_id: item
+                    for item in safety.health_core.freshness_snapshot(
+                        now=time.monotonic()
+                    )
+                }
+            except Exception as exc:
+                self._node.get_logger().error(f"读取反馈年龄失败: {exc}")
         for cfg in self._node._motor_configs:
             mid = cfg.motor_id
             target = self._node._current_targets.get(mid, 0.0)
@@ -777,6 +935,15 @@ class MotorManager:
             speed = self._node._current_speeds.get(mid, 0.0)
             protected = self._node._motor_protection_flags.get(mid, False)
             fb = self._node._motor_feedback.get(mid)
+            fresh = freshness.get(mid)
+            age_text = (
+                "age=无本次激活反馈"
+                if fresh is None or fresh.age_sec is None
+                else f"age={fresh.age_sec:.3f}s"
+            )
+            temperature_warning = getattr(
+                self._node, "_motor_temperature_warning_flags", {}
+            ).get(mid, False)
             prefix = (
                 f"  {cfg.name}(ID{mid}): command={target:.3f} rad, "
                 f"desired={desired:.3f} rad, speed_limit={speed:.2f}"
@@ -785,13 +952,15 @@ class MotorManager:
                 summary_lines.append(
                     f"{prefix}, actual={fb.position_rad:.3f} rad, "
                     f"torque={fb.torque_nm:.3f} Nm, temp={fb.temperature:.1f}°C, "
-                    f"模式={fb.mode_name}"
+                    f"模式={fb.mode_name}, fault=0x{fb.fault_flags:02X}, {age_text}"
                     + (" [保护]" if protected else "")
+                    + (" [温度警告]" if temperature_warning else "")
                     + (f" [故障:{fb.fault_names}]" if fb.has_fault else "")
                 )
             else:
                 summary_lines.append(
-                    f"{prefix} (无反馈数据)" + (" [保护]" if protected else "")
+                    f"{prefix} (无反馈数据, {age_text})"
+                    + (" [保护]" if protected else "")
                 )
 
         for line in summary_lines:

@@ -45,6 +45,16 @@ class TransitionReason(str, Enum):
     EXPLICIT_ESTOP_RECOVERY = "explicit_estop_recovery"
     POSITION_COMMAND_WRITE_FAILURE = "position_command_write_failure"
     SPEED_COMMAND_WRITE_FAILURE = "speed_command_write_failure"
+    MOTOR_FEEDBACK_FAULT = "motor_feedback_fault"
+    MOTOR_FAULT_UNDERVOLTAGE = "motor_fault_undervoltage"
+    MOTOR_OVERCURRENT_FAULT = "motor_overcurrent_fault"
+    MOTOR_OVERTEMPERATURE_FAULT = "motor_overtemperature_fault"
+    MOTOR_FAULT_ENCODER = "motor_fault_encoder"
+    MOTOR_FAULT_UNCALIBRATED = "motor_fault_uncalibrated"
+    MOTOR_FAULT_MULTIPLE = "motor_fault_multiple"
+    MOTOR_CRITICAL_TEMPERATURE = "motor_critical_temperature"
+    MOTOR_FEEDBACK_TIMEOUT = "motor_feedback_timeout"
+    MOTOR_INVALID_FEEDBACK = "motor_invalid_feedback"
     MECHANICAL_ZERO_FAILURE = "mechanical_zero_failure"
     SHUTDOWN_REQUEST = "shutdown_request"
 
@@ -59,6 +69,7 @@ class TransitionSource(str, Enum):
     SERVICE = "service"
     TOPIC = "topic"
     WATCHDOG = "watchdog"
+    DRIVER_FEEDBACK = "driver_feedback"
 
 
 @dataclass(frozen=True)

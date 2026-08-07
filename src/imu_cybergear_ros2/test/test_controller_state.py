@@ -342,6 +342,7 @@ def test_enable_motor_service_recovers_to_manual_without_hardware() -> None:
         hold_current_targets_and_recover=lambda: True,
         halt_motion=lambda: None,
         stop_motors_best_effort=lambda **_kwargs: True,
+        reset_fault_stop_batch_after_recovery=lambda: None,
     )
     monitor = SafetyMonitor.__new__(SafetyMonitor)
     monitor._node = Node()

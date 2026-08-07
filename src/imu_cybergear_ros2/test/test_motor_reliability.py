@@ -15,6 +15,10 @@ from imu_cybergear_ros2.cybergear_driver import (
     SDO_TARGET_SPEED,
 )
 from imu_cybergear_ros2.motor_manager import MotorManager
+from imu_cybergear_ros2.motor_health import (
+    MotorHealthReason,
+    MotorSafetyFaultSnapshot,
+)
 from imu_cybergear_ros2.motor_motion import MotionParameters, MotionSource
 from imu_cybergear_ros2.safety_monitor import SafetyMonitor
 
@@ -339,6 +343,42 @@ def test_mechanical_zero_only_commits_motor_after_target_and_enter_succeed():
     assert state.last_transition.reason is TransitionReason.MECHANICAL_ZERO_FAILURE
     # 首轮停机和失败后的回滚都必须覆盖全部电机。
     assert [call[1] for call in calls(driver, "stop_motor")] == [4, 3, 4, 3]
+
+
+def test_mechanical_zero_aborts_if_feedback_safety_fault_latches_during_flow():
+    node, state, manager = build_system(motor_ids=(4, 3))
+    tripped = False
+
+    def trip_after_initial_stop(_seconds):
+        nonlocal tripped
+        if tripped:
+            return
+        tripped = True
+        manager.enter_safety_error(
+            MotorSafetyFaultSnapshot(
+                motor_id=4,
+                reason=MotorHealthReason.INVALID_FEEDBACK,
+                observed_value=2636.9,
+                threshold=3.0,
+                fault_flags=0,
+                fault_names=(),
+                first_triggered_at=1.0,
+                diagnostic_message="injected invalid feedback",
+            )
+        )
+
+    node._sleep = trip_after_initial_stop
+
+    assert not manager.set_all_motor_zero_reference()
+    assert state.state is ControllerState.ERROR
+    assert calls(node._driver, "set_zero") == []
+    assert calls(node._driver, "write_sdo_int", SDO_RUN_MODE) == []
+    assert calls(node._driver, "write_sdo_float", SDO_TARGET_POS) == []
+    assert calls(node._driver, "enter_control_mode") == []
+    assert not any(
+        "全部电机机械零点已设置" in message
+        for _level, message in node._logger.messages
+    )
 
 
 def test_driver_write_does_not_hold_node_state_lock():

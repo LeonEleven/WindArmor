@@ -22,6 +22,7 @@ class FakeMotorDriver:
         self.calls = []
         self.counts = Counter()
         self.feedback_callback = None
+        self.feedback_error_callback = None
         self.close_attempts = 0
         self._activity_lock = Lock()
         self.active_calls = 0
@@ -57,9 +58,25 @@ class FakeMotorDriver:
         self.feedback_callback = callback
         self._call("register_feedback")
 
+    def register_feedback_error_callback(self, callback):
+        self.feedback_error_callback = callback
+        self._call("register_feedback_error")
+
     def clear_feedback_callbacks(self):
         self.feedback_callback = None
+        self.feedback_error_callback = None
         self._call("clear_feedback_callbacks")
+
+    def emit_feedback(self, status):
+        """Synchronously deliver fake feedback without any hardware access."""
+        callback = self.feedback_callback
+        if callback is None:
+            return
+        try:
+            callback(status)
+        except Exception as exc:
+            if self.feedback_error_callback is not None:
+                self.feedback_error_callback(exc)
 
     def write_sdo_int(self, motor_id, index, value):
         self._call("write_sdo_int", motor_id, index, value)

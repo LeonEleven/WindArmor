@@ -15,8 +15,9 @@
 | **急停接口** | 三重通道：键盘[空格]、话题 `/e_stop`、服务 `/e_stop` |
 | **远程启停** | `/enable_motor` 服务（std_srvs/SetBool） |
 | **电机反馈** | 实时读取电机位置/速度/力矩/温度/模式/故障 |
-| **故障保护** | 电机 CAN 故障标志位（过流/过温/欠压等）自动触发保护 |
-| **断线重连** | IMU 串口 / CAN 总线断开后自动指数退避重连 |
+| **故障保护** | 任一电机固件故障位或临界温度锁存后停止全部电机并进入 ERROR |
+| **反馈健康** | 配置 ID/数值/量程校验、连续无效帧保护和可配置的新鲜度框架 |
+| **连接重试** | 初始连接使用指数退避；本任务不实现运行期自动重连 |
 | **低 CPU** | 空闲时不空转，CPU 占用率接近 0% |
 | **状态机** | 统一生命周期管理（7 状态：AUTO/MANUAL/急停/错误等） |
 | **统一相对姿态** | `/imu/relative_roll_pitch` 发布归一化、轴向修正和统一归零后的 roll/pitch（rad） |
@@ -282,10 +283,13 @@ MANUAL/AUTO，也不能用键盘 `r` 或 `/enable_motor=true` 恢复；必须先
 正有限值。轴向符号严格为 `+/-1`；watchdog 允许 `0` 表示禁用，不允许负数；
 温度紧急阈值必须严格高于警告阈值，电流阈值必须为正数。
 
-`motor_temp_limit_degC`、`motor_temp_critical_degC`、`motor_current_limit_a` 和
-`reconnect_on_disconnect` 当前会被集中解析和校验，但现有保护仍依据驱动故障
-标志和位置误差；这些参数尚未直接实现独立的温度降速、温度停机、电流暂停或
-运行期重连策略。文档不会把“参数已校验”误称为对应保护算法已经生效。
+`motor_temp_limit_degC` 是只告警阈值，不修改任何速度；合法反馈达到
+`motor_temp_critical_degC` 会锁存、停止全部电机并进入 `ERROR`。反馈健康参数
+还包括正整数 `motor_invalid_feedback_limit`、非负的
+`motor_feedback_timeout_sec`，以及正有限的启动宽限和检查频率。timeout 为 0
+表示关闭强制超时。`motor_current_limit_a` 仍会校验，但因 0x02 帧没有数值电流
+而不参与比较；`reconnect_on_disconnect` 也仍只作兼容声明，本任务没有增加
+运行期自动重连。
 
 旧版 ID、方向和 `m1_*～m4_*` 软限位标量参数继续被声明以保持参数文件兼容。
 保持默认值时不影响配置；任何非默认值都会明确失败，并提示迁移到
@@ -310,6 +314,49 @@ SHUTTING_DOWN  -> 无其他状态
 不运行状态回调。`ERROR` 和 `SHUTTING_DOWN` 都不能恢复到运行态；急停恢复只有
 在真实电机恢复成功后才会以显式恢复原因进入 MANUAL，若状态转换失败则重新尽力
 停止全部电机。
+
+### 3.7 电机反馈健康、故障位和温度保护
+
+`MotorStatus` 当前包含：`motor_id`；四个协议原始值 `raw_position`、
+`raw_speed`、`raw_torque`、`raw_temp`；换算后的 `position_rad`、
+`speed_rad_s`、`torque_nm`、`temperature`；以及 `mode`、`fault_flags` 和
+parser 生成的单调 `timestamp`。0x02 数据区实际只携带位置、速度、力矩和温度；
+CAN ID 同时携带模式和 6 位故障。数据区中的四个 `uint16` 均按大端序解析；这不
+改变 SDO 发送字段的既有布局。它不包含 `current_a`。
+
+一帧反馈只有在以下条件全部成立时才会成为“最近合法反馈”：电机 ID 在当前
+配置内；位置、速度、力矩、温度和 timestamp 都是有限值；位置位于
+`[-4π,+4π] rad`、速度位于 `[-30,+30] rad/s`、力矩位于
+`[-12,+12] Nm`、温度位于 `[-40,200] °C` 的解析后物理合理范围；timestamp 非负；mode 是
+复位/标定/运行之一；fault 只使用 0～5 bit。未知 ID 只限频告警；单个无效帧
+被拒绝且不刷新本地新鲜度，连续达到配置次数才触发系统级 `ERROR`。
+
+故障 bit 定义为：bit0 欠压、bit1 过流、bit2 过温、bit3 磁编码故障、bit4
+HALL 编码故障、bit5 未标定。任意非零值都立即锁存；多 bit 会完整记录所有
+名称并使用复合原因。温度低于 warning 正常；`warning <= temperature <
+critical` 只限频告警且不降速；`temperature >= critical` 单帧即锁存。所有严重
+事件都停止 MANUAL/AUTO/HOME、同步 `desired_targets`、逐台尽力停止全部电机、
+进入并发布 `ERROR`。重复或并发事件共享一个主 stop batch；一台停止失败不会
+阻止其余电机。
+
+锁存后，后续无故障帧或温度回落不会清除 `_motor_protection_flags` 或全局故障
+快照；普通目标、速度、HOME、键盘恢复和 `/enable_motor=true` 均被拒绝。恢复
+要求排除原因后受控地重新配置 lifecycle 或重启节点。普通、未伴随反馈故障的
+`EMERGENCY_STOP` 显式恢复语义保持不变。设置机械零点期间若安全或命令故障锁存，
+流程会立即返回失败，不再发送后续零点/运控恢复写入，也不会打印成功日志。
+
+新鲜度依据回调处记录的本地单调时间，而不是 `MotorStatus.timestamp`。USB-CAN
+和 SocketCAN 后端都由后台线程被动接收 0x02，没有主动查询实现；仓库代码不能
+证明空闲时会持续收到周期反馈。因此默认 timeout 为 `0.0`，只在状态汇总中记录
+年龄。配置正 timeout 后，每次 activate 会建立新会话，先等待 startup grace，
+之后缺少首帧或任一电机年龄超过 timeout 都锁存 `ERROR`；deactivate、cleanup
+和 shutdown 会幂等销毁 timer，重新 configure 不继承旧时间。
+
+数值电流能力边界必须明确区分：固件的过流 bit 已是立即保护；
+`motor_current_limit_a` 只是保留参数，当前没有实际 `current_a` 可供比较。代码
+不会用 `torque_nm`、`raw_torque` 或速度推导安培值。两个接收后端中的 feedback
+callback 异常会报告给诊断回调，同时继续读取线程和后续 callback；cleanup 会
+先清空反馈及错误 callback，避免继续引用已销毁节点。
 
 Codex 在可靠性以及配置/状态契约加固中只使用 fake driver 完成纯软件故障注入、
 并发边界和 lifecycle 测试，没有访问真实 IMU、CAN 或电机。软件完成后，用户
@@ -362,8 +409,11 @@ ros2 lifecycle nodes
 # 修改看门狗超时
 ros2 param set /imu_motor_controller_node watchdog_timeout_ms 500
 
-# 修改温度阈值配置（当前不直接启用独立温度降速算法）
+# 修改温度 warning 阈值（只告警，不自动降速）
 ros2 param set /imu_motor_controller_node motor_temp_limit_degC 70.0
+
+# 仅在确认电机空闲时仍可靠周期反馈后，才应显式启用反馈超时保护
+ros2 param set /imu_motor_controller_node motor_feedback_timeout_sec 1.0
 ```
 
 ### 4.4 查看电机状态
@@ -392,8 +442,11 @@ IMU header；即使电机处于 MANUAL，也会继续发布有效姿态。公开
 这些协调接口属于 `v0.3.0`。`v0.3.1` 后的风扇安全提交已经提交和推送，用户
 随后报告整机功能测试正常且未见报错或明显 Bug；该记录不是所有异常路径的穷尽
 认证。本轮电机命令与 lifecycle 加固完成纯软件验证后，用户又报告统一 launch
-下的 MANUAL/AUTO 和风扇基本实机功能正常；没有执行本任务异常路径的实机故障
-注入。
+下的 MANUAL/AUTO 和风扇基本实机功能正常。用户随后自行设置机械零点和手动控制，
+现场日志暴露了 0x02 `uint16` 端序错误；旧值 `2636.9/2483.3/2304.1 °C` 还原后
+为合理的 `35.9/35.3/34.6 °C`。修正后用户再次完成统一 launch、机械零点和手动
+控制实机复测并报告正常，未再出现该无效反馈；这不是过温、过流、反馈中断、真实
+fault bit 或异常恢复的实机故障注入。
 
 ## 5. 文档导航
 

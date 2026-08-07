@@ -6,14 +6,14 @@
 
 功能：
   - 电机反馈帧解析（位置/速度/力矩/温度/模式/故障）
-  - 断线自动重连（指数退避）
+  - 初始连接重试（指数退避；不含运行期自动重连）
   - 反馈数据回调机制（供控制节点做闭环监控）
 
 CyberGear 电机 CAN 帧格式（根据小米官方说明书 v1.2.1）：
 
   发送帧 — 29-bit 扩展帧：
     CAN ID = (通信类型 << 24) | (主站 ID << 8) | 电机 ID
-    Data[0:7] = 8 字节数据（小端序）
+    Data[0:7] = 8 字节数据（字段布局与端序取决于通信类型）
 
   接收反馈帧（通信类型 0x02）：
     CAN ID = (0x02 << 24) | (数据区2 << 8) | 主站 ID
@@ -25,7 +25,7 @@ CyberGear 电机 CAN 帧格式（根据小米官方说明书 v1.2.1）：
         1 = Cali（标定）
         2 = Motor（运行）
 
-    8 字节数据 (uint16 × 4，小端序):
+    8 字节数据 (uint16 × 4，大端序):
       Data[0:2] = 位置 [0~65535] → 映射到 [-4π, +4π] rad
       Data[2:4] = 速度 [0~65535] → 映射到 [-30, +30] rad/s
       Data[4:6] = 力矩 [0~65535] → 映射到 [-12, +12] Nm
@@ -180,10 +180,12 @@ def _parse_feedback_frame(motor_id: int, can_id_29: int, data: bytes) -> Optiona
         MotorStatus 对象，解析失败返回 None。
     """
     try:
-        raw_pos = struct.unpack_from("<H", data, 0)[0]
-        raw_spd = struct.unpack_from("<H", data, 2)[0]
-        raw_trq = struct.unpack_from("<H", data, 4)[0]
-        raw_tmp = struct.unpack_from("<H", data, 6)[0]
+        # 0x02 状态负载中的每个 uint16 均为高字节在前。发送侧 SDO
+        # 数据的字段布局不同，不能据此改动 SDO 的端序。
+        raw_pos = struct.unpack_from(">H", data, 0)[0]
+        raw_spd = struct.unpack_from(">H", data, 2)[0]
+        raw_trq = struct.unpack_from(">H", data, 4)[0]
+        raw_tmp = struct.unpack_from(">H", data, 6)[0]
     except struct.error:
         return None
 
@@ -287,6 +289,7 @@ class UsbCanSerialBackend(_BaseCyberGearBackend):
         self._stop_reader = threading.Event()
         # 回调函数列表：func(motor_status: MotorStatus) -> None
         self._feedback_callbacks: List[Callable[[MotorStatus], None]] = []
+        self._feedback_error_callbacks: List[Callable[[Exception], None]] = []
 
     # ---- 连接管理 ----
 
@@ -318,9 +321,14 @@ class UsbCanSerialBackend(_BaseCyberGearBackend):
         """注册电机反馈回调函数。"""
         self._feedback_callbacks.append(callback)
 
+    def register_feedback_error_callback(self, callback: Callable[[Exception], None]) -> None:
+        """Register a diagnostic sink for feedback callback failures."""
+        self._feedback_error_callbacks.append(callback)
+
     def clear_feedback_callbacks(self) -> None:
         """释放 lifecycle 资源时清除回调对节点对象的引用。"""
         self._feedback_callbacks.clear()
+        self._feedback_error_callbacks.clear()
 
     # ---- 适配器初始化 ----
 
@@ -403,11 +411,22 @@ class UsbCanSerialBackend(_BaseCyberGearBackend):
                 if comm_type == COMM_GET_STATUS and dlc >= 8:
                     status = _parse_feedback_frame(motor_id, can_id_29, data)
                     if status is not None:
-                        for cb in self._feedback_callbacks:
-                            try:
-                                cb(status)
-                            except Exception:
-                                pass
+                        self._dispatch_feedback(status)
+
+    def _dispatch_feedback(self, status: MotorStatus) -> None:
+        for callback in tuple(self._feedback_callbacks):
+            try:
+                callback(status)
+            except Exception as exc:
+                self._report_feedback_callback_error(exc)
+
+    def _report_feedback_callback_error(self, exc: Exception) -> None:
+        for callback in tuple(self._feedback_error_callbacks):
+            try:
+                callback(exc)
+            except Exception:
+                # A diagnostic callback must not terminate the reader thread.
+                continue
 
 
 # ---------------------------------------------------------------------------
@@ -430,6 +449,7 @@ class SocketCanHatBackend(_BaseCyberGearBackend):
         self._reader_thread: Optional[threading.Thread] = None
         self._stop_reader = threading.Event()
         self._feedback_callbacks: List[Callable[[MotorStatus], None]] = []
+        self._feedback_error_callbacks: List[Callable[[Exception], None]] = []
 
     # ---- 连接管理 ----
 
@@ -462,9 +482,14 @@ class SocketCanHatBackend(_BaseCyberGearBackend):
         """注册电机反馈回调函数。"""
         self._feedback_callbacks.append(callback)
 
+    def register_feedback_error_callback(self, callback: Callable[[Exception], None]) -> None:
+        """Register a diagnostic sink for feedback callback failures."""
+        self._feedback_error_callbacks.append(callback)
+
     def clear_feedback_callbacks(self) -> None:
         """释放 lifecycle 资源时清除回调对节点对象的引用。"""
         self._feedback_callbacks.clear()
+        self._feedback_error_callbacks.clear()
 
     # ---- 发送指令 ----
 
@@ -512,11 +537,22 @@ class SocketCanHatBackend(_BaseCyberGearBackend):
                 motor_id = (can_id >> 8) & 0xFF
                 status = _parse_feedback_frame(motor_id, can_id, bytes(msg.data))
                 if status is not None:
-                    for cb in self._feedback_callbacks:
-                        try:
-                            cb(status)
-                        except Exception:
-                            pass
+                    self._dispatch_feedback(status)
+
+    def _dispatch_feedback(self, status: MotorStatus) -> None:
+        for callback in tuple(self._feedback_callbacks):
+            try:
+                callback(status)
+            except Exception as exc:
+                self._report_feedback_callback_error(exc)
+
+    def _report_feedback_callback_error(self, exc: Exception) -> None:
+        for callback in tuple(self._feedback_error_callbacks):
+            try:
+                callback(exc)
+            except Exception:
+                # A diagnostic callback must not terminate the reader thread.
+                continue
 
 
 # ---------------------------------------------------------------------------
@@ -530,7 +566,7 @@ class CyberGearDriver:
       - 连接/断开
       - 发送运控指令
       - 电机反馈接收（通过回调）
-      - 断线重连
+      - 初始连接重试
 
     用法示例：
       driver = CyberGearDriver(backend="usb_can_serial", master_id=253, usb_port="/dev/ttyUSB0")
@@ -615,6 +651,11 @@ class CyberGearDriver:
         """注册电机反馈回调。"""
         if hasattr(self._impl, "register_feedback_callback"):
             self._impl.register_feedback_callback(callback)
+
+    def register_feedback_error_callback(self, callback: Callable[[Exception], None]) -> None:
+        """Register a callback-error diagnostic sink on either backend."""
+        if hasattr(self._impl, "register_feedback_error_callback"):
+            self._impl.register_feedback_error_callback(callback)
 
     def clear_feedback_callbacks(self) -> None:
         """清除后端反馈回调，避免 cleanup 后保留节点引用。"""

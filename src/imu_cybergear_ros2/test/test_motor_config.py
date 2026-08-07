@@ -29,6 +29,10 @@ def test_default_config_preserves_current_motor_mapping_and_control_values() -> 
     assert config.control.motion.auto_motion_speed_rad_s == 4.0
     assert config.control.motion.home_motion_speed_rad_s == 4.0
     assert config.communication.backend == "socketcan_hat"
+    assert config.safety.motor_invalid_feedback_limit == 3
+    assert config.safety.motor_feedback_timeout_sec == 0.0
+    assert config.safety.motor_feedback_startup_grace_sec == 3.0
+    assert config.safety.motor_feedback_check_rate_hz == 10.0
     assert config.communication.fallback_parameters == ()
     with pytest.raises(FrozenInstanceError):
         config.communication.master_id = 1
@@ -138,6 +142,12 @@ def set_all_motor_lists(raw, value):
             "必须严格大于",
         ),
         (lambda raw: raw.update(motor_current_limit_a=0.0), "必须大于 0"),
+        (lambda raw: raw.update(motor_invalid_feedback_limit=0), "正整数"),
+        (lambda raw: raw.update(motor_invalid_feedback_limit=1.5), "整数"),
+        (lambda raw: raw.update(motor_feedback_timeout_sec=-0.1), "不得小于 0"),
+        (lambda raw: raw.update(motor_feedback_timeout_sec=float("nan")), "有限值"),
+        (lambda raw: raw.update(motor_feedback_startup_grace_sec=0.0), "必须大于 0"),
+        (lambda raw: raw.update(motor_feedback_check_rate_hz=float("inf")), "有限值"),
         (lambda raw: raw.update(position_error_threshold_rad=0.0), "必须大于 0"),
         (lambda raw: raw.update(warning_throttle_sec=0.0), "必须大于 0"),
     ],
