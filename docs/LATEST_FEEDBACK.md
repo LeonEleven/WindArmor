@@ -1,4 +1,4 @@
-# 最新反馈：GitHub Actions 无硬件 CI 与纯软件回归基线
+# 最新反馈：运行期通信断线检测与受控重连
 
 > 本文件只保留最近一次反馈。
 >
@@ -6,259 +6,306 @@
 
 ## 1. 执行结论
 
-- 已新增 GitHub Actions 无硬件软件 CI、统一的本地/Hosted CI 脚本、提交范围
-  whitespace 检查和 CI 自身硬件安全检查。
-- workflow 使用 GitHub 托管 `ubuntu-24.04` 和 ROS 2 Jazzy，支持 `master`
-  push、面向 `master` 的 pull request 以及 `workflow_dispatch`。
-- workflow 只有 `contents: read` 权限，不使用 secret、自托管 runner、设备映射、
-  privileged container 或写权限。
-- 本地等价 CI 最终完成 3 包构建；电机包 `306 passed`；风扇关键回归
-  `98 passed`；三包完整 `422 tests, 0 errors, 0 failures, 0 skipped`。
-- 新增 16 项 CI infrastructure 测试，覆盖安全 checker、统一脚本和 workflow
-  contract。
-- 未修改任何产品控制算法、硬件参数、安全阈值、ROS 公共接口或硬件映射。
-- Codex 未启动或 spin 任何硬件节点，未访问 IMU、串口、CAN、CyberGear、GPIO
-  或 PWM。
-- 主任务提交 `b251f63` 已推送；首次 GitHub Hosted CI 在 workflow 解析阶段因 job
-  级 `env` 使用不可用的 `runner.temp` context 失败。context 修复提交 `1a2945a`
-  推送后，run `31143313077` 的全部 job step 成功；但 artifact API 显示 0 个产物，
-  原因是上传路径仍指向旧输出根。用户已授权继续修复、中文 commit 和 push，最终
-  Hosted/artifact 结果以会话终端汇报为准。
+- 已完成 USB-CAN 与 SocketCAN 的运行期 transport fault 检测、明确异常类型、
+  独立事件通道、connection generation 和 reader 退出语义。
+- `reconnect_on_disconnect` 已具有实际运行期语义：`false` 只执行故障响应和关闭，
+  `true` 启动最多一个有界、可取消的 transport-only recovery worker。
+- 通信恢复后固定进入 `RECONNECTED_LOCKED`，ControllerState 与
+  `/motors/control_mode` 继续保持 `ERROR`；不初始化电机、不恢复 MANUAL/AUTO/HOME、
+  不恢复机械零点流程，也不重发旧目标。
+- 初始连接重试与运行期重连保持分离，既有四电机初始化顺序和事务式回滚保持。
+- 新增 53 项 transport/reconnect 相关测试实例；电机包 `359 passed`，风扇关键
+  回归 `98 passed`，三包完整 `475 tests, 0 errors, 0 failures, 0 skipped`。
+- `./scripts/ci_software.sh` 完整通过。Codex 未运行真实硬件；用户自行完成
+  MANUAL/AUTO 实机正常功能回归并报告无问题。
+- 用户已授权本任务使用中文 commit 并 push；`docs/NEXT_COMMAND.md` 继续排除在
+  提交之外，tag 不变，实际 commit、push 和远端 CI 结果以最终终端汇报为准。
 
-## 2. 开始前 Git 基线
+## 2. 开始前 Git 与 CI 基线
 
 - 分支：`master`。
-- HEAD：`fae3a08fc1010b0c5b72314470e5359b087a4752`。
-- upstream：`origin/master`，同为
-  `fae3a08fc1010b0c5b72314470e5359b087a4752`。
+- HEAD：`d97c51ada431fce5dda87bc2d2b7d9bda945dc71`。
+- upstream：`origin/master`，同为 `d97c51ada431fce5dda87bc2d2b7d9bda945dc71`。
 - 本地领先/落后：`0/0`。
-- 最近提交：`fae3a08 加固：完善电机反馈安全并修正状态帧端序`。
+- 开始时唯一工作区修改：`M docs/NEXT_COMMAND.md`，无未跟踪文件。
 - `v0.3.0` commit：`c3b3c3989674c2c1c902e940953da87fd5812db5`。
 - `v0.3.1` commit：`5d7bd0fbf0acac3be4f2354a616d109928d5091d`。
-- HEAD 位于 `v0.3.1` 后 4 个提交；开始时 describe 为
-  `v0.3.1-4-gfae3a08-dirty`。
-- 任务开始前唯一工作区修改为 `M docs/NEXT_COMMAND.md`，无未跟踪文件；该文件
-  是用户任务说明，本任务未修改、暂存、覆盖或还原。
-- 任务开始时不存在 `.github/workflows`。
+- HEAD 位于 `v0.3.1` 后 7 个提交；开始时 describe 为
+  `v0.3.1-7-gd97c51a-dirty`。
+- 只读 `git ls-remote` 确认远端 `master` 和所有 tag 未漂移。
+- 开始时最新 GitHub Hosted `WindArmor Software CI` 为 run `31143934086`：
+  HEAD `d97c51a`、结论 `success`、全部 step 成功，并有 1 个未过期日志 artifact。
 
 ## 3. 修改文件
 
 ### 3.1 任务前已有修改
 
-- `docs/NEXT_COMMAND.md`：用户任务说明，原样保留。
+- `docs/NEXT_COMMAND.md`：用户任务说明；本任务未修改、覆盖、暂存或还原。
 
-### 3.2 本任务新增或更新
+### 3.2 本任务修改
 
-- `.github/workflows/ci.yml`：新增 GitHub Actions 软件 CI。
-- `scripts/ci_software.sh`：新增可分阶段运行的统一纯软件 CI 入口。
-- `scripts/check_ci_safety.py`：新增 workflow/CI 脚本硬件能力拒绝检查。
-- `scripts/check_git_whitespace.py`：新增 GitHub event commit range 和本地工作区
-  whitespace 检查。
-- `src/windarmor_bringup/test/test_ci_infrastructure.py`：新增 16 项 CI 基础设施
-  契约测试。
-- `src/imu_cybergear_ros2/package.xml`：补充既有测试实际需要的
-  `python3-pytest` test dependency。
-- `README.md`：修正反馈健康功能仍为工作区修改的过时描述，新增纯软件 CI 说明。
-- `AGENTS.md`：最小增加 GitHub Actions 硬件安全边界，未削弱既有规则。
-- `docs/LATEST_FEEDBACK.md`：按本次结果完整覆盖。
+- `src/imu_cybergear_ros2/imu_cybergear_ros2/transport_recovery.py`：新增 transport
+  类型、事件、策略、状态快照和恢复协调器。
+- `cybergear_driver.py`：新增明确 transport exception/event/generation，并加固
+  USB-CAN、SocketCAN 的读写、connect、close 和 reader 生命周期。
+- `imu_motor_controller_node.py`：接入 transport fault、recovery、ROS 状态发布和
+  lifecycle 取消/清理。
+- `motor_manager.py`：接入 transport ERROR 锁存、普通命令阻断、目标同步、统一
+  stop claim 和键盘状态汇总。
+- `motor_config.py`、`controller_state.py`：新增重连参数契约与 transport 状态转换
+  reason/source。
+- `fake_motor_driver.py`：增加纯内存 transport event、generation 和可控 reconnect。
+- `test_transport_backends.py`、`test_transport_recovery.py`、
+  `test_transport_lifecycle.py`：新增纯软件故障注入测试。
+- `test_motor_config.py`、`test_motor_lifecycle.py`：补充参数与 callback 清理回归。
+- `imu_cybergear_params.yaml`：补充运行期重连参数及安全语义注释。
+- 根 `README.md`、电机包 `README.md`、`AGENTS.md`：同步行为、锁设计、测试能力与
+  硬件边界。
+- `docs/LATEST_FEEDBACK.md`：按本次实际结果完整覆盖。
 
-## 4. CI 架构
+## 4. 修改前通信架构
 
-- 单 job workflow 在 GitHub 托管 `ubuntu-24.04` 上运行，明确超时 45 分钟。
-- `ros-tooling/setup-ros` 安装 ROS 2 Jazzy、colcon 和 rosdep 基础环境。
-- `rosdep install --from-paths src --ignore-src --rosdistro jazzy -r -y` 根据三包
-  manifest 安装声明依赖；未使用全局 pip workaround。
-- workflow 和本地开发者均调用 `scripts/ci_software.sh`。workflow 按阶段调用以
-  形成可诊断 step，本地无参数调用依次完成全部阶段。
-- build/install/log/ROS log 使用隔离输出根目录；本地默认使用 `mktemp`，不读取、
-  覆盖或依赖仓库已有 `build/`、`install/`、`log/`。
-- 测试日志无论成功或失败均上传，范围只包括 colcon log、ROS log 和各包
-  `Testing` 目录，保留 10 天，不上传整个 build/install。
+- 初始连接调用链为 `MotorManager.connect_and_init_motors()` →
+  `CyberGearDriver.connect_with_retry(max_attempts=5, initial_delay=1.0)`。
+- 初始退避倍率为 `1.5`、最大 delay 为 `10.0s`；连接期间持有 driver I/O lock。
+- 初始连接成功后按 ID `[4,3,2,1]` 逐台写 run mode、目标速度、零目标并进入运控
+  模式；最终失败进入 `ERROR` 并由 configure 事务回滚已触及电机和资源。
+- USB reader 原先对串口关闭、`SerialException`、`OSError` 执行 sleep/continue，
+  控制层不知道传输已经异常；write 未连接只抛模糊 `RuntimeError`。
+- SocketCAN reader 原先对 bus 缺失和 `recv()` 异常执行 sleep/continue；
+  `recv(timeout)` 返回 `None` 正确表示无帧。send 异常没有独立 transport 分类。
+- `reconnect_on_disconnect` 原先只声明、校验并存入 `MotorSafetyConfig`，没有控制
+  任何运行期逻辑。
 
-## 5. GitHub Actions 触发规则
+## 5. Transport error 类型
 
-- `push`：仅 `master`。
-- `pull_request`：目标分支仅 `master`，未使用 `pull_request_target`。
-- `workflow_dispatch`：允许人工触发。
-- 未增加 `schedule` 或 `repository_dispatch`。
-- concurrency 使用 workflow 与 PR number/ref 组合；同一 PR 或分支的新运行取消
-  旧运行，PR 与 master 不会共用同一 key。
+- 新增 `CyberGearTransportError` 和 `CyberGearDisconnectedError`。
+- 串口读写异常、串口关闭、SocketCAN bus 缺失及 send/recv transport failure
+  使用明确类型。
+- 参数错误、控制算法错误、普通非 transport driver 错误和 feedback callback
+  自身异常不会被归类为断线。
 
-## 6. 权限与供应链
+## 6. Transport event 通道
 
-- 顶层权限只有 `contents: read`；没有 contents/packages/actions/PR/id-token 写权限。
-- 未配置、读取或创建 repository/environment secret、PAT、deploy key 或 GitHub App
-  credential；checkout 设置 `persist-credentials: false`。
-- `actions/checkout` v6.1.0 固定为
-  `d23441a48e516b6c34aea4fa41551a30e30af803`。
-- `ros-tooling/setup-ros` 0.7.18 固定为
-  `77bcad67a6cb15f6192d61464d99bbab658e4ca9`。
-- `actions/upload-artifact` v7.0.1 固定为
-  `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a`。
-- 三个 `uses:` 均来自 GitHub Actions 官方组织或 ROS Tooling Working Group，且
-  使用完整不可变 commit SHA；未使用 `@main`、`@master` 或浮动 major tag。
-- CI 不 commit、push、tag、release、修改 PR 或自动改代码。
+- 新增独立 `TransportEvent`/`TransportEventType`，与 `MotorStatus` feedback 及
+  feedback-error callback 完全分离。
+- 事件包含 backend、operation、message/exception、单调时间、connection
+  generation，并可包含 attempt/max attempts。
+- 支持 `DISCONNECTED`、`READ_ERROR`、`WRITE_ERROR`、`CLOSE_ERROR`、
+  `RECONNECTING`、`RECONNECTED`、`RECONNECT_FAILED`。
+- driver 提供 transport callback 注册和清除 API；cleanup 后不保留节点 callback。
 
-## 7. CI 硬件安全边界
+## 7. USB-CAN 断线检测
 
-- 使用 GitHub hosted Ubuntu runner，不使用 Raspberry Pi、机器人或开发电脑作为
-  runner。
-- workflow 不使用 privileged、host network、device mount、`/dev` passthrough
-  或 Docker device option。
-- 统一脚本只运行 py_compile、colcon build、直接 pytest 和 colcon test；没有
-  `ros2 run/launch/topic/service`，不会启动节点或 lifecycle spin。
-- 测试只使用 pure logic、fake driver、fake feedback、fake clock、伪终端、
-  monkeypatch 和未连接 backend 对象。
-- 不访问 `/dev/imu_usb` 或任何真实串口，不创建 SocketCAN，不配置或访问
-  `can10`，不连接/初始化 CyberGear，不写 SDO。
-- 不导入或构造真实底层风扇控制器，不访问 GPIO12/GPIO13，不创建 Servo，不解锁
-  电调，不输出 PWM。
-- CI safety checker 会在构建和测试前拒绝上述高风险命令或 runner/container 配置。
+- reader 遇到串口关闭、`SerialException` 或读 `OSError` 时只报告该 generation
+  的首个 transport fault，然后退出，不再 sleep/continue 刷同一错误。
+- write/flush 异常及关闭状态向调用者抛明确 transport exception，并报告事件。
+- reader 不执行 close、退避、reconnect 或电机初始化。
+- connect 会替换旧 reader；close 先请求退出、释放串口，再在锁外限时 join。
+  reader 未在 timeout 内退出会阻止新连接，避免并存两个有效 reader。
 
-## 8. 统一 CI 脚本
+## 8. SocketCAN 断线检测
 
-`scripts/ci_software.sh` 使用 `set -euo pipefail`，从自身路径解析仓库根目录，并
-按以下顺序执行：
+- `recv()` 抛异常或 bus 缺失会报告当前 generation 的 fault 并退出 reader。
+- `recv(timeout)` 返回 `None` 明确保留为正常无帧，不触发 ERROR/reconnect。
+- send 异常和 bus 缺失抛明确 transport exception；不会自动重发原命令。
+- connect/close 会替换、shutdown 和限时 join 旧 reader；重复 close 幂等。
 
-1. CI safety check；
-2. commit/local whitespace check；
-3. Python py_compile；
-4. 三包隔离 colcon build；
-5. 电机包全量 pytest；
-6. 风扇四文件关键安全回归；
-7. 三包完整 colcon test；
-8. `colcon test-result --verbose`。
+## 9. 系统级 transport fault 路径
 
-脚本支持 workflow 按上述 stage 名单独调用。任一命令失败由 `set -e` 传播为非零；
-不存在 `|| true`。ROS 官方 setup 脚本 source 的短暂区间关闭 nounset，source 后
-立即恢复 `set -u`，避免 `AMENT_TRACE_SETUP_FILES` 未定义导致环境加载失败。
+- 首次当前 generation fault 原子锁存 immutable snapshot。
+- 立即把 `_init_complete` 置 false，阻断普通命令，停止 MANUAL/AUTO/HOME，令
+  motion source 为 `IDLE`，并把 `desired_targets` 同步到最近成功发送的
+  `current_targets`。
+- recovery fault-response 阶段复用一次性主 stop claim，逐台 best-effort 停止；
+  stop 失败不会阻止 ERROR、close 或后续有界重连。
+- ControllerState 转为 `ERROR` 并发布 `/motors/control_mode = ERROR`。
+- `/motor/status` 继续用 `std_msgs/String` 发布明确 `motor_transport:*` 状态，未新增
+  自定义 ROS message。
 
-## 9. Whitespace 检查策略
+## 10. 与 command fault 的关系
 
-- pull request：检查 `base...head` 整个 PR range。
-- push：正常分支更新检查 `before..head`；新分支零 before 时至少对当前 HEAD 使用
-  `git diff-tree --check --root -r`。
-- workflow_dispatch：对当前 HEAD 使用 `git diff-tree --check --root -r`。
-- workflow 使用 `fetch-depth: 0`，确保需要的提交范围可用。
-- 本地无 event 环境时检查当前 HEAD、暂存区和未暂存区；只在本地未暂存检查中
-  排除禁止修改的 `docs/NEXT_COMMAND.md`。GitHub checkout 的 commit range 检查
-  不使用该排除 workaround。
-- 没有使用干净 checkout 中无意义的普通无参数 `git diff --check`。
+- transport write exception 同时记录 command 诊断和 transport snapshot。
+- command fault、reader fault 和重复 fault 共享 `_fault_stop_batch_claimed`、transport
+  latch 与 coordinator lock，因此只有一个主 stop batch、一个真实 ERROR 转换和
+  一个 recovery worker。
+- 普通非 transport 的位置/速度写错误保持原 command-fault ERROR 语义，不启动
+  reconnect。
 
-## 10. CI safety checker
+## 11. reconnect_on_disconnect 语义
 
-- 检查范围为 `.github/workflows/*.yml|yaml` 和 `scripts/ci_software.sh`。
-- 对 YAML 只提取实际 `run:` scalar/block，并单独检查 runs-on、container options
-  和 device mapping；对 shell 忽略完整注释行，避免文档式禁令文字误报。
-- 拒绝 ROS node execution、CAN setup、`can10`、IMU device、CAN link configuration、
-  modprobe、GPIO write、privileged/device passthrough 和 self-hosted runner。
-- 自身测试覆盖合法 workflow、`ros2 launch`、setup_can、can10 配置、`/dev`
-  device mount、self-hosted、privileged 以及注释不误报。
+- `false`：锁存 ERROR、丢弃运动、best-effort stop、关闭失效 transport，不调用
+  connect，不创建 reconnect worker。
+- `true`：完成同一故障响应后启动最多一个 recovery worker，只尝试重开 backend
+  connection 和 reader。
+- 两种配置都不会自动恢复控制或清除故障。
 
-## 11. 本地等价 CI 测试结果
+## 12. 重连协调器
 
-- `bash -n scripts/ci_software.sh`：通过。
-- checker/helper `py_compile`：通过。
-- `python3 scripts/check_ci_safety.py`：通过。
-- CI infrastructure targeted tests：`16 passed`。
-- 本地 whitespace（排除用户 `NEXT_COMMAND`）：通过。
-- 最终全工作区 `git diff --check`：通过；当前用户版 `NEXT_COMMAND` 没有触发
-  whitespace error，但本地 helper 仍按任务保护要求不把它纳入本任务检查范围。
-- `./scripts/ci_software.sh`：最终通过。
-- Python compile：通过，覆盖两个产品 Python 包、三个 launch 目录和两个 CI helper。
-- 三包 build：`3 packages finished`。
-- 电机包全量：`306 passed`。
+- 状态：`IDLE`、`FAULT_LATCHED`、`RECONNECTING`、`RECONNECTED_LOCKED`、
+  `FAILED`、`CANCELLED`。
+- 首次 reconnect attempt 立即执行；失败间隔按 initial delay、multiplier 和 max
+  delay 有界退避。
+- backoff 使用 cancel event wait，不使用不可取消长时间 sleep。
+- generation 校验忽略旧 reader 晚到事件；并发 request 通过 lock/state 只允许
+  一个 worker。
+- lifecycle cancel 与正在进行的 connect 竞态时，若 connect 在取消后才成功，
+  worker 会再次 close，绝不在 deactivate/cleanup 后遗留重开连接。
+
+## 13. 重连成功后的锁定状态
+
+- recovery state 为 `RECONNECTED_LOCKED`，ControllerState 和公开模式保持 `ERROR`。
+- 不设置 `_init_complete=true`，不清除 command/motor/transport fault。
+- 不调用 `connect_and_init_motors()`、SDO run mode/速度/位置、`enter_control_mode()`、
+  `set_zero()`，不 enable 电机。
+- 不重发旧目标，不恢复 MANUAL、AUTO、HOME 或机械零点流程。
+- 必须 lifecycle cleanup/configure 或重启节点才能重新初始化并恢复控制。
+
+## 14. 重连失败
+
+- 达到 `reconnect_max_attempts` 后进入 `FAILED`，ControllerState 继续为 `ERROR`。
+- 不超过最大次数，不高速无限重试，不自动开始第二轮，也不回到运行态。
+
+## 15. lifecycle 和线程清理
+
+- deactivate、cleanup、shutdown 和 configure 回滚先禁止新 recovery request，设置
+  cancel event 并 join worker。
+- 然后停止 motion/watchdog/feedback monitor，清 feedback 与 transport callbacks，
+  停止 reader、close backend，再销毁 ROS 资源。
+- 正常 deactivate 后可正常 re-activate；若已有 transport fault/recovery，则取消后
+  re-activate 不会恢复重连或运动。
+- cleanup 后可重新 configure，使用新 driver、reader、callback、fault snapshot 和
+  coordinator；旧会话不污染新会话。
+- 初始化期间若 reader 报 transport fault，配置立即中止并走既有事务式回滚，不把
+  它误当运行期重连，也不继续发送初始化命令。
+
+## 16. 锁与并发
+
+- 节点 state lock 只保护内存状态；绝不持有它等待 recovery lock 或 driver I/O lock。
+- coordinator lock 只保护状态、attempt、worker 引用；调用 stop/close/connect 和
+  join 时不持有该锁。
+- driver I/O lock 串行化单次驱动操作；普通命令、stop、close、connect 都不在持有
+  node state lock 时等待它。
+- backend resource lock 不在 reader join 或 transport callback 分发时持有。
+- transport callback 只做状态锁存和提交 worker；worker 才执行 stop/close/connect，
+  避免 reader 自己 close/join/reconnect。
+
+## 17. 与 motor health / temperature / feedback timeout 的关系
+
+- 固件 fault bit、临界温度、连续无效反馈继续走 motor safety ERROR，不启动
+  transport reconnect。
+- warning 温度仍只告警，不自动降速。
+- `motor_feedback_timeout_sec` 默认保持 `0.0`。即使显式开启并触发 timeout，没有
+  backend transport error 证据时也不启动 reconnect。
+- 0x02 parser、fault bit 定义、反馈健康和数值电流能力边界均未修改。
+
+## 18. 急停与机械零点交互
+
+- MANUAL/AUTO 中的 transport fault 进入 ERROR；EMERGENCY_STOP 中发生 transport
+  fault 也从急停转为 ERROR。
+- `/enable_motor=true`、键盘 `r` 和普通急停恢复不能清除 transport ERROR。
+- 机械零点中发生 transport write failure 会立即中止，不执行后续电机或恢复写入；
+  重连成功后不会自动继续，必须重新配置后由用户重新明确发起。
+
+## 19. 参数
+
+新增并集中校验：
+
+```yaml
+reconnect_on_disconnect: true
+reconnect_max_attempts: 30
+reconnect_initial_delay_sec: 0.5
+reconnect_max_delay_sec: 10.0
+reconnect_backoff_multiplier: 1.5
+```
+
+- attempts 必须为正整数；delay 必须有限且非负；max delay 不小于 initial delay；
+  multiplier 必须有限且不小于 1.0。
+- 默认值沿用原 driver 的 30、0.5、10.0、1.5，没有无依据改变退避策略。
+
+## 20. 保持不变的产品行为
+
+- MANUAL/AUTO/HOME 算法、三模式 `4.0 rad/s`、dt/step/tolerance、键盘重复算法和
+  AUTO 姿态增益保持。
+- motor IDs `[4,3,2,1]`、signs、软限位、默认速度、初始化零目标保持。
+- 温度阈值 `80/90°C`、电流保留参数 `5.0A`、feedback timeout `0.0` 保持。
+- IMU、统一零点、0x02 大端序 parser、fault bit、feedback health 保持。
+- 风扇算法、PWM、GPIO12/GPIO13 未修改。
+- 所有既有 ROS 公共话题、服务、参数和消息类型保持；未新增自动恢复服务。
+
+## 21. 测试
+
+- 新增三个 transport/reconnect 测试文件共收集 `47 tests`；在既有配置测试中新增
+  6 个非法重连参数实例，合计新增 `53` 项测试实例。
+- USB：正常帧、SerialException、OSError、关闭、write/flush、generation、reader
+  替换和幂等 close 均覆盖。
+- SocketCAN：正常 message、`None`、recv/send exception、bus 缺失、generation、
+  reader 替换和幂等 close 均覆盖。
+- coordinator：disabled、两次失败后成功、close failure、exhaustion、backoff、
+  cancel、connect/cancel race、generation、并发单 worker/stop 均覆盖。
+- lifecycle：configure、activate、fault、reconnecting、deactivate/cleanup/shutdown、
+  configure again、初始化期断线均覆盖。
+- 运动与安全：MANUAL/AUTO/HOME 旧目标、command fault 幂等、非 transport command
+  error、急停、机械零点、motor fault、临界温度和 feedback timeout 均覆盖。
+- 电机包 targeted/full：`359 passed`。
 - 风扇关键回归：`98 passed`。
-- 三包完整：`422 tests, 0 errors, 0 failures, 0 skipped`。
-- 相对原 406 项完整基线新增 16 项 CI infrastructure 测试；产品既有测试未删除、
-  skip、xfail 或降低断言。
+- 三包 build：`3 packages finished`。
+- 三包完整 colcon：`475 tests, 0 errors, 0 failures, 0 skipped`。
+- CI infrastructure：`16 passed`。
+- `./scripts/ci_software.sh`：完整通过，包括 safety checker、whitespace、compile、
+  build、两组 targeted tests、full colcon 和 test-result。
+- `git diff --check -- . ':(exclude)docs/NEXT_COMMAND.md'`：通过。
+- 完整 `git diff --check`：通过；用户版 NEXT_COMMAND 未产生 whitespace error。
+- 首次手工 targeted pytest 因设置 `PYTHONPATH` 时覆盖 ROS 路径而 collection 失败；
+  改为追加 ROS `PYTHONPATH` 后通过。该问题不是产品、测试断言或硬件故障。
 
-首轮 checker 自测为 `12 passed, 4 failed`，暴露 YAML `- run:` 短写和 container
-options 提取遗漏；修正 checker 后为 `16 passed`。统一脚本首轮在 build 前因 ROS
-官方 setup 与 nounset 兼容问题退出，未开始构建或测试；限制 nounset 关闭范围后
-最终整套通过。这两项均为新增 CI 基础设施问题，不是产品测试或硬件故障。
-
-## 12. GitHub Hosted CI 状态
-
-- 主任务提交 `b251f63` 推送后触发 run `31142840217`，GitHub 在创建 job 前报告：
-  `Line 25, Col 33: Unrecognized named-value: 'runner'`。
-- 根因是 job 级 `env` 不提供 `runner` context；它不是依赖、构建、测试或硬件
-  失败，失败运行没有创建任何 job，也没有访问硬件。
-- 修复将统一输出根改为 hosted Ubuntu 上明确的 `/tmp/windarmor-ci`，并新增契约
-  断言防止在该 job 级变量中重新使用 `runner.temp`。
-- context 修复提交 `1a2945a` 推送后，run `31143313077` 的 ROS setup、rosdep、
-  safety、whitespace、compile、build、两组 targeted tests、full test、test-result
-  和 upload step 均为 `success`，整体 conclusion 为 `success`。
-- 该 run 的 artifact API 仍返回 `total_count: 0`：实际输出根已改为 `/tmp`，上传
-  path 仍使用 `${{ runner.temp }}`，且 `if-no-files-found: ignore` 静默忽略了不匹配。
-- 第二次修复统一上传 path 为 `/tmp/windarmor-ci`，并把无文件策略改为 `error`；
-  用户已授权本次修复、中文 commit 和 push，最终 artifact 结果以终端汇报为准。
-
-## 13. README 和 AGENTS 更新
-
-- README 不再把已提交的反馈健康/端序修正描述为工作区修改，并概括 `v0.3.1`
-  后四项已提交加固及用户正常功能实机复测边界。
-- README 新增 runner、ROS 版本、触发条件、无硬件范围和本地统一入口，不把测试
-  数量硬编码为永久保证。
-- AGENTS 只新增 GitHub Actions 纯软件/hosted runner 安全边界；原硬件安全、
-  带电授权门槛和 Git 权限限制均保留。
-
-## 14. 保持不变的产品行为
-
-- 未修改 MANUAL/AUTO/HOME 算法、推进速度、dt/step/tolerance、键盘算法或 AUTO
-  映射/增益。
-- 未修改 motor IDs、directions、软限位、初始化目标、默认速度或其他硬件配置。
-- 未修改 feedback health、fault bit、温度 warning/critical、feedback timeout、
-  电流能力边界或 0x02 大端序 parser。
-- 未修改 IMU 协议、轴向、姿态换算或零点。
-- 未修改风扇状态机、activity、响应曲线、PWM、GPIO12/GPIO13 或电调行为。
-- 未修改 ROS 公共话题、服务、参数、消息类型或 launch 产品接口。
-- 唯一 manifest 行为变化是准确声明已有 pytest 测试依赖。
-
-## 15. 硬件安全声明
+## 22. 硬件安全声明
 
 - 未执行 `ros2 run`、`ros2 launch`、`ros2 topic`、`ros2 service`、`sudo` 或
   `scripts/setup_can.sh`。
-- 未启动或 spin IMU、电机、风扇节点或任何 hardware launch。
-- 未打开 `/dev/imu_usb` 或任何真实串口。
-- 未创建、连接或配置真实 SocketCAN，未访问 `can10`。
-- 未构造用于真实连接的 CyberGear driver，未初始化/使能/控制电机，未写 SDO。
-- 未访问 GPIO12/GPIO13，未创建 Servo，未初始化/解锁电调，未输出 PWM 或控制
-  风扇。
-- 未给电机或风扇通电，未进行任何带电测试。
-- 本地 build/test/py_compile/whitespace/checker 都是纯软件验证，不表述为实机验证。
+- 未打开 `/dev/imu_usb`、`/dev/ttyUSB*` 或任何真实串口。
+- 未创建、配置或访问真实 SocketCAN/can10，未连接 CyberGear。
+- 未写真实 SDO、未 enable/stop/控制真实电机，未进行拔线、断电或带电测试。
+- 未启动或 spin IMU、电机、风扇硬件节点。
+- 未访问 GPIO12/GPIO13，未创建 Servo、解锁电调、输出 PWM 或控制风扇。
+- 构建、fake/mock 测试和本地等价 CI 只属于纯软件验证，不表述为实机验证。
+- 上述“未执行”均指 Codex 的操作。用户在软件完成后自行完成 MANUAL/AUTO 实机
+  正常功能回归并报告无问题；该结果不包含拔线、断电、transport fault 或重连
+  恢复的实机故障注入。
 
-## 16. 用户授权 artifact 修复提交时 Git 状态
+## 23. 提交范围与 Git 状态约束
 
-- 分支仍为 `master`；HEAD/upstream 仍为
-  `fae3a08fc1010b0c5b72314470e5359b087a4752`，领先/落后仍为 `0/0`。
-- `docs/NEXT_COMMAND.md` 保留任务前用户修改，未修改或暂存。
-- 主任务中文 commit `b251f63` 和 workflow context 修复 commit `1a2945a` 均已
-  推送到 `origin/master`。
-- 用户已明确授权本次 artifact 路径修复、中文 commit 和 push；修复提交 SHA
-  以会话终端汇报为准。
-- `docs/NEXT_COMMAND.md` 明确排除在暂存和提交范围之外。
-- 未获 push 或 tag 授权；未创建 release，也未修改任何既有 tag。
-- 未 checkout、switch、reset、clean、restore、stash、rebase 或 merge。
-- 最终详细 `git status` 与 diff 统计以本次会话终端汇报为准。
+- 任务开始时分支为 `master`，HEAD/upstream 均为 `d97c51a`，领先/落后 `0/0`。
+- `docs/NEXT_COMMAND.md` 仍是任务前用户修改，未被本任务改动或暂存。
+- 本次中文提交只包含本任务修改的 13 个既有文件和 4 个新增文件；实际 commit SHA、
+  push 和最终状态以终端汇报为准。
+- 未执行 tag、checkout、switch、reset、clean、restore、stash、rebase 或 merge。
+- `v0.3.0`、`v0.3.1` 及其他 tag 未修改。
 
-## 17. 未完成或限制
+## 24. GitHub Hosted CI
 
-- context 修复后的 Hosted CI 全部 step 已通过；日志 artifact 路径修复后的产物
-  数量和保留配置仍以实际新 run 为准。
-- 本任务没有也不需要真实 IMU、CAN、电机、GPIO 或风扇验证；真实 fault、过温、
-  反馈中断等硬件故障注入边界与上一基线相同。
+- 开始时远端基线 run `31143934086` 为 success；它不包含本地未提交改动。
+- 本地等价 CI 已通过；本次 push 触发的新 `WindArmor Software CI` 必须按实际 run
+  结论汇报，不能用基线 run 或本地结果代替。
 
-## 18. 额外发现
+## 25. 未完成或限制
 
-- 电机包此前未在 `package.xml` 声明测试实际使用的 `python3-pytest`；本任务按
-  manifest-first 原则补齐，避免 CI 依赖开发机手工环境。
-- ROS Jazzy 的 setup 脚本与调用者启用 nounset 时需要受控兼容区间；统一脚本已把
-  该区间限制在 source 操作内。
-- 原仓库没有 GitHub Actions workflow。
+- 无纯软件实现或验收阻塞项。
+- 按任务禁令未进行真实串口、真实 CAN、拔线或带电 fault injection；真实 backend
+  的设备断开表现、OS connect 延迟和 reader join 时序仍等待另行授权后的实机验证。
+- recovery 可即时取消 backoff；若底层 OS open 调用本身正在阻塞，只能在该调用
+  返回后完成关闭，软件已覆盖“取消期间晚到成功必须重新 close”的竞态。
 
-## 19. 后续建议
+## 26. 额外发现
 
-- artifact 修复提交推送后观察新的 GitHub Hosted CI，确认全部 step 和实际日志
-  artifact。
-- Hosted CI 确认后再独立评估运行期断线与受控重连；本任务未顺带实现。
+- transport fault 可能在 configure 连接成功、四电机初始化开始前由 reader 到达；
+  本任务显式处理了该边界：停止初始化并事务回滚，不启动运行期 worker。
+- backend close 若 reader 在 timeout 内不退出，现在会拒绝继续 connect，避免为了
+  重连留下两个有效 reader。
+
+## 27. 后续建议
+
+- push 后检查新的 `WindArmor Software CI` 及日志 artifact，明确区分远端结果与
+  本地等价 CI。
+- 如后续确需真实断线验证，必须重新提出硬件测试方案并满足 AGENTS.md 十项带电
+  授权门槛；本任务授权不包含该操作。

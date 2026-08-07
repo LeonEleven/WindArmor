@@ -7,7 +7,7 @@
   4. 看门狗机制监控 IMU 数据时效性，超时自动切换手动模式。
   5. 实时监控电机反馈（合法性/故障位/温度/位置误差），多层保护机制。
   6. 三重急停通道：键盘 [空格]、话题 /e_stop、服务 /e_stop。
-  7. 初始连接重试与异常全面日志记录（不含运行期自动重连）。
+  7. 初始连接重试，以及 transport fault 锁存和 transport-only 运行期受控重连。
 
 子模块分工：
   - controller_state.py  — 状态枚举与状态管理器
@@ -76,6 +76,12 @@ from .motor_config import (
 from .motor_manager import MotorManager, clamp, deg_to_rad
 from .motor_motion import auto_attitude_commands
 from .safety_monitor import SafetyMonitor
+from .transport_recovery import (
+    TransportEvent,
+    TransportEventType,
+    TransportRecoveryCoordinator,
+    TransportRecoveryState,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +207,10 @@ class ImuMotorControllerNode(LifecycleNode):
         self.declare_parameter("position_error_threshold_rad", 0.3)
         self.declare_parameter("warning_throttle_sec", 2.0)
         self.declare_parameter("reconnect_on_disconnect", True)
+        self.declare_parameter("reconnect_max_attempts", 30)
+        self.declare_parameter("reconnect_initial_delay_sec", 0.5)
+        self.declare_parameter("reconnect_max_delay_sec", 10.0)
+        self.declare_parameter("reconnect_backoff_multiplier", 1.5)
         self.declare_parameter("motor_status_topic", "/motor/status")
 
         # ================================================================
@@ -231,6 +241,7 @@ class ImuMotorControllerNode(LifecycleNode):
         self._motor_mgr: MotorManager = None
         self._safety: SafetyMonitor = None
         self._keyboard: KeyboardHandler = None
+        self._transport_recovery: Optional[TransportRecoveryCoordinator] = None
 
         # 电机参数（在 on_configure 中从参数读取）
         self._config: Optional[MotorNodeConfig] = None
@@ -259,6 +270,10 @@ class ImuMotorControllerNode(LifecycleNode):
         self._command_failure_counts: Dict[int, int] = {}
         self._command_fault_active = False
         self._fault_stop_batch_claimed = False
+        self._transport_fault_active = False
+        self._transport_fault_snapshot: Optional[TransportEvent] = None
+        self._reconnect_on_disconnect = True
+        self._reconnect_policy = None
 
         # IMU 运行时状态
         self._imu_zero_roll = 0.0
@@ -358,10 +373,24 @@ class ImuMotorControllerNode(LifecycleNode):
             self._state_mgr.register_stop_auto_zero_callback(
                 self._motor_mgr.stop_auto_zero
             )
+            self._transport_recovery = TransportRecoveryCoordinator(
+                reconnect_enabled=self._reconnect_on_disconnect,
+                policy=self._reconnect_policy,
+                backend_name=self._driver.backend_name,
+                generation_fn=self._transport_connection_generation,
+                stop_for_fault=self._stop_for_transport_fault,
+                close_transport=self._close_transport_for_recovery,
+                connect_once=self._connect_transport_once,
+                event_sink=self._on_transport_recovery_event,
+            )
             self._driver.register_feedback_callback(self._safety.on_motor_feedback)
             if hasattr(self._driver, "register_feedback_error_callback"):
                 self._driver.register_feedback_error_callback(
                     self._on_driver_feedback_error
+                )
+            if hasattr(self._driver, "register_transport_event_callback"):
+                self._driver.register_transport_event_callback(
+                    self._on_driver_transport_event
                 )
 
             # ---- 创建 ROS 资源 ----
@@ -518,6 +547,8 @@ class ImuMotorControllerNode(LifecycleNode):
             config.safety.position_error_threshold_rad
         )
         self._warning_throttle_sec = config.safety.warning_throttle_sec
+        self._reconnect_on_disconnect = config.safety.reconnect_on_disconnect
+        self._reconnect_policy = config.safety.reconnect_policy
         self._roll_axis_sign = config.control.roll_axis_sign
         self._pitch_axis_sign = config.control.pitch_axis_sign
         self._imu_zero_timeout = config.ros.imu_zero_timeout_sec
@@ -545,6 +576,8 @@ class ImuMotorControllerNode(LifecycleNode):
         }
         self._command_fault_active = False
         self._fault_stop_batch_claimed = False
+        self._transport_fault_active = False
+        self._transport_fault_snapshot = None
         self._last_imu_time = 0.0
         self._imu_sequence = 0
         self._imu_zero_sequence = 0
@@ -552,6 +585,11 @@ class ImuMotorControllerNode(LifecycleNode):
     def on_activate(self, state: State) -> TransitionCallbackReturn:
         """激活阶段：启动键盘线程。"""
         self.get_logger().info("控制节点正在激活...")
+        if (
+            self._transport_recovery is not None
+            and not self._transport_fault_active
+        ):
+            self._transport_recovery.allow_requests_if_idle()
         # 先建立本次激活的新鲜度时间原点；节点仍 inactive，后台反馈不会抢先计入。
         self._safety.start_feedback_monitor()
         self._is_active = True
@@ -575,12 +613,21 @@ class ImuMotorControllerNode(LifecycleNode):
         self.get_logger().info("控制节点正在停用...")
         self._is_active = False
         self._running = False
+        recovery_cancelled = True
+        if self._transport_recovery is not None:
+            recovery_cancelled = self._transport_recovery.disallow_and_cancel()
+            if not recovery_cancelled:
+                self.get_logger().error("停用时 transport recovery worker 未及时退出")
         self._publish_control_mode()
         self._motor_mgr.stop_motion_timer()
         self._safety.stop_feedback_monitor()
         self._keyboard.stop()
         self.get_logger().info("控制节点已停用")
-        return TransitionCallbackReturn.SUCCESS
+        return (
+            TransitionCallbackReturn.SUCCESS
+            if recovery_cancelled
+            else TransitionCallbackReturn.FAILURE
+        )
 
     def on_cleanup(self, state: State) -> TransitionCallbackReturn:
         """清理阶段：使用统一流程尽力释放全部资源。"""
@@ -621,6 +668,15 @@ class ImuMotorControllerNode(LifecycleNode):
             motor_mgr = self._motor_mgr
             safety = self._safety
             keyboard = self._keyboard
+            transport_recovery = self._transport_recovery
+
+            # No close/release operation may race a worker that can reopen the
+            # transport.  Cancellation precedes every driver I/O below.
+            if transport_recovery is not None:
+                attempt(
+                    "cancel_transport_recovery",
+                    transport_recovery.disallow_and_cancel,
+                )
 
             if motor_mgr is not None:
                 attempt("stop_motion_timer", motor_mgr.stop_motion_timer)
@@ -659,11 +715,21 @@ class ImuMotorControllerNode(LifecycleNode):
 
                     attempt("clear_driver_callbacks", clear_driver_callbacks)
 
+                if hasattr(driver, "clear_transport_event_callbacks"):
+                    def clear_transport_callbacks() -> None:
+                        with self._driver_io_lock:
+                            driver.clear_transport_event_callbacks()
+
+                    attempt("clear_transport_callbacks", clear_transport_callbacks)
+
                 def close_driver() -> None:
                     with self._driver_io_lock:
                         driver.close()
 
                 attempt("close_driver", close_driver)
+
+            if transport_recovery is not None:
+                transport_recovery.clear_callbacks()
 
             self._destroy_ros_resource(
                 "_motor_mode_timer", "timer:motor_mode", self.destroy_timer, failures, reason
@@ -696,6 +762,8 @@ class ImuMotorControllerNode(LifecycleNode):
                 self._init_complete = False
                 self._command_fault_active = False
                 self._fault_stop_batch_claimed = False
+                self._transport_fault_active = False
+                self._transport_fault_snapshot = None
                 self._motor_safety_fault_active = False
                 self._motor_safety_fault_snapshot = None
                 self._current_targets = {}
@@ -716,6 +784,7 @@ class ImuMotorControllerNode(LifecycleNode):
             self._motor_mgr = None
             self._safety = None
             self._keyboard = None
+            self._transport_recovery = None
 
         if failures:
             self.get_logger().error(
@@ -805,6 +874,110 @@ class ImuMotorControllerNode(LifecycleNode):
     def _on_driver_feedback_error(self, exc: Exception) -> None:
         """Keep reader threads alive while making callback failures diagnosable."""
         self.get_logger().error(f"电机反馈回调异常（读取线程继续运行）: {exc}")
+
+    def _transport_connection_generation(self) -> int:
+        driver = self._driver
+        if driver is None:
+            return 0
+        return int(getattr(driver, "connection_generation", 0))
+
+    def _on_driver_transport_event(self, event: TransportEvent) -> None:
+        """Latch a current-generation runtime fault without driver I/O."""
+        if event.event_type not in (
+            TransportEventType.DISCONNECTED,
+            TransportEventType.READ_ERROR,
+            TransportEventType.WRITE_ERROR,
+        ):
+            self._on_transport_recovery_event(event)
+            return
+        if event.connection_generation != self._transport_connection_generation():
+            self.get_logger().warn(
+                "忽略旧 connection generation 的 transport 事件: "
+                f"event={event.connection_generation}, "
+                f"current={self._transport_connection_generation()}"
+            )
+            return
+        self._publish_transport_event(event)
+        if self._motor_mgr is None or self._transport_recovery is None:
+            return
+        configuring = (
+            self._state_mgr is not None
+            and self._state_mgr.state is ControllerState.INITIALIZING
+        )
+        first = self._motor_mgr.enter_transport_error(event)
+        if not first:
+            return
+        if configuring:
+            self.get_logger().error(
+                "configure 初始化期间发生 transport 故障；"
+                "将执行事务式回滚，不启动运行期 reconnect"
+            )
+            return
+        if not self._transport_recovery.request_recovery(event):
+            self.get_logger().warn(
+                "transport 故障已锁存，但 lifecycle 正在停用/清理；"
+                "未启动后台 reconnect"
+            )
+
+    def _on_transport_recovery_event(self, event: TransportEvent) -> None:
+        """Publish recovery diagnostics without changing the ERROR latch."""
+        self._publish_transport_event(event)
+        if event.event_type is TransportEventType.RECONNECTED:
+            self.get_logger().warn(
+                "电机通信已恢复，但控制保持 ERROR；不会初始化电机或恢复运动，"
+                "必须 lifecycle 重新配置或重启"
+            )
+        elif event.event_type is TransportEventType.RECONNECT_FAILED:
+            self.get_logger().error(
+                "电机通信重连达到最大次数；控制继续保持 ERROR"
+            )
+
+    def _publish_transport_event(self, event: TransportEvent) -> None:
+        publisher = self._motor_status_pub
+        if publisher is None:
+            return
+        msg = String()
+        parts = [
+            f"motor_transport:{event.event_type.value}",
+            f"backend={event.backend}",
+            f"operation={event.operation}",
+            f"generation={event.connection_generation}",
+        ]
+        if event.attempt is not None:
+            parts.append(f"attempt={event.attempt}/{event.max_attempts}")
+        msg.data = ":".join(parts)
+        try:
+            publisher.publish(msg)
+        except Exception as exc:
+            self.get_logger().error(f"发布 transport 状态失败: {exc}")
+
+    def _stop_for_transport_fault(self, event: TransportEvent) -> None:
+        motor_mgr = self._motor_mgr
+        if motor_mgr is not None:
+            motor_mgr.stop_motors_for_fault_once(
+                reason=(
+                    f"transport:{event.event_type.value}:{event.operation}:"
+                    f"generation={event.connection_generation}"
+                )
+            )
+
+    def _close_transport_for_recovery(self) -> None:
+        with self._driver_io_lock:
+            driver = self._driver
+            if driver is not None:
+                driver.close()
+
+    def _connect_transport_once(self) -> None:
+        """Reopen only the transport/reader; never initialize any motor."""
+        if not self._running:
+            raise RuntimeError("lifecycle is inactive; reconnect cancelled")
+        with self._driver_io_lock:
+            if not self._running:
+                raise RuntimeError("lifecycle became inactive; reconnect cancelled")
+            driver = self._driver
+            if driver is None:
+                raise RuntimeError("driver released during reconnect")
+            driver.connect()
 
     def _on_motor_zero_service(
         self, _request: Trigger.Request, response: Trigger.Response

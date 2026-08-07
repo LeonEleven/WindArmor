@@ -12,6 +12,7 @@ class FakeMotorDriver:
         connect_result=True,
         close_failure=False,
         blockers=None,
+        reconnect_results=None,
         **_kwargs,
     ):
         self.backend_name = "fake"
@@ -19,11 +20,15 @@ class FakeMotorDriver:
         self.connect_result = connect_result
         self.close_failure = close_failure
         self.blockers = dict(blockers or {})
+        self.reconnect_results = list(reconnect_results or ())
         self.calls = []
         self.counts = Counter()
         self.feedback_callback = None
         self.feedback_error_callback = None
+        self.transport_event_callback = None
         self.close_attempts = 0
+        self._connection_generation = 0
+        self._connected = False
         self._activity_lock = Lock()
         self.active_calls = 0
         self.max_active_calls = 0
@@ -52,7 +57,28 @@ class FakeMotorDriver:
 
     def connect_with_retry(self, **_kwargs):
         self._call("connect")
+        if self.connect_result:
+            self._connected = True
+            self._connection_generation += 1
         return self.connect_result
+
+    def connect(self):
+        self._call("connect_once")
+        result = self.reconnect_results.pop(0) if self.reconnect_results else True
+        if isinstance(result, BaseException):
+            raise result
+        if not result:
+            raise RuntimeError("injected reconnect failure")
+        self._connected = True
+        self._connection_generation += 1
+
+    @property
+    def connection_generation(self):
+        return self._connection_generation
+
+    @property
+    def is_connected(self):
+        return self._connected
 
     def register_feedback_callback(self, callback):
         self.feedback_callback = callback
@@ -66,6 +92,19 @@ class FakeMotorDriver:
         self.feedback_callback = None
         self.feedback_error_callback = None
         self._call("clear_feedback_callbacks")
+
+    def register_transport_event_callback(self, callback):
+        self.transport_event_callback = callback
+        self._call("register_transport_event")
+
+    def clear_transport_event_callbacks(self):
+        self.transport_event_callback = None
+        self._call("clear_transport_event_callbacks")
+
+    def emit_transport_event(self, event):
+        callback = self.transport_event_callback
+        if callback is not None:
+            callback(event)
 
     def emit_feedback(self, status):
         """Synchronously deliver fake feedback without any hardware access."""
@@ -96,6 +135,7 @@ class FakeMotorDriver:
     def close(self):
         self.close_attempts += 1
         self._call("close")
+        self._connected = False
         if self.close_failure:
             raise RuntimeError("injected close failure")
 

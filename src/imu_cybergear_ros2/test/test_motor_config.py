@@ -33,6 +33,11 @@ def test_default_config_preserves_current_motor_mapping_and_control_values() -> 
     assert config.safety.motor_feedback_timeout_sec == 0.0
     assert config.safety.motor_feedback_startup_grace_sec == 3.0
     assert config.safety.motor_feedback_check_rate_hz == 10.0
+    assert config.safety.reconnect_on_disconnect
+    assert config.safety.reconnect_policy.max_attempts == 30
+    assert config.safety.reconnect_policy.initial_delay_sec == 0.5
+    assert config.safety.reconnect_policy.max_delay_sec == 10.0
+    assert config.safety.reconnect_policy.backoff_multiplier == 1.5
     assert config.communication.fallback_parameters == ()
     with pytest.raises(FrozenInstanceError):
         config.communication.master_id = 1
@@ -150,6 +155,12 @@ def set_all_motor_lists(raw, value):
         (lambda raw: raw.update(motor_feedback_check_rate_hz=float("inf")), "有限值"),
         (lambda raw: raw.update(position_error_threshold_rad=0.0), "必须大于 0"),
         (lambda raw: raw.update(warning_throttle_sec=0.0), "必须大于 0"),
+        (lambda raw: raw.update(reconnect_max_attempts=0), "greater than zero"),
+        (lambda raw: raw.update(reconnect_max_attempts=1.5), "必须是整数"),
+        (lambda raw: raw.update(reconnect_initial_delay_sec=-0.1), "must not be negative"),
+        (lambda raw: raw.update(reconnect_max_delay_sec=0.1), "must be >="),
+        (lambda raw: raw.update(reconnect_backoff_multiplier=0.5), "must be >= 1.0"),
+        (lambda raw: raw.update(reconnect_max_delay_sec=float("inf")), "必须是有限值"),
     ],
 )
 def test_invalid_configurations_are_rejected(mutate, message) -> None:

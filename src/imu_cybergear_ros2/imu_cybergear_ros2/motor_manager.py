@@ -20,6 +20,7 @@ from .motor_motion import (
     speed_for_source,
 )
 from .motor_health import MotorHealthReason, MotorSafetyFaultSnapshot
+from .transport_recovery import CyberGearTransportError, TransportEvent
 
 
 def clamp(value: float, low: float, high: float) -> float:
@@ -111,18 +112,27 @@ class MotorManager:
             self._current_init_stage = "failed:connect"
             return False
 
+        if self._initialization_transport_fault_latched():
+            return False
+
         self._node.get_logger().info("电机连接成功，正在初始化运控模式...")
         max_init_retry = 3
         for mid in self._node._motor_ids:
             for attempt in range(max_init_retry):
+                if self._initialization_transport_fault_latched():
+                    return False
                 try:
                     self._mark_init_touched(mid)
                     self._current_init_stage = f"ID{mid}:run_mode"
+                    if self._initialization_transport_fault_latched():
+                        return False
                     with self._node._driver_io_lock:
                         self._node._driver.write_sdo_int(mid, SDO_RUN_MODE, 1)
                     self._node._sleep(0.08)
 
                     self._current_init_stage = f"ID{mid}:target_speed"
+                    if self._initialization_transport_fault_latched():
+                        return False
                     with self._node._driver_io_lock:
                         self._node._driver.write_sdo_float(
                             mid, SDO_TARGET_SPEED, self._node._default_speed
@@ -132,6 +142,8 @@ class MotorManager:
                     self._node._sleep(0.08)
 
                     self._current_init_stage = f"ID{mid}:target_position"
+                    if self._initialization_transport_fault_latched():
+                        return False
                     with self._node._driver_io_lock:
                         self._node._driver.write_sdo_float(mid, SDO_TARGET_POS, 0.0)
                     with self._node._lock:
@@ -142,6 +154,8 @@ class MotorManager:
                     self._node._sleep(0.08)
 
                     self._current_init_stage = f"ID{mid}:enter_control_mode"
+                    if self._initialization_transport_fault_latched():
+                        return False
                     with self._node._driver_io_lock:
                         self._node._driver.enter_control_mode(mid)
                     if mid not in self._init_entered_control_mode_ids:
@@ -174,6 +188,8 @@ class MotorManager:
                         self._current_init_stage = f"failed:{self._current_init_stage}"
                         return False
 
+        if self._initialization_transport_fault_latched():
+            return False
         result = self._state.transition_to(
             ControllerState.MANUAL_RUNNING,
             reason=TransitionReason.CONFIGURE_SUCCESS,
@@ -189,6 +205,15 @@ class MotorManager:
             self._node._init_complete = True
             self._node._command_fault_active = False
         self._current_init_stage = "complete"
+        return True
+
+    def _initialization_transport_fault_latched(self) -> bool:
+        if not getattr(self._node, "_transport_fault_active", False):
+            return False
+        self._current_init_stage = "failed:transport"
+        self._node.get_logger().error(
+            "电机初始化因 transport 故障中止；不会继续发送初始化命令"
+        )
         return True
 
     def _mark_init_touched(self, motor_id: int) -> None:
@@ -531,6 +556,34 @@ class MotorManager:
         self, motor_id: int, command_type: str, exc: Exception
     ) -> None:
         """冻结普通推进、停止全部电机并锁定 ERROR，不自动恢复。"""
+        if isinstance(exc, CyberGearTransportError):
+            with self._node._lock:
+                first_command_fault = not self._node._command_fault_active
+                self._node._command_fault_active = True
+                self._halt_motion_locked()
+            if first_command_fault:
+                self._node.get_logger().error(
+                    f"电机命令 transport 故障: ID{motor_id}, "
+                    f"type={command_type}, error={exc}"
+                )
+            event = getattr(exc, "event", None)
+            if event is not None and hasattr(
+                self._node, "_on_driver_transport_event"
+            ):
+                self._node._on_driver_transport_event(event)
+                return
+            # Unit-level/fallback drivers without the event channel retain the
+            # established command-fault stop and ERROR behavior.
+            self.stop_motors_for_fault_once(
+                reason=f"transport_command_fault:{command_type}"
+            )
+            self._state.transition_to(
+                ControllerState.ERROR,
+                reason=TransitionReason.TRANSPORT_FAILURE,
+                source=TransitionSource.DRIVER_TRANSPORT,
+            )
+            return
+
         with self._node._lock:
             if self._node._command_fault_active:
                 return
@@ -555,6 +608,32 @@ class MotorManager:
             self._node.get_logger().error(
                 "关键状态转换被拒绝：运行时命令故障后无法进入 ERROR"
             )
+
+    def enter_transport_error(self, event: TransportEvent) -> bool:
+        """Latch the first transport fault without waiting for driver I/O."""
+        with self._node._lock:
+            if getattr(self._node, "_transport_fault_active", False):
+                return False
+            self._node._transport_fault_active = True
+            self._node._transport_fault_snapshot = event
+            self._node._init_complete = False
+            self._halt_motion_locked()
+
+        self._node.get_logger().error(
+            "电机 transport 故障已锁存；普通运动已丢弃，控制保持 ERROR: "
+            f"backend={event.backend}, operation={event.operation}, "
+            f"generation={event.connection_generation}, error={event.message}"
+        )
+        result = self._state.transition_to(
+            ControllerState.ERROR,
+            reason=TransitionReason.TRANSPORT_FAILURE,
+            source=TransitionSource.DRIVER_TRANSPORT,
+        )
+        if result.outcome is TransitionOutcome.REJECTED:
+            self._node.get_logger().error(
+                "关键状态转换被拒绝：transport 故障已锁存但无法进入 ERROR"
+            )
+        return True
 
     def enter_safety_error(self, snapshot: MotorSafetyFaultSnapshot) -> bool:
         """Latch one feedback-safety fault and execute exactly one stop batch.
@@ -619,6 +698,7 @@ class MotorManager:
         return bool(
             self._node._command_fault_active
             or getattr(self._node, "_motor_safety_fault_active", False)
+            or getattr(self._node, "_transport_fault_active", False)
         )
 
     def _ordinary_commands_blocked_unlocked(self) -> bool:
@@ -626,6 +706,7 @@ class MotorManager:
         return bool(
             self._node._command_fault_active
             or getattr(self._node, "_motor_safety_fault_active", False)
+            or getattr(self._node, "_transport_fault_active", False)
         )
 
     def stop_motors_best_effort(
@@ -881,9 +962,20 @@ class MotorManager:
         """发布当前状态汇总到日志。"""
         state_name = self._state.state_name
         transition = self._state.last_transition
+        driver = getattr(self._node, "_driver", None)
+        backend_name = getattr(driver, "backend_name", "none")
+        try:
+            transport_connected = bool(driver is not None and driver.is_connected)
+        except Exception:
+            transport_connected = False
+        recovery = getattr(self._node, "_transport_recovery", None)
+        recovery_snapshot = recovery.snapshot() if recovery is not None else None
         with self._node._lock:
             safety_snapshot = getattr(
                 self._node, "_motor_safety_fault_snapshot", None
+            )
+            transport_snapshot = getattr(
+                self._node, "_transport_fault_snapshot", None
             )
             summary_lines = [
                 "===== 节点状态汇总 =====",
@@ -899,7 +991,26 @@ class MotorManager:
                 ),
                 "反馈安全故障锁存: "
                 + ("是" if getattr(self._node, "_motor_safety_fault_active", False) else "否"),
+                f"Transport backend: {backend_name}，connected={transport_connected}",
+                "Transport 故障锁存: "
+                + ("是" if getattr(self._node, "_transport_fault_active", False) else "否"),
             ]
+        if recovery_snapshot is not None:
+            summary_lines.append(
+                "Transport recovery: "
+                f"state={recovery_snapshot.state.value}, "
+                f"attempt={recovery_snapshot.attempt}/{recovery_snapshot.max_attempts}, "
+                f"worker_alive={recovery_snapshot.worker_alive}"
+            )
+        if transport_snapshot is not None:
+            summary_lines.append(
+                "首次 transport 故障: "
+                f"backend={transport_snapshot.backend}, "
+                f"operation={transport_snapshot.operation}, "
+                f"generation={transport_snapshot.connection_generation}, "
+                f"monotonic={transport_snapshot.monotonic_timestamp:.6f}, "
+                f"message={transport_snapshot.message}"
+            )
         if safety_snapshot is not None:
             summary_lines.append(
                 "首次反馈安全故障: "

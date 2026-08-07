@@ -6,7 +6,7 @@
 
 功能：
   - 电机反馈帧解析（位置/速度/力矩/温度/模式/故障）
-  - 初始连接重试（指数退避；不含运行期自动重连）
+  - 初始连接重试，以及供上层协调运行期恢复的 transport event/generation
   - 反馈数据回调机制（供控制节点做闭环监控）
 
 CyberGear 电机 CAN 帧格式（根据小米官方说明书 v1.2.1）：
@@ -39,6 +39,7 @@ CyberGear 电机 CAN 帧格式（根据小米官方说明书 v1.2.1）：
   0x02 — 电机状态反馈（接收）
 """
 
+import logging
 import struct
 import threading
 import time
@@ -47,10 +48,20 @@ from typing import Callable, List, Optional
 
 import serial
 
+from .transport_recovery import (
+    CyberGearDisconnectedError,
+    CyberGearTransportError,
+    TransportEvent,
+    TransportEventType,
+)
+
 try:
     import can  # python-can
 except Exception:
     can = None
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +229,11 @@ class _BaseCyberGearBackend:
 
     def __init__(self, master_id: int):
         self._master_id = master_id
+        self._transport_callbacks: List[Callable[[TransportEvent], None]] = []
+        self._transport_callback_lock = threading.Lock()
+        self._generation_lock = threading.Lock()
+        self._connection_generation = 0
+        self._faulted_generations = set()
 
     # ---- 连接管理 ----
     def connect(self) -> None:
@@ -228,6 +244,73 @@ class _BaseCyberGearBackend:
 
     @property
     def is_connected(self) -> bool:
+        raise NotImplementedError
+
+    @property
+    def connection_generation(self) -> int:
+        with self._generation_lock:
+            return self._connection_generation
+
+    def _next_connection_generation(self) -> int:
+        with self._generation_lock:
+            self._connection_generation += 1
+            return self._connection_generation
+
+    def register_transport_event_callback(
+        self, callback: Callable[[TransportEvent], None]
+    ) -> None:
+        if not callable(callback):
+            raise TypeError("transport event callback must be callable")
+        with self._transport_callback_lock:
+            self._transport_callbacks.append(callback)
+
+    def clear_transport_event_callbacks(self) -> None:
+        with self._transport_callback_lock:
+            self._transport_callbacks.clear()
+
+    def report_transport_event(
+        self,
+        event_type: TransportEventType,
+        *,
+        operation: str,
+        message: str,
+        exception: Optional[BaseException] = None,
+        generation: Optional[int] = None,
+        attempt: Optional[int] = None,
+        max_attempts: Optional[int] = None,
+        fault: bool = False,
+    ) -> Optional[TransportEvent]:
+        """Create and dispatch a transport event outside backend resource locks."""
+        event_generation = (
+            self.connection_generation if generation is None else generation
+        )
+        if fault:
+            with self._generation_lock:
+                if event_generation in self._faulted_generations:
+                    return None
+                self._faulted_generations.add(event_generation)
+        event = TransportEvent(
+            event_type=event_type,
+            backend=self.backend_name,
+            operation=operation,
+            message=message,
+            monotonic_timestamp=time.monotonic(),
+            connection_generation=event_generation,
+            exception=exception,
+            attempt=attempt,
+            max_attempts=max_attempts,
+        )
+        with self._transport_callback_lock:
+            callbacks = tuple(self._transport_callbacks)
+        for callback in callbacks:
+            try:
+                callback(event)
+            except Exception:
+                LOGGER.exception("transport event callback failed")
+        return event
+
+    @property
+    def backend_name(self) -> str:
         raise NotImplementedError
 
     # ---- 发送指令 ----
@@ -293,24 +376,74 @@ class UsbCanSerialBackend(_BaseCyberGearBackend):
 
     # ---- 连接管理 ----
 
+    @property
+    def backend_name(self) -> str:
+        return "usb_can_serial"
+
     def connect(self) -> None:
         """打开串口并初始化 CAN 适配器。"""
+        self.close()
+        serial_port = None
+        try:
+            serial_port = serial.Serial(self._port, self._baud, timeout=0.1)
+            self._init_adapter(serial_port)
+        except (serial.SerialException, OSError) as exc:
+            if serial_port is not None:
+                try:
+                    serial_port.close()
+                except Exception:
+                    pass
+            raise CyberGearTransportError(
+                f"USB-CAN connect failed: {exc}"
+            ) from exc
+        except Exception:
+            if serial_port is not None:
+                try:
+                    serial_port.close()
+                except Exception:
+                    pass
+            raise
+
         with self._lock:
-            self._ser = serial.Serial(self._port, self._baud, timeout=0.1)
-            self._init_adapter()
+            self._ser = serial_port
+            generation = self._next_connection_generation()
             self._stop_reader.clear()
-            self._reader_thread = threading.Thread(
-                target=self._reader_loop, daemon=True, name="usb-can-reader"
+            reader = threading.Thread(
+                target=self._reader_loop,
+                args=(generation,),
+                daemon=True,
+                name=f"usb-can-reader-{generation}",
             )
-            self._reader_thread.start()
+            self._reader_thread = reader
+        reader.start()
 
     def close(self) -> None:
         """停止读取线程并关闭串口。"""
         self._stop_reader.set()
         with self._lock:
-            if self._ser is not None and self._ser.is_open:
-                self._ser.close()
+            serial_port = self._ser
+            reader = self._reader_thread
             self._ser = None
+            self._reader_thread = None
+        close_error = None
+        if serial_port is not None:
+            try:
+                if serial_port.is_open:
+                    serial_port.close()
+            except Exception as exc:
+                close_error = exc
+        if reader is not None and reader is not threading.current_thread():
+            reader.join(timeout=1.0)
+            if reader.is_alive():
+                LOGGER.warning("USB-CAN reader did not exit within close timeout")
+                if close_error is None:
+                    close_error = RuntimeError(
+                        "USB-CAN reader did not exit within close timeout"
+                    )
+        if close_error is not None:
+            raise CyberGearTransportError(
+                f"USB-CAN close failed: {close_error}"
+            ) from close_error
 
     @property
     def is_connected(self) -> bool:
@@ -332,7 +465,7 @@ class UsbCanSerialBackend(_BaseCyberGearBackend):
 
     # ---- 适配器初始化 ----
 
-    def _init_adapter(self) -> None:
+    def _init_adapter(self, serial_port) -> None:
         """发送 AT 指令初始化 CAN 适配器。"""
         init_cmds = [
             b"AT+CG\r\n",
@@ -340,42 +473,91 @@ class UsbCanSerialBackend(_BaseCyberGearBackend):
             b"AT+AT\r\n",
         ]
         for cmd in init_cmds:
-            self._ser.write(cmd)
+            serial_port.write(cmd)
             time.sleep(0.1)
-            self._ser.read_all()
+            serial_port.read_all()
 
     # ---- 发送指令 ----
 
     def send_motor_cmd(self, motor_id: int, comm_type: int, data: bytes = b"\x00" * 8):
         """通过 USB-CAN 适配器发送 CAN 帧。"""
+        transport_error = None
+        generation = self.connection_generation
         with self._lock:
-            if self._ser is None or not self._ser.is_open:
-                raise RuntimeError("USB-CAN 串口未连接")
-            can_id_29 = (comm_type << 24) | (self._master_id << 8) | motor_id
-            wm_id_32 = (can_id_29 << 3) | 0x04
-            id_bytes = struct.pack(">I", wm_id_32)
-            frame = AT_PREAMBLE + id_bytes + bytes([len(data)]) + data + AT_TERMINATOR
-            self._ser.write(frame)
-            self._ser.flush()
+            try:
+                is_open = self._ser is not None and self._ser.is_open
+            except (serial.SerialException, OSError) as exc:
+                is_open = False
+                transport_error = CyberGearTransportError(
+                    f"USB-CAN write connection check failed: {exc}"
+                )
+            if transport_error is None and not is_open:
+                transport_error = CyberGearDisconnectedError(
+                    "USB-CAN serial transport is not open"
+                )
+            elif transport_error is None:
+                can_id_29 = (comm_type << 24) | (self._master_id << 8) | motor_id
+                wm_id_32 = (can_id_29 << 3) | 0x04
+                id_bytes = struct.pack(">I", wm_id_32)
+                frame = (
+                    AT_PREAMBLE
+                    + id_bytes
+                    + bytes([len(data)])
+                    + data
+                    + AT_TERMINATOR
+                )
+                try:
+                    self._ser.write(frame)
+                    self._ser.flush()
+                except (serial.SerialException, OSError) as exc:
+                    transport_error = CyberGearTransportError(
+                        f"USB-CAN write failed: {exc}"
+                    )
+        if transport_error is not None:
+            event_type = (
+                TransportEventType.DISCONNECTED
+                if isinstance(transport_error, CyberGearDisconnectedError)
+                else TransportEventType.WRITE_ERROR
+            )
+            event = self.report_transport_event(
+                event_type,
+                operation="write",
+                message=str(transport_error),
+                exception=transport_error,
+                generation=generation,
+                fault=True,
+            )
+            transport_error.event = event
+            raise transport_error
 
     # ---- 反馈读取循环 ----
 
-    def _reader_loop(self) -> None:
+    def _reader_loop(self, generation: Optional[int] = None) -> None:
         """后台线程：持续读取串口返回的 CAN 帧并解析为 MotorStatus。"""
+        if generation is None:
+            generation = self.connection_generation
         buffer = bytearray()
+        transport_error = None
         while not self._stop_reader.is_set():
+            if generation != self.connection_generation:
+                return
             try:
                 with self._lock:
                     if self._ser is None or not self._ser.is_open:
-                        time.sleep(0.01)
-                        continue
+                        transport_error = CyberGearDisconnectedError(
+                            "USB-CAN serial transport closed during read"
+                        )
+                        break
                     available = self._ser.in_waiting
-                    if available <= 0:
-                        time.sleep(0.001)
-                        continue
-                    chunk = self._ser.read(available)
-            except (serial.SerialException, OSError):
-                time.sleep(0.1)
+                    chunk = self._ser.read(available) if available > 0 else b""
+            except (serial.SerialException, OSError) as exc:
+                transport_error = CyberGearTransportError(
+                    f"USB-CAN read failed: {exc}"
+                )
+                break
+
+            if not chunk:
+                self._stop_reader.wait(0.001)
                 continue
 
             buffer.extend(chunk)
@@ -413,6 +595,22 @@ class UsbCanSerialBackend(_BaseCyberGearBackend):
                     if status is not None:
                         self._dispatch_feedback(status)
 
+        if transport_error is not None and not self._stop_reader.is_set():
+            event_type = (
+                TransportEventType.DISCONNECTED
+                if isinstance(transport_error, CyberGearDisconnectedError)
+                else TransportEventType.READ_ERROR
+            )
+            event = self.report_transport_event(
+                event_type,
+                operation="read",
+                message=str(transport_error),
+                exception=transport_error,
+                generation=generation,
+                fault=True,
+            )
+            transport_error.event = event
+
     def _dispatch_feedback(self, status: MotorStatus) -> None:
         for callback in tuple(self._feedback_callbacks):
             try:
@@ -445,6 +643,7 @@ class SocketCanHatBackend(_BaseCyberGearBackend):
         super().__init__(master_id)
         self._channel = channel
         self._bustype = bustype
+        self._lock = threading.Lock()
         self._bus = None
         self._reader_thread: Optional[threading.Thread] = None
         self._stop_reader = threading.Event()
@@ -453,30 +652,66 @@ class SocketCanHatBackend(_BaseCyberGearBackend):
 
     # ---- 连接管理 ----
 
+    @property
+    def backend_name(self) -> str:
+        return "socketcan_hat"
+
     def connect(self) -> None:
         """打开 CAN 总线接口。"""
         if can is None:
             raise RuntimeError("未安装 python-can，无法使用 socketcan_hat 后端。"
                                "请执行: pip install python-can")
-        self._bus = can.interface.Bus(channel=self._channel, bustype=self._bustype)
-        self._stop_reader.clear()
-        self._reader_thread = threading.Thread(
-            target=self._reader_loop, daemon=True, name="socketcan-reader"
-        )
-        self._reader_thread.start()
+        self.close()
+        try:
+            bus = can.interface.Bus(channel=self._channel, bustype=self._bustype)
+        except Exception as exc:
+            raise CyberGearTransportError(
+                f"SocketCAN connect failed: {exc}"
+            ) from exc
+        with self._lock:
+            self._bus = bus
+            generation = self._next_connection_generation()
+            self._stop_reader.clear()
+            reader = threading.Thread(
+                target=self._reader_loop,
+                args=(generation,),
+                daemon=True,
+                name=f"socketcan-reader-{generation}",
+            )
+            self._reader_thread = reader
+        reader.start()
 
     def close(self) -> None:
         """关闭 CAN 总线接口。"""
         self._stop_reader.set()
-        if self._bus is not None:
+        with self._lock:
+            bus = self._bus
+            reader = self._reader_thread
+            self._bus = None
+            self._reader_thread = None
+        close_error = None
+        if bus is not None:
             try:
-                self._bus.shutdown()
-            finally:
-                self._bus = None
+                bus.shutdown()
+            except Exception as exc:
+                close_error = exc
+        if reader is not None and reader is not threading.current_thread():
+            reader.join(timeout=1.0)
+            if reader.is_alive():
+                LOGGER.warning("SocketCAN reader did not exit within close timeout")
+                if close_error is None:
+                    close_error = RuntimeError(
+                        "SocketCAN reader did not exit within close timeout"
+                    )
+        if close_error is not None:
+            raise CyberGearTransportError(
+                f"SocketCAN close failed: {close_error}"
+            ) from close_error
 
     @property
     def is_connected(self) -> bool:
-        return self._bus is not None
+        with self._lock:
+            return self._bus is not None
 
     def register_feedback_callback(self, callback: Callable[[MotorStatus], None]) -> None:
         """注册电机反馈回调函数。"""
@@ -499,8 +734,21 @@ class SocketCanHatBackend(_BaseCyberGearBackend):
 
     def send_motor_cmd(self, motor_id: int, comm_type: int, data: bytes = b"\x00" * 8):
         """通过 SocketCAN 发送 CAN 帧。"""
-        if self._bus is None:
-            raise RuntimeError("CAN 总线未连接")
+        with self._lock:
+            bus = self._bus
+        generation = self.connection_generation
+        if bus is None:
+            error = CyberGearDisconnectedError("SocketCAN bus is not open")
+            event = self.report_transport_event(
+                TransportEventType.DISCONNECTED,
+                operation="write",
+                message=str(error),
+                exception=error,
+                generation=generation,
+                fault=True,
+            )
+            error.event = event
+            raise error
         arbitration_id = self._build_can_id(comm_type, motor_id)
         payload = list(data[:8]) + [0x00] * max(0, 8 - len(data))
         msg = can.Message(
@@ -508,24 +756,48 @@ class SocketCanHatBackend(_BaseCyberGearBackend):
             data=payload[:8],
             is_extended_id=True,
         )
-        self._bus.send(msg)
+        try:
+            bus.send(msg)
+        except Exception as exc:
+            error = CyberGearTransportError(f"SocketCAN write failed: {exc}")
+            event = self.report_transport_event(
+                TransportEventType.WRITE_ERROR,
+                operation="write",
+                message=str(error),
+                exception=error,
+                generation=generation,
+                fault=True,
+            )
+            error.event = event
+            raise error from exc
 
     # ---- 反馈读取循环 ----
 
-    def _reader_loop(self) -> None:
+    def _reader_loop(self, generation: Optional[int] = None) -> None:
         """后台线程：使用 can.Bus.recv() 接收 CAN 帧。
 
         仅处理通信类型为 0x02 的电机状态反馈帧。
         """
+        if generation is None:
+            generation = self.connection_generation
+        transport_error = None
         while not self._stop_reader.is_set():
-            if self._bus is None:
-                time.sleep(0.01)
-                continue
+            if generation != self.connection_generation:
+                return
+            with self._lock:
+                bus = self._bus
+            if bus is None:
+                transport_error = CyberGearDisconnectedError(
+                    "SocketCAN bus closed during read"
+                )
+                break
             try:
-                msg = self._bus.recv(timeout=0.1)
-            except Exception:
-                time.sleep(0.01)
-                continue
+                msg = bus.recv(timeout=0.1)
+            except Exception as exc:
+                transport_error = CyberGearTransportError(
+                    f"SocketCAN read failed: {exc}"
+                )
+                break
 
             if msg is None:
                 continue
@@ -538,6 +810,22 @@ class SocketCanHatBackend(_BaseCyberGearBackend):
                 status = _parse_feedback_frame(motor_id, can_id, bytes(msg.data))
                 if status is not None:
                     self._dispatch_feedback(status)
+
+        if transport_error is not None and not self._stop_reader.is_set():
+            event_type = (
+                TransportEventType.DISCONNECTED
+                if isinstance(transport_error, CyberGearDisconnectedError)
+                else TransportEventType.READ_ERROR
+            )
+            event = self.report_transport_event(
+                event_type,
+                operation="read",
+                message=str(transport_error),
+                exception=transport_error,
+                generation=generation,
+                fault=True,
+            )
+            transport_error.event = event
 
     def _dispatch_feedback(self, status: MotorStatus) -> None:
         for callback in tuple(self._feedback_callbacks):
@@ -612,6 +900,11 @@ class CyberGearDriver:
         """当前是否已连接。"""
         return self._impl.is_connected
 
+    @property
+    def connection_generation(self) -> int:
+        """Monotonically increasing successful transport connection token."""
+        return self._impl.connection_generation
+
     def connect_with_retry(
         self,
         max_attempts: int = MAX_RECONNECT_ATTEMPTS,
@@ -661,6 +954,40 @@ class CyberGearDriver:
         """清除后端反馈回调，避免 cleanup 后保留节点引用。"""
         if hasattr(self._impl, "clear_feedback_callbacks"):
             self._impl.clear_feedback_callbacks()
+
+    def register_transport_event_callback(
+        self, callback: Callable[[TransportEvent], None]
+    ) -> None:
+        """Register a transport diagnostic callback, separate from feedback."""
+        self._impl.register_transport_event_callback(callback)
+
+    def clear_transport_event_callbacks(self) -> None:
+        """Release transport callback references during lifecycle cleanup."""
+        self._impl.clear_transport_event_callbacks()
+
+    def report_transport_event(
+        self,
+        event_type: TransportEventType,
+        *,
+        operation: str,
+        message: str,
+        exception: Optional[BaseException] = None,
+        generation: Optional[int] = None,
+        attempt: Optional[int] = None,
+        max_attempts: Optional[int] = None,
+        fault: bool = False,
+    ) -> Optional[TransportEvent]:
+        """Expose one unified event channel to the runtime coordinator."""
+        return self._impl.report_transport_event(
+            event_type,
+            operation=operation,
+            message=message,
+            exception=exception,
+            generation=generation,
+            attempt=attempt,
+            max_attempts=max_attempts,
+            fault=fault,
+        )
 
     # ---- 发送指令（委托给后端实现） ----
 

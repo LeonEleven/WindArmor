@@ -110,6 +110,7 @@ def assert_fully_released(node, driver):
     assert all(getattr(node, attr) is None for attr in RESOURCE_ATTRS)
     assert driver.feedback_callback is None
     assert driver.feedback_error_callback is None
+    assert driver.transport_event_callback is None
 
 
 @pytest.mark.parametrize(

@@ -258,8 +258,17 @@ imu_motor_controller_node:
     # 自动重连
     # ==========================================================================
 
-    # 兼容声明参数，必须是布尔值；当前控制节点尚未用它切换运行期重连策略。
+    # true：明确 transport fault 后进入 ERROR，并在后台仅尝试重开 transport/reader。
+    # false：进入 ERROR、尽力停止并关闭失效 transport，但不尝试后台重连。
+    # 即使通信恢复成功也保持 ERROR，不初始化电机、不恢复旧目标或任何运动。
     reconnect_on_disconnect: true
+
+    # 运行期 transport-only 重连采用有界指数退避；首次尝试立即执行，以下 delay
+    # 用于失败尝试之间。cleanup/shutdown/deactivate 会中断等待并取消后续尝试。
+    reconnect_max_attempts: 30
+    reconnect_initial_delay_sec: 0.5
+    reconnect_max_delay_sec: 10.0
+    reconnect_backoff_multiplier: 1.5
 
     # ==========================================================================
     # 话题配置

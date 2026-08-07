@@ -101,7 +101,9 @@ colcon test-result --verbose
 
 当前覆盖包括 IMU 协议/姿态换算纯函数、风扇 PWM 映射纯函数、统一 launch
 文件的 Python AST 语法检查，以及通过伪终端和 `monkeypatch` 隔离键盘输入
-的测试。需要只运行这些测试时，可在完成构建后执行：
+的测试。运行期通信断线检测、generation 和受控重连也只通过 fake backend、
+fake driver 与可控等待机制验证，不访问真实 CAN 或串口。需要只运行这些测试
+时，可在完成构建后执行：
 
 ```bash
 source /opt/ros/jazzy/setup.bash

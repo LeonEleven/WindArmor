@@ -111,6 +111,27 @@ AUTO 的 IMU 回调只更新最新期望目标，推进速度不再由 IMU 消�
 阻止后续电机停止。`ERROR` 不允许通过 `/enable_motor=true` 或键盘 `r` 自动
 恢复；排除通信或驱动故障后必须受控地重新配置 lifecycle 或重启节点。
 
+USB-CAN 串口关闭、串口读写异常、SocketCAN bus 缺失以及 `recv()`/`send()`
+抛出的传输异常属于独立的 transport fault，不会伪装成电机反馈，也不等同于
+电机固件 fault bit、临界温度或长时间没有 `MotorStatus`。明确 transport fault
+会立即锁存、丢弃未完成运动、同步 `desired_targets` 到最近成功发送目标、尽力
+停止全部电机并保持 `/motors/control_mode = ERROR`。SocketCAN
+`recv(timeout)` 正常返回 `None` 仍只表示当前没有帧，不算断线。
+
+`reconnect_on_disconnect: true` 时，独立后台协调器会以可取消、有界指数退避
+尝试重开 transport 和 reader；为 `false` 时只关闭失效 transport，不启动运行期
+重连。重连不会调用 `connect_and_init_motors()`，不会写 run mode、速度、位置或
+enable/set-zero 指令。即使通信恢复，状态仍是 `ERROR`，`init_complete` 仍为
+false，也不会恢复旧 MANUAL、AUTO、HOME 或机械零点流程。排除原因后必须执行
+lifecycle cleanup/configure 或重启节点，才能重新初始化并恢复控制。
+
+`motor_feedback_timeout_sec` 默认仍为 `0.0`；即使用户显式开启并发生反馈超时，
+在没有 backend transport error 证据时也只走既有 motor safety ERROR，不会推断
+需要重连。本轮断线与恢复验证全部使用 fake driver/backend、可控事件和内存故障
+注入，没有进行真实拔线、CAN/串口故障注入或带电测试。软件完成后，用户自行
+完成 MANUAL/AUTO 实机正常功能回归并报告无问题；该结果只验证正常控制路径，
+不等同于 transport 断线检测、受控重连或恢复后锁定语义的实机故障注入。
+
 电机反馈现在先按配置 ID、有限值、0x02 协议量程、模式、支持的故障 bit 和
 timestamp 合法性检查；无效帧不会覆盖最近合法反馈，默认连续 3 帧无效会锁存
 系统级故障。任意一台电机报告非零故障位（欠压、过流、过温、磁/HALL 编码器

@@ -17,7 +17,7 @@
 | **电机反馈** | 实时读取电机位置/速度/力矩/温度/模式/故障 |
 | **故障保护** | 任一电机固件故障位或临界温度锁存后停止全部电机并进入 ERROR |
 | **反馈健康** | 配置 ID/数值/量程校验、连续无效帧保护和可配置的新鲜度框架 |
-| **连接重试** | 初始连接使用指数退避；本任务不实现运行期自动重连 |
+| **连接与恢复** | 初始连接重试与运行期 transport-only 受控重连相互独立 |
 | **低 CPU** | 空闲时不空转，CPU 占用率接近 0% |
 | **状态机** | 统一生命周期管理（7 状态：AUTO/MANUAL/急停/错误等） |
 | **统一相对姿态** | `/imu/relative_roll_pitch` 发布归一化、轴向修正和统一归零后的 roll/pitch（rad） |
@@ -259,7 +259,64 @@ MANUAL/AUTO，也不能用键盘 `r` 或 `/enable_motor=true` 恢复；必须先
 失败时返回 FAILURE；配置失败始终返回 FAILURE，即使 best-effort 回滚其余步骤
 均已完成。失败回滚清理后允许重新执行配置。
 
-### 3.6 配置契约与状态转换契约
+### 3.6 运行期 transport fault 与受控重连
+
+初始配置仍由 `MotorManager.connect_and_init_motors()` 调用
+`CyberGearDriver.connect_with_retry()`：最多尝试 5 次，初始 delay 为 1 秒，并
+沿用倍率 1.5、最大 10 秒的指数退避；连接成功后才按既有事务顺序初始化各电机。
+运行期恢复由独立 `TransportRecoveryCoordinator` 管理，绝不调用这条初始化路径。
+
+USB-CAN 的串口关闭、`SerialException`/读写 `OSError`，以及 SocketCAN bus
+缺失、`recv()`/`send()` 抛出的异常会形成明确 transport event。事件包含 backend、
+read/write/connect operation、异常消息、单调时间和 connection generation；它与
+`MotorStatus` feedback callback 及 feedback callback 自身异常完全分开。
+`recv(timeout)` 返回 `None` 只是正常无帧，不形成 transport fault。
+
+reader 发现 transport fault 后只报告当前 generation 的首个事件并退出，不在
+reader 内 close、sleep 退避或 reconnect。每次成功 connect 都递增 generation；
+旧 reader 晚到的事件与 cleanup 后 callback 会被忽略或清除。两个 backend 的
+connect/close 都会替换并限时 join 旧 reader，重复 close 是安全的。
+
+首次运行期 transport fault 会原子锁存、停止 MANUAL/AUTO/HOME、同步期望目标、
+共享全局一次性主 stop batch 并进入 `ERROR`。如果同一个 write 同时触发 command
+fault 和 transport event，command 诊断仍会记录，但不会再次停止或创建第二个
+worker。电机 fault bit、临界温度、无效反馈和 feedback timeout 继续走 motor
+safety 路径，不会启动 transport recovery。
+
+运行期参数为：
+
+```yaml
+reconnect_on_disconnect: true
+reconnect_max_attempts: 30
+reconnect_initial_delay_sec: 0.5
+reconnect_max_delay_sec: 10.0
+reconnect_backoff_multiplier: 1.5
+```
+
+首次 reconnect attempt 立即执行，失败尝试之间按上述参数退避并限幅。等待使用
+可取消 event；deactivate、cleanup、shutdown 和配置失败释放会先禁止新请求，
+取消并 join worker，再清除 feedback/transport callbacks 和关闭 backend。
+`reconnect_on_disconnect=false` 时仍执行一次 fault response（停止和关闭），但
+不调用 connect；为 true 时全程最多一个恢复 worker，达到上限后进入 `FAILED`，
+不会自动开始下一轮。
+
+重连成功只表示 recovery state 为 `RECONNECTED_LOCKED`：transport 和 reader 已
+恢复，但 ControllerState、`/motors/control_mode` 和故障锁存继续保持 `ERROR`。
+系统不会写 SDO、enter control mode、set zero、重新初始化电机、恢复旧目标，
+也不会继续 MANUAL/AUTO/HOME 或机械零点。必须排除原因并重新执行 lifecycle
+cleanup/configure 或重启节点，才能重新初始化并恢复控制。
+
+键盘 `p` 状态汇总会显示 backend、connected、transport fault、首次事件、
+recovery state 及 attempt/max。该能力只通过 fake backend、fake driver 和可控
+等待完成纯软件故障注入；没有真实 CAN、串口拔线或带电验证。
+
+锁顺序保持为：节点状态锁只用于短暂内存提交；绝不在持有它时等待 recovery lock
+或 driver I/O lock。recovery worker 不持 recovery lock 调用 stop/close/connect；
+driver I/O lock 串行化单次驱动操作，backend resource lock 不在 reader join 时持有。
+transport callback 在 backend resource lock 外分发，避免 reader、cleanup 与 worker
+形成反向等待。
+
+### 3.7 配置契约与状态转换契约
 
 控制器在 `on_configure()` 中先把 ROS 参数读取为不可变的分层配置：单电机通道、
 通信、运动、控制、安全、ROS 接口和键盘配置。纯函数校验全部成功后，才会创建
@@ -288,8 +345,9 @@ MANUAL/AUTO，也不能用键盘 `r` 或 `/enable_motor=true` 恢复；必须先
 还包括正整数 `motor_invalid_feedback_limit`、非负的
 `motor_feedback_timeout_sec`，以及正有限的启动宽限和检查频率。timeout 为 0
 表示关闭强制超时。`motor_current_limit_a` 仍会校验，但因 0x02 帧没有数值电流
-而不参与比较；`reconnect_on_disconnect` 也仍只作兼容声明，本任务没有增加
-运行期自动重连。
+而不参与比较。`reconnect_on_disconnect` 与四个运行期重连策略参数会在创建驱动
+前集中校验：attempt 必须为正整数，delay 必须有限非负，最大 delay 不小于初始
+delay，倍率必须为有限且不小于 1.0。
 
 旧版 ID、方向和 `m1_*～m4_*` 软限位标量参数继续被声明以保持参数文件兼容。
 保持默认值时不影响配置；任何非默认值都会明确失败，并提示迁移到
@@ -315,7 +373,7 @@ SHUTTING_DOWN  -> 无其他状态
 在真实电机恢复成功后才会以显式恢复原因进入 MANUAL，若状态转换失败则重新尽力
 停止全部电机。
 
-### 3.7 电机反馈健康、故障位和温度保护
+### 3.8 电机反馈健康、故障位和温度保护
 
 `MotorStatus` 当前包含：`motor_id`；四个协议原始值 `raw_position`、
 `raw_speed`、`raw_torque`、`raw_temp`；换算后的 `position_rad`、
@@ -362,8 +420,10 @@ Codex 在可靠性以及配置/状态契约加固中只使用 fake driver 完成
 并发边界和 lifecycle 测试，没有访问真实 IMU、CAN 或电机。软件完成后，用户
 自行启动整个系统并完成 MANUAL/AUTO 功能实机测试；此前也已报告统一 launch
 下的电机和风扇基本功能正常。上述正常功能测试不等于本任务设计的 SDO、配置、
-初始化、stop、close 或 ROS 资源销毁故障已经在实机注入。启动零目标的机械风险
-没有改变；后续实机故障注入仍须单独获得硬件授权并满足仓库安全门槛。
+初始化、stop、close、transport 断线/重连或 ROS 资源销毁故障已经在实机注入。
+本轮通信恢复加固完成后，用户再次报告 MANUAL/AUTO 实机正常功能均无问题；这仍
+只属于正常路径回归。启动零目标的机械风险没有改变；后续实机故障注入仍须单独
+获得硬件授权并满足仓库安全门槛。
 
 ## 4. 远程控制接口
 

@@ -11,6 +11,7 @@ from .motor_motion import (
     validate_auto_attitude_gains,
     validate_motion_parameters,
 )
+from .transport_recovery import ReconnectPolicy
 
 
 MOTOR_ID_MIN = 1
@@ -98,6 +99,10 @@ DEFAULT_PARAMETER_VALUES = {
     "position_error_threshold_rad": 0.3,
     "warning_throttle_sec": 2.0,
     "reconnect_on_disconnect": True,
+    "reconnect_max_attempts": 30,
+    "reconnect_initial_delay_sec": 0.5,
+    "reconnect_max_delay_sec": 10.0,
+    "reconnect_backoff_multiplier": 1.5,
     "motor_status_topic": "/motor/status",
 }
 
@@ -169,6 +174,7 @@ class MotorSafetyConfig:
     position_error_threshold_rad: float
     warning_throttle_sec: float
     reconnect_on_disconnect: bool
+    reconnect_policy: ReconnectPolicy
 
 
 @dataclass(frozen=True)
@@ -520,6 +526,20 @@ def build_motor_node_config(raw: Mapping[str, object]) -> MotorNodeConfig:
         raise ValueError("enable_keyboard 必须是布尔值")
     if not isinstance(raw["reconnect_on_disconnect"], bool):
         raise ValueError("reconnect_on_disconnect 必须是布尔值")
+    reconnect_policy = ReconnectPolicy(
+        max_attempts=_require_integer(
+            "reconnect_max_attempts", raw["reconnect_max_attempts"]
+        ),
+        initial_delay_sec=_require_finite_number(
+            "reconnect_initial_delay_sec", raw["reconnect_initial_delay_sec"]
+        ),
+        max_delay_sec=_require_finite_number(
+            "reconnect_max_delay_sec", raw["reconnect_max_delay_sec"]
+        ),
+        backoff_multiplier=_require_finite_number(
+            "reconnect_backoff_multiplier", raw["reconnect_backoff_multiplier"]
+        ),
+    )
     keyboard_device = raw["keyboard_device"]
     if not isinstance(keyboard_device, str):
         raise ValueError("keyboard_device 必须是字符串")
@@ -555,6 +575,7 @@ def build_motor_node_config(raw: Mapping[str, object]) -> MotorNodeConfig:
             position_error_threshold_rad=position_error,
             warning_throttle_sec=warning_throttle,
             reconnect_on_disconnect=raw["reconnect_on_disconnect"],
+            reconnect_policy=reconnect_policy,
         ),
         ros=MotorRosInterfaceConfig(
             imu_topic=_validate_topic_name("imu_topic", raw["imu_topic"]),
