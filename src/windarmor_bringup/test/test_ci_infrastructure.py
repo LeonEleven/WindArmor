@@ -150,3 +150,8 @@ def test_workflow_runs_every_required_software_stage() -> None:
     ):
         assert f"./scripts/ci_software.sh {stage}" in source
     assert "if: always()" in source
+    assert "${{ runner.temp }}/windarmor-ci" not in source
+    assert "/tmp/windarmor-ci/log" in source
+    assert "/tmp/windarmor-ci/ros-logs" in source
+    assert "/tmp/windarmor-ci/build/*/Testing" in source
+    assert "if-no-files-found: error" in source

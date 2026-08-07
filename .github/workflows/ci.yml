@@ -85,8 +85,8 @@ jobs:
         with:
           name: windarmor-software-ci-logs-${{ github.run_id }}
           path: |
-            ${{ runner.temp }}/windarmor-ci/log
-            ${{ runner.temp }}/windarmor-ci/ros-logs
-            ${{ runner.temp }}/windarmor-ci/build/*/Testing
-          if-no-files-found: ignore
+            /tmp/windarmor-ci/log
+            /tmp/windarmor-ci/ros-logs
+            /tmp/windarmor-ci/build/*/Testing
+          if-no-files-found: error
           retention-days: 10

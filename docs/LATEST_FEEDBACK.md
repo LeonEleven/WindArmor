@@ -20,8 +20,10 @@
 - Codex 未启动或 spin 任何硬件节点，未访问 IMU、串口、CAN、CyberGear、GPIO
   或 PWM。
 - 主任务提交 `b251f63` 已推送；首次 GitHub Hosted CI 在 workflow 解析阶段因 job
-  级 `env` 使用不可用的 `runner.temp` context 失败，尚未运行任何 job。用户已
-  授权本次修复、中文 commit 和再次 push；修复后 Hosted 结果以会话终端汇报为准。
+  级 `env` 使用不可用的 `runner.temp` context 失败。context 修复提交 `1a2945a`
+  推送后，run `31143313077` 的全部 job step 成功；但 artifact API 显示 0 个产物，
+  原因是上传路径仍指向旧输出根。用户已授权继续修复、中文 commit 和 push，最终
+  Hosted/artifact 结果以会话终端汇报为准。
 
 ## 2. 开始前 Git 基线
 
@@ -184,8 +186,13 @@ options 提取遗漏；修正 checker 后为 `16 passed`。统一脚本首轮在
   失败，失败运行没有创建任何 job，也没有访问硬件。
 - 修复将统一输出根改为 hosted Ubuntu 上明确的 `/tmp/windarmor-ci`，并新增契约
   断言防止在该 job 级变量中重新使用 `runner.temp`。
-- 用户已明确授权修复、创建中文 commit 并再次 push；修复后实际 run 结果以会话
-  终端汇报为准。
+- context 修复提交 `1a2945a` 推送后，run `31143313077` 的 ROS setup、rosdep、
+  safety、whitespace、compile、build、两组 targeted tests、full test、test-result
+  和 upload step 均为 `success`，整体 conclusion 为 `success`。
+- 该 run 的 artifact API 仍返回 `total_count: 0`：实际输出根已改为 `/tmp`，上传
+  path 仍使用 `${{ runner.temp }}`，且 `if-no-files-found: ignore` 静默忽略了不匹配。
+- 第二次修复统一上传 path 为 `/tmp/windarmor-ci`，并把无文件策略改为 `error`；
+  用户已授权本次修复、中文 commit 和 push，最终 artifact 结果以终端汇报为准。
 
 ## 13. README 和 AGENTS 更新
 
@@ -221,14 +228,15 @@ options 提取遗漏；修正 checker 后为 `16 passed`。统一脚本首轮在
 - 未给电机或风扇通电，未进行任何带电测试。
 - 本地 build/test/py_compile/whitespace/checker 都是纯软件验证，不表述为实机验证。
 
-## 16. 用户授权修复提交时 Git 状态
+## 16. 用户授权 artifact 修复提交时 Git 状态
 
 - 分支仍为 `master`；HEAD/upstream 仍为
   `fae3a08fc1010b0c5b72314470e5359b087a4752`，领先/落后仍为 `0/0`。
 - `docs/NEXT_COMMAND.md` 保留任务前用户修改，未修改或暂存。
-- 主任务中文 commit 为 `b251f63`，已推送到 `origin/master`。
-- 用户已明确授权本次 Hosted workflow context 修复、中文 commit 和再次 push；
-  修复提交 SHA 以会话终端汇报为准。
+- 主任务中文 commit `b251f63` 和 workflow context 修复 commit `1a2945a` 均已
+  推送到 `origin/master`。
+- 用户已明确授权本次 artifact 路径修复、中文 commit 和 push；修复提交 SHA
+  以会话终端汇报为准。
 - `docs/NEXT_COMMAND.md` 明确排除在暂存和提交范围之外。
 - 未获 push 或 tag 授权；未创建 release，也未修改任何既有 tag。
 - 未 checkout、switch、reset、clean、restore、stash、rebase 或 merge。
@@ -236,8 +244,8 @@ options 提取遗漏；修正 checker 后为 `16 passed`。统一脚本首轮在
 
 ## 17. 未完成或限制
 
-- 首次 GitHub Hosted CI 在 workflow 解析阶段失败，未执行 job；修复后 Hosted
-  runner 上的依赖下载、构建耗时、测试和 artifact 上传仍以实际新 run 为准。
+- context 修复后的 Hosted CI 全部 step 已通过；日志 artifact 路径修复后的产物
+  数量和保留配置仍以实际新 run 为准。
 - 本任务没有也不需要真实 IMU、CAN、电机、GPIO 或风扇验证；真实 fault、过温、
   反馈中断等硬件故障注入边界与上一基线相同。
 
@@ -251,6 +259,6 @@ options 提取遗漏；修正 checker 后为 `16 passed`。统一脚本首轮在
 
 ## 19. 后续建议
 
-- 修复提交推送后观察新的 GitHub Hosted CI，确认 dependency setup、总耗时、
-  测试和 artifact 内容。
+- artifact 修复提交推送后观察新的 GitHub Hosted CI，确认全部 step 和实际日志
+  artifact。
 - Hosted CI 确认后再独立评估运行期断线与受控重连；本任务未顺带实现。
