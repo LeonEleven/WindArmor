@@ -19,7 +19,9 @@
 - 未修改任何产品控制算法、硬件参数、安全阈值、ROS 公共接口或硬件映射。
 - Codex 未启动或 spin 任何硬件节点，未访问 IMU、串口、CAN、CyberGear、GPIO
   或 PWM。
-- GitHub Hosted CI 尚未触发，不能声称远端 CI green。
+- 主任务提交 `b251f63` 已推送；首次 GitHub Hosted CI 在 workflow 解析阶段因 job
+  级 `env` 使用不可用的 `runner.temp` context 失败，尚未运行任何 job。用户已
+  授权本次修复、中文 commit 和再次 push；修复后 Hosted 结果以会话终端汇报为准。
 
 ## 2. 开始前 Git 基线
 
@@ -176,9 +178,14 @@ options 提取遗漏；修正 checker 后为 `16 passed`。统一脚本首轮在
 
 ## 12. GitHub Hosted CI 状态
 
-- 用户已在审查后明确授权创建中文 commit，但尚未授权 push，因此新 workflow
-  尚未在 GitHub Hosted Actions 上触发。
-- 当前只能确认 workflow 静态契约和本地等价 CI 通过，不能声称远端 CI green。
+- 主任务提交 `b251f63` 推送后触发 run `31142840217`，GitHub 在创建 job 前报告：
+  `Line 25, Col 33: Unrecognized named-value: 'runner'`。
+- 根因是 job 级 `env` 不提供 `runner` context；它不是依赖、构建、测试或硬件
+  失败，失败运行没有创建任何 job，也没有访问硬件。
+- 修复将统一输出根改为 hosted Ubuntu 上明确的 `/tmp/windarmor-ci`，并新增契约
+  断言防止在该 job 级变量中重新使用 `runner.temp`。
+- 用户已明确授权修复、创建中文 commit 并再次 push；修复后实际 run 结果以会话
+  终端汇报为准。
 
 ## 13. README 和 AGENTS 更新
 
@@ -214,13 +221,14 @@ options 提取遗漏；修正 checker 后为 `16 passed`。统一脚本首轮在
 - 未给电机或风扇通电，未进行任何带电测试。
 - 本地 build/test/py_compile/whitespace/checker 都是纯软件验证，不表述为实机验证。
 
-## 16. 用户授权提交时 Git 状态
+## 16. 用户授权修复提交时 Git 状态
 
 - 分支仍为 `master`；HEAD/upstream 仍为
   `fae3a08fc1010b0c5b72314470e5359b087a4752`，领先/落后仍为 `0/0`。
 - `docs/NEXT_COMMAND.md` 保留任务前用户修改，未修改或暂存。
-- 用户已明确授权将本任务改动创建为中文 commit；本文件写入时 commit 尚未生成，
-  最终提交 SHA 以会话终端汇报为准。
+- 主任务中文 commit 为 `b251f63`，已推送到 `origin/master`。
+- 用户已明确授权本次 Hosted workflow context 修复、中文 commit 和再次 push；
+  修复提交 SHA 以会话终端汇报为准。
 - `docs/NEXT_COMMAND.md` 明确排除在暂存和提交范围之外。
 - 未获 push 或 tag 授权；未创建 release，也未修改任何既有 tag。
 - 未 checkout、switch、reset、clean、restore、stash、rebase 或 merge。
@@ -228,8 +236,8 @@ options 提取遗漏；修正 checker 后为 `16 passed`。统一脚本首轮在
 
 ## 17. 未完成或限制
 
-- GitHub Hosted CI 因尚未 push 而未实际运行；Hosted runner 上的依赖下载、构建
-  耗时和 artifact 上传仍等待推送后验证。
+- 首次 GitHub Hosted CI 在 workflow 解析阶段失败，未执行 job；修复后 Hosted
+  runner 上的依赖下载、构建耗时、测试和 artifact 上传仍以实际新 run 为准。
 - 本任务没有也不需要真实 IMU、CAN、电机、GPIO 或风扇验证；真实 fault、过温、
   反馈中断等硬件故障注入边界与上一基线相同。
 
@@ -243,6 +251,6 @@ options 提取遗漏；修正 checker 后为 `16 passed`。统一脚本首轮在
 
 ## 19. 后续建议
 
-- 本次中文 commit 创建后，如用户另行授权 push，再观察第一次 GitHub Hosted CI，
-  确认 dependency setup、总耗时和 artifact 内容。
+- 修复提交推送后观察新的 GitHub Hosted CI，确认 dependency setup、总耗时、
+  测试和 artifact 内容。
 - Hosted CI 确认后再独立评估运行期断线与受控重连；本任务未顺带实现。

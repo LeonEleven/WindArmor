@@ -124,6 +124,8 @@ def test_workflow_runner_timeout_and_concurrency_contract() -> None:
     assert "github.event.pull_request.number || github.ref" in source
     assert "cancel-in-progress: true" in source
     assert "required-ros-distributions: jazzy" in source
+    assert "WINDARMOR_CI_OUTPUT_ROOT: /tmp/windarmor-ci" in source
+    assert "WINDARMOR_CI_OUTPUT_ROOT: ${{ runner.temp }}" not in source
 
 
 def test_workflow_actions_are_pinned_and_hardware_safe() -> None:

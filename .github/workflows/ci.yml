@@ -22,7 +22,7 @@ jobs:
     timeout-minutes: 45
     env:
       ROS_DISTRO: jazzy
-      WINDARMOR_CI_OUTPUT_ROOT: ${{ runner.temp }}/windarmor-ci
+      WINDARMOR_CI_OUTPUT_ROOT: /tmp/windarmor-ci
       GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
       GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       GITHUB_EVENT_BEFORE: ${{ github.event.before }}
