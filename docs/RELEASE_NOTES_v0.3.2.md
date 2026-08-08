@@ -2,8 +2,7 @@
 
 ## 版本定位
 
-`v0.3.2` 是安全性、确定性与运行可靠性版本。当前 `master` 是发布候选；
-Git tag `v0.3.2` 尚未创建，最新稳定标签仍为 `v0.3.1`。
+`v0.3.2` 是安全性、确定性与运行可靠性版本。
 
 ## 相比 v0.3.1 的主要变化
 
@@ -191,16 +190,25 @@ fan_response_curve: smoothstep
   PWM 不会隐式恢复输出。
 - `/e_stop`、看门狗、软限位、停用和安全退出机制保持。
 
-## 已完成验证
+## 最终验证状态
 
 - 用户此前完成统一 launch、MANUAL、AUTO、机械零点和风扇正常功能验证；
   0x02 大端序修正后已重复正常实机路径。
+- 用户最终 RC 整机正常功能回归：**通过（PASS）**。覆盖系统正常启动、IMU
+  零点、机械零点、MANUAL、HOME、小幅 AUTO、风扇 MANUAL/AUTO、普通急停、
+  正常急停恢复与正常退出；用户未提供逐项测量值，也未报告新的异常或明显
+  功能回归。
 - 大量 pure logic、fake driver、fake feedback、fake clock 和 fake transport 故障注入
   覆盖命令失败、回滚、清理、状态转换、feedback health 与受控重连。
-- 当前 RC 本地 `./scripts/ci_software.sh` 完整通过：电机包 `359 passed`、风扇关键
+- RC 本地 `./scripts/ci_software.sh` 完整通过：电机包 `359 passed`、风扇关键
   回归 `98 passed`、三包完整 `480 tests, 0 errors, 0 failures, 0 skipped`；更完整的
   分项结果记录在 `docs/LATEST_FEEDBACK.md`。
-- RC 工作区尚未 push，因此尚未触发包含本地 RC 修改的新 GitHub Hosted CI。
+- RC 固定提交 `5bc8ecc75708067d34102dfb33996970ed0e14a4` 的 GitHub Hosted CI
+  run `31162441004` 为 `completed/success`，日志 artifact 正常生成。
+- 最终软件验证以本发布文档收口提交 push 后触发的新 GitHub Hosted CI run 为准；
+  该 run 必须为 `completed/success` 且日志 artifact 正常生成。
+
+上述用户结果是正常功能回归，不是真实危险故障注入认证。
 
 ## 尚未完成的真实硬件故障注入
 
@@ -229,5 +237,5 @@ fan_response_curve: smoothstep
 3. 电机 command、health 或 transport `ERROR` 不能用普通急停恢复流程清除；
    排除原因后重新 lifecycle 配置或重启。
 4. 不要因 transport 显示已重连就假定电机已初始化或可运动。
-5. 创建 `v0.3.2` annotated tag 之前，必须等待本 RC 提交/push、Hosted CI
-   green 和用户最终整机正常功能回归。
+5. 发布文档收口提交必须通过 push 后对应的 GitHub Hosted CI；annotated
+   `v0.3.2` tag 仅在用户另行明确授权后创建。
