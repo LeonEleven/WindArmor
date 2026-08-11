@@ -61,6 +61,9 @@ run_stage() {
       "${WINDARMOR_CI_PYTHON}" -m py_compile \
         src/imu_cybergear_ros2/imu_cybergear_ros2/*.py \
         src/windarmor_fan_controller/windarmor_fan_controller/*.py \
+        src/windarmor_flight_control/windarmor_flight_control/*.py \
+        src/windarmor_flight_control/windarmor_flight_control/core/*.py \
+        src/windarmor_flight_control/windarmor_flight_control/algorithms/*.py \
         src/imu_cybergear_ros2/launch/*.py \
         src/windarmor_fan_controller/launch/*.py \
         src/windarmor_bringup/launch/*.py \
@@ -90,8 +93,16 @@ run_stage() {
         src/windarmor_fan_controller/test/test_interface_routing.py \
         -q
       ;;
+    flight-tests)
+      section "Flight API pure-Python tests"
+      source_workspace
+      "${WINDARMOR_CI_PYTHON}" -m pytest \
+        src/windarmor_flight_control/test \
+        src/windarmor_interfaces/test \
+        -q
+      ;;
     full-tests)
-      section "Full three-package colcon test"
+      section "Full workspace colcon test"
       source_workspace
       colcon --log-base "${LOG_BASE}" test \
         --build-base "${BUILD_BASE}" \
@@ -99,6 +110,8 @@ run_stage() {
         --packages-select \
           imu_cybergear_ros2 \
           windarmor_fan_controller \
+          windarmor_interfaces \
+          windarmor_flight_control \
           windarmor_bringup
       ;;
     test-result)
@@ -114,7 +127,7 @@ run_stage() {
 }
 
 if [[ $# -gt 1 ]]; then
-  echo "Usage: $0 [safety|whitespace|py-compile|build|motor-tests|fan-tests|full-tests|test-result]" >&2
+  echo "Usage: $0 [safety|whitespace|py-compile|build|motor-tests|fan-tests|flight-tests|full-tests|test-result]" >&2
   exit 2
 fi
 
@@ -122,7 +135,7 @@ if [[ $# -eq 1 ]]; then
   run_stage "$1"
 else
   for stage in \
-    safety whitespace py-compile build motor-tests fan-tests full-tests test-result
+    safety whitespace py-compile build motor-tests fan-tests flight-tests full-tests test-result
   do
     run_stage "${stage}"
   done

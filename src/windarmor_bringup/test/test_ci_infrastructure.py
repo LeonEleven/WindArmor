@@ -145,6 +145,7 @@ def test_workflow_runs_every_required_software_stage() -> None:
         "build",
         "motor-tests",
         "fan-tests",
+        "flight-tests",
         "full-tests",
         "test-result",
     ):
@@ -155,3 +156,15 @@ def test_workflow_runs_every_required_software_stage() -> None:
     assert "/tmp/windarmor-ci/ros-logs" in source
     assert "/tmp/windarmor-ci/build/*/Testing" in source
     assert "if-no-files-found: error" in source
+
+
+def test_ci_covers_every_workspace_package() -> None:
+    source = CI_SCRIPT.read_text(encoding="utf-8")
+    for package in (
+        "imu_cybergear_ros2",
+        "windarmor_fan_controller",
+        "windarmor_interfaces",
+        "windarmor_flight_control",
+        "windarmor_bringup",
+    ):
+        assert package in source

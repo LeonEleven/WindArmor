@@ -13,6 +13,12 @@ WindArmor 当前把两个已经过实机测试的前置项目整合为一个 ROS
 - 当前代码基线已通过 `v0.3.2` 发布前纯软件验证、GitHub Hosted CI 与用户
   最终整机正常功能回归。
 
+当前开发目标为 `v0.4.0 Flight Control Integration Foundation`。开发中的
+Flight API 只建立纯 Python 算法边界和 ROS 结构化消息骨架，尚未接入真实
+actuator command path，也不改变 v0.3.2 的电机、风扇、IMU 或安全运行语义。
+架构依据见 [Flight Control Architecture](docs/FLIGHT_CONTROL_ARCHITECTURE.md)，
+算法开发接口见 [Flight Control API](docs/FLIGHT_CONTROL_API.md)。
+
 `v0.3.1` 在 `v0.3.0` 的统一相对姿态、电机模式状态和风扇手动/自动仲裁基础上，
 包含统一 MANUAL/AUTO/HOME 电机推进速度、AUTO 姿态增益和三种风扇响应曲线。
 `v0.3.2` 完成了风扇安全与确定性、电机命令/lifecycle 可靠性、电机配置和状态
@@ -223,10 +229,10 @@ source install/setup.bash
 
 仓库的 GitHub Actions 软件 CI 使用 GitHub 托管的 Ubuntu 24.04 runner 和
 ROS 2 Jazzy。向 `master` push、向 `master` 提交 pull request，或手动执行
-`workflow_dispatch` 都会触发。CI 只执行 Python 编译、三包构建、fake/mock
-单元与故障注入测试、三包完整测试、提交 whitespace 检查和 CI 自身安全检查；
-它不使用机器人或自托管 runner，不访问串口、CAN、CyberGear、GPIO 或 PWM，
-也不启动 ROS 硬件节点或 launch。
+`workflow_dispatch` 都会触发。CI 只执行 Python 编译、五包构建、pure
+logic/fake/mock 单元与故障注入测试、五包完整测试、提交 whitespace 检查和
+CI 自身安全检查；它不使用机器人或自托管 runner，不访问串口、CAN、
+CyberGear、GPIO 或 PWM，也不启动 ROS 硬件节点或 launch。
 
 已经安装 ROS 2 Jazzy 和仓库声明依赖的本地环境可运行同一入口：
 

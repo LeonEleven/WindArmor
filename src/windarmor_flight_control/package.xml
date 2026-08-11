@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>windarmor_flight_control</name>
+  <version>0.4.0</version>
+  <description>Hardware-independent flight-control API and algorithms for WindArmor.</description>
+  <maintainer email="h-goal@todo.todo">h-goal</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

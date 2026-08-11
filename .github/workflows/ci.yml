@@ -71,7 +71,10 @@ jobs:
       - name: Run fan safety regression
         run: ./scripts/ci_software.sh fan-tests
 
-      - name: Run full three-package tests
+      - name: Run flight API pure-software tests
+        run: ./scripts/ci_software.sh flight-tests
+
+      - name: Run full workspace tests
         run: ./scripts/ci_software.sh full-tests
 
       - name: Report colcon test results
