@@ -47,8 +47,8 @@ class ImuState:
     sample_age_sec: float | None
     valid: bool
     fresh: bool
-    connected: bool
-    zero_generation: int
+    connected: bool | None
+    zero_generation: int | None
 
 
 @dataclass(frozen=True)
@@ -81,17 +81,17 @@ class FanChannelState:
 class FanSystemState:
     left: FanChannelState
     right: FanChannelState
-    enabled: bool
-    control_state: str
+    enabled: bool | None
+    control_state: str | None
 
 
 @dataclass(frozen=True)
 class SystemState:
     command_authority: CommandAuthority
     authority_generation: int
-    e_stop_active: bool
-    motor_control_mode: str
-    fan_control_state: str
+    e_stop_active: bool | None
+    motor_control_mode: str | None
+    fan_control_state: str | None
     flight_control_active: bool
     actuation_allowed: bool
     required_inputs_fresh: bool
@@ -122,27 +122,26 @@ class FanCommand:
 
 @dataclass(frozen=True)
 class FlightCommand:
-    """Complete logical motor targets and normalized fan requests for one tick."""
+    """A complete normal frame or a payload-free safe-stop request."""
 
-    motor_positions_rad: Mapping[str, float]
-    fan_commands: FanCommand
+    motor_positions_rad: Mapping[str, float] | None
+    fan_commands: FanCommand | None
     request_safe_stop: bool = False
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "motor_positions_rad",
-            _freeze_mapping(self.motor_positions_rad),
-        )
+        if self.motor_positions_rad is not None:
+            object.__setattr__(
+                self,
+                "motor_positions_rad",
+                _freeze_mapping(self.motor_positions_rad),
+            )
 
     @classmethod
-    def safe_stop(
-        cls, motor_positions_rad: Mapping[str, float]
-    ) -> "FlightCommand":
-        """Request relinquishing control while retaining a complete target frame."""
+    def safe_stop(cls) -> "FlightCommand":
+        """Relinquish ordinary control without carrying actuator targets."""
 
         return cls(
-            motor_positions_rad=motor_positions_rad,
-            fan_commands=FanCommand(left=0.0, right=0.0),
+            motor_positions_rad=None,
+            fan_commands=None,
             request_safe_stop=True,
         )

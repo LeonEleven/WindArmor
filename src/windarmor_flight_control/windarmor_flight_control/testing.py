@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import replace
 
 from .core.authority import CommandAuthority
 from .core.models import (
@@ -20,7 +21,11 @@ from .core.models import (
 def make_fake_flight_state(
     motor_names: Iterable[str], *, with_feedback: bool = True
 ) -> FlightState:
-    """Create explicit in-memory test data without ROS or hardware access."""
+    """Create a fully observed in-memory state without ROS or hardware access.
+
+    All numeric values are explicit test fixtures, not real safety defaults.
+    Setting ``with_feedback`` false makes actuation unavailable.
+    """
 
     names = tuple(motor_names)
     if with_feedback:
@@ -92,7 +97,68 @@ def make_fake_flight_state(
             motor_control_mode="AUTO",
             fan_control_state="FLIGHT_CONTROL",
             flight_control_active=True,
-            actuation_allowed=True,
-            required_inputs_fresh=True,
+            actuation_allowed=with_feedback,
+            required_inputs_fresh=with_feedback,
+        ),
+    )
+
+
+def make_unobserved_flight_state(motor_names: Iterable[str]) -> FlightState:
+    """Create a startup-like state whose external observations are unknown."""
+
+    state = make_fake_flight_state(motor_names, with_feedback=False)
+    unknown_output = FanChannelState(applied_command=None, output_known=False)
+    return replace(
+        state,
+        imu=ImuState(
+            orientation=None,
+            roll_rad=None,
+            pitch_rad=None,
+            yaw_rad=None,
+            relative_roll_rad=None,
+            relative_pitch_rad=None,
+            angular_velocity_rad_s=None,
+            linear_acceleration_m_s2=None,
+            sample_age_sec=None,
+            valid=False,
+            fresh=False,
+            connected=None,
+            zero_generation=None,
+        ),
+        fans=FanSystemState(
+            left=unknown_output,
+            right=unknown_output,
+            enabled=None,
+            control_state=None,
+        ),
+        system=SystemState(
+            command_authority=CommandAuthority.NONE,
+            authority_generation=0,
+            e_stop_active=None,
+            motor_control_mode=None,
+            fan_control_state=None,
+            flight_control_active=False,
+            actuation_allowed=False,
+            required_inputs_fresh=False,
+        ),
+    )
+
+
+def make_stale_flight_state(motor_names: Iterable[str]) -> FlightState:
+    """Create observed, structurally valid data that is no longer fresh."""
+
+    state = make_fake_flight_state(motor_names)
+    stale_motors = {
+        name: replace(motor, fresh=False, healthy=False)
+        for name, motor in state.motors.items()
+    }
+    return replace(
+        state,
+        imu=replace(state.imu, fresh=False),
+        motors=stale_motors,
+        system=replace(
+            state.system,
+            actuation_allowed=False,
+            required_inputs_fresh=False,
         ),
     )

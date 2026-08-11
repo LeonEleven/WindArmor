@@ -1,216 +1,190 @@
-# 最新反馈：v0.4.0 Flight Control Core & Interface Foundation
+# 最新反馈：v0.4.0 Flight API Contract Polish
 
 > 本文件只保留最近一次反馈。
 >
 > 日期：2026-08-11
 
-## 1. 执行结论
+## 执行结论
 
-v0.4.0 Task 1 已完成纯软件基础层：仓库现在具备长期飞控架构文档、Flight API
-开发文档、ROS 结构化电机反馈消息包，以及不依赖 ROS runtime 或硬件库的
-Flight Core、示例算法、fake state helper 和严格 validation。
+v0.4.0 Task 1.1 已完成 Flight API v1 的小范围契约收口：safe-stop 现在是不携带
+actuator payload 的无参数撤销控制请求；startup 未观测状态可与明确 false/正常
+状态区分；validation、示例、fake helpers、测试和长期文档已经同步。
 
-本任务没有实现真实 Flight Runtime、topic adapter、authority service 或
-actuator dispatch。现有 IMU、电机、风扇和 bringup 运行路径未接入新包，
-v0.3.2 的运行行为与安全语义保持不变。
+本任务没有实现 Flight Runtime、ROS state aggregation、authority takeover 或
+actuator dispatch，也没有修改现有 IMU、电机、风扇和 bringup 运行路径。
+v0.3.2 的安全状态机和真实控制行为保持不变。
 
-## 2. 任务基线与 Git 边界
+## 修改文件
 
-- 分支：`master`；
-- 任务开始 HEAD/upstream：
-  `398ea9b035929f745be79c4d75cfd99d73c77702`，ahead/behind `0/0`；
-- 任务开始时用户已有修改：`docs/NEXT_COMMAND.md`；
-- 该文件任务开始和结束时 SHA-256 均为
-  `754994ed67ec1c4ccbd90c578a76d0ce37700c4ccb91cc695253a3f0c0809503`，
-  本任务没有修改、覆盖、还原或暂存它；
-- `v0.3.2` annotated tag object 仍为
-  `29ae0bbcfa22206686cb86f5896a08bccfcb5a37`，仍指向
-  `398ea9b035929f745be79c4d75cfd99d73c77702`；
-- `v0.3.0`、`v0.3.1` 和 `v0.3.2` 均未创建、移动、删除或重建；
-- 未执行 commit、push 或 tag。
+- `src/windarmor_flight_control/windarmor_flight_control/core/models.py`：safe-stop
+  payload Optional 化，并为外部观测型状态增加 `None`；
+- `src/windarmor_flight_control/windarmor_flight_control/core/validation.py`：区分
+  normal/safe-stop command，校验三态观测并禁止 unknown 状态被声明为可执行；
+- `src/windarmor_flight_control/windarmor_flight_control/algorithms/example_controller.py`：
+  inhibited 或 E-STOP 未明确安全时直接返回无参数 safe-stop；
+- `src/windarmor_flight_control/windarmor_flight_control/testing.py`：提供 fully
+  observed、unobserved startup 和 stale 三类 pure fake state；
+- `src/windarmor_flight_control/test/test_models.py`：扩展所有嵌套模型和 mapping
+  的 immutability 测试；
+- `src/windarmor_flight_control/test/test_validation.py`：覆盖 safe-stop、混合 payload、
+  unknown/false、空字符串和 fail-closed actuation；
+- `src/windarmor_flight_control/test/test_example_controller.py`：覆盖 safe-stop 不依赖
+  previous command；
+- `docs/FLIGHT_CONTROL_API.md`：同步最终数据模型、validation、unknown 与示例；
+- `docs/FLIGHT_CONTROL_ARCHITECTURE.md`：同步 payload-free safe-stop 和 startup
+  arming 前置契约；
+- `docs/LATEST_FEEDBACK.md`：记录 Task 1.1 最终结果。
 
-## 3. 修改文件与目的
+`docs/NEXT_COMMAND.md` 是任务开始前的用户修改，Task 1.1 开始及反馈生成时
+SHA-256 均为
+`1aa722cbad888a686e25e613976b23d770def956ef3a07cb27728456db2ec6f7`。
+其工程文档措辞已使用工具无关表达，没有列举具体生成工具、实现助手或模型名称，
+本任务未进一步改写或覆盖该文件。
 
-文档：
+## Safe-stop 最终契约
 
-- `docs/FLIGHT_CONTROL_ARCHITECTURE.md`：长期架构边界、package 职责、
-  authority/generation 和不可妥协安全契约；
-- `docs/FLIGHT_CONTROL_API.md`：算法入口、全部字段、单位、presence/validity、
-  fake state 和 unit test 用法；
-- `README.md`：记录 v0.4.0 foundation 状态、文档入口和五包纯软件 CI；
-- `docs/LATEST_FEEDBACK.md`：本任务结果与验证边界。
+最终模型为：
 
-新 `windarmor_interfaces` package（版本 `0.4.0`）：
+```python
+@dataclass(frozen=True)
+class FlightCommand:
+    motor_positions_rad: Mapping[str, float] | None
+    fan_commands: FanCommand | None
+    request_safe_stop: bool = False
 
-- `CMakeLists.txt`、`package.xml`；
-- `msg/MotorFeedback.msg`；
-- `msg/MotorFeedbackArray.msg`；
-- `test/test_message_contract.py`。
-
-新 `windarmor_flight_control` package（版本 `0.4.0`）：
-
-- `package.xml`、`setup.py`、`setup.cfg`、resource marker；
-- `core/authority.py`、`controller.py`、`models.py`、`validation.py`；
-- `algorithms/base.py`、`example_controller.py`；
-- `testing.py` 和 package exports；
-- `test/test_import_boundary.py`、`test_models.py`、`test_validation.py`、
-  `test_example_controller.py`。
-
-纯软件 CI：
-
-- `scripts/ci_software.sh`：编译新 Python 源码，增加 `flight-tests`，并将五包
-  纳入完整 colcon test；
-- `.github/workflows/ci.yml`：执行新增专项和五包完整测试；
-- `src/windarmor_bringup/test/test_ci_infrastructure.py`：冻结新增 CI 覆盖契约。
-
-现有三个 v0.3.2 package 的产品代码、配置、版本、launch 和 package metadata
-均未修改。
-
-## 4. 新增接口
-
-### MotorFeedback.msg
-
-最终字段为：
-
-```text
-logical_name
-can_id
-has_feedback
-position_valid / position_rad
-velocity_valid / velocity_rad_s
-torque_valid / torque_nm
-temperature_valid / temperature_c
-device_mode_valid / device_mode
-fault_flags_valid / fault_flags
-feedback_age_sec
-valid
-fresh
-healthy
+    @classmethod
+    def safe_stop(cls) -> "FlightCommand":
+        return cls(
+            motor_positions_rad=None,
+            fan_commands=None,
+            request_safe_stop=True,
+        )
 ```
 
-ROS 数值字段没有 `None`，因此每个可能缺失的反馈值使用显式 presence flag。
-`has_feedback=false` 时消费者不得把默认数值零解释为真实反馈。没有加入
-`current_a`、RPM 或 thrust。
+validation 契约：
 
-`MotorFeedbackArray.msg` 使用 `builtin_interfaces/Time stamp`、`uint64 sequence`
-和 `MotorFeedback[] motors` 表达完整 snapshot。本任务只完成消息生成和契约测试，
-没有修改现有电机节点去发布该消息。
+- normal command 必须同时携带完整 motor frame 和合法 `FanCommand`；
+- motor keys 缺失、未知或 target 为 NaN/Inf 时拒绝；
+- fan target 必须为有限的 `[0.0, 1.0]`；
+- safe-stop 不要求 motor/fan target；
+- safe-stop 只校验 flag 与 payload 互斥，不读取 required motor keys，也不受
+  normal payload validation 阻止；
+- `request_safe_stop=True` 同时携带任一 actuator payload 时拒绝混合语义。
 
-## 5. Flight API 最终模型
+safe-stop 不缓存、复制或重发 previous command，不用 `0.0` 制造伪目标。它只表示
+算法主动放弃继续提供普通命令；不等于 hardware E-STOP，不清 ERROR，不恢复
+MANUAL/AUTO/HOME，也不具备任何硬件副作用。
 
-- `Vector3(x, y, z)`；
-- `Quaternion(x, y, z, w)`；
-- `ImuState`：orientation，三轴绝对姿态，relative roll/pitch，角速度，线加速度，
-  sample age，valid/fresh/connected，zero generation；
-- `MotorState`：逻辑名称，position/velocity/torque/temperature，device mode，
-  fault flags，feedback age，has feedback，valid/fresh/healthy；
-- `FanChannelState`：归一化 applied command 或 `None`，以及 output known；
-- `FanSystemState`：左右通道、enabled、control state；
-- `SystemState`：command authority、authority generation、E-STOP、电机/风扇状态、
-  Flight active、actuation allowed、required inputs fresh；
-- `FlightState`：timestamp、sequence、IMU、只读 logical motor mapping、fans、system；
-- `FanCommand`：左右 `[0.0, 1.0]` 无量纲请求；
-- `FlightCommand`：完整 logical motor position frame、fan command、
-  `request_safe_stop`；
-- `FlightController.reset()/update(state, dt)` Protocol；
-- `CommandAuthority`：`NONE/MANUAL/LEGACY_AUTO/FLIGHT_CONTROL`；
-- `AuthorityGrant`：authority、generation、sequence。
+## Unknown / unobserved 最终表达
 
-所有 snapshot/command dataclass 均冻结，mapping 在构造时复制为只读 mapping。
-未知真实物理量使用 `None`，不使用 `0.0` 伪装反馈。
+以下外部观测字段现在使用 Optional：
 
-## 6. Validation 与示例行为
+- `ImuState.connected: bool | None`；
+- `ImuState.zero_generation: int | None`；
+- `FanSystemState.enabled: bool | None`；
+- `FanSystemState.control_state: str | None`；
+- `SystemState.e_stop_active: bool | None`；
+- `SystemState.motor_control_mode: str | None`；
+- `SystemState.fan_control_state: str | None`。
 
-纯 validation 明确拒绝：
+`None` 表示尚未收到或当前没有可用观测，明确的 `False` 表示已知 false。空字符串
+不是 unknown 的合法表达。`valid/fresh/healthy`、`flight_control_active`、
+`actuation_allowed` 和 `required_inputs_fresh` 是本地派生判定，继续使用 bool；
+false 表示对应条件当前不成立，而不是伪造外部观测。
 
-- NaN、Inf、负 age 和非法无符号 mode/fault 值；
-- 缺少必要子状态、类型错误或 presence/valid/fresh/healthy 自相矛盾；
-- 不完整、带未知 key 或含非有限值的电机命令；
-- 超出 `[0.0, 1.0]` 的风扇状态/命令；
-- E-STOP 下仍声明 actuation allowed；
-- Flight active 但 authority 不是 `FLIGHT_CONTROL`；
-- 非法 authority generation/sequence。
+`e_stop_active` 调整为 `bool | None`，因为 startup 尚未收到急停状态时不能把未知
+误表示为明确安全。只有 `e_stop_active is False`、fan enabled 明确为 true、
+motor/fan mode 已观测、所需输入新鲜且 Flight authority 活动时，state validation
+才允许 `actuation_allowed=True`。Task 2 Runtime 仍需实际实现该 arming 前置条件。
 
-validation 不做 clamp，不读取硬件，也不替代现有软限位或状态机。
-`FlightCommand.safe_stop(complete_motor_frame)` 只产生不可变算法意图；它不会发布
-E-STOP、恢复 ERROR 或调用任何硬件能力。中性示例控制器的目标由测试/调用方
-显式提供，不声称 `0.0` 是实机机械中位，也不包含 PID 或真实姿态控制逻辑。
+## Immutability
 
-## 7. 相比任务建议的必要细化
+`FlightState`、全部子状态、`FlightCommand` 和 `FanCommand` 继续使用 frozen
+dataclass。`FlightState.motors` 与 normal `FlightCommand.motor_positions_rad` 在
+构造时复制为 `MappingProxyType`；构造后修改调用方原始 dict 不会改变 snapshot
+或 command。safe-stop 的 mapping 为 `None`，不存在可变或可执行 payload。
 
-- `MotorFeedback.msg` 为每个可缺失数值增加 `*_valid`，而不只依赖一个
-  `has_feedback`，使 partial/unknown 的 ROS 表达可无歧义转换为 Python `None`；
-- `MotorFeedbackArray.msg` 增加 stamp 和 sequence，使未来 adapter 能识别完整
-  snapshot 的时间与顺序；
-- `SystemState` 增加 `authority_generation`，为已确认的旧 generation 永久拒绝
-  契约保留纯模型字段；
-- `FlightCommand.safe_stop()` 要求调用者仍提供完整 motor frame，避免把省略 key
-  误解为保留旧目标。其 safe-stop flag 才是未来 runtime 的停止裁决依据；
-- `MotorState` 不暴露 CAN ID。CAN ID 保留在 ROS transport interface，算法只看
-  logical name，进一步维持硬件解耦。
+## 与建议设计相比的细化
 
-这些细化不接入 actuator，也不改变现有 runtime。
+- 除任务明确建议的 fan/system 字段外，IMU `connected` 和 `zero_generation` 也
+  改为 Optional，避免 startup 使用 false/zero 冒充外部观测；
+- authority、generation 和几个 runtime 派生 bool 保持非 Optional，因为它们是
+  runtime 本地裁决状态，不是异步硬件观测；
+- 对混合 safe-stop/payload 采用文档优先建议的明确拒绝；
+- 保留单一 `FlightCommand` dataclass，没有引入复杂 command hierarchy；
+- 新增独立 `make_unobserved_flight_state()` 和 `make_stale_flight_state()`，避免
+  fully observed helper 的默认值被误读为未来 Runtime 的真实安全默认值。
 
-## 8. 已执行的软件验证
+## 软件验证
 
-所有测试均为 pure logic、源码契约、fake state 或无硬件 colcon build/test。
+执行的命令与结果：
 
-1. 新包早期 Python 专项：`27 passed`；
-2. Flight/interface/CI 基础设施组合专项：`46 passed`；
-3. 两个新包隔离 `colcon build`：`2 packages finished`；
-4. 两个新包隔离 `colcon test`：`30 tests, 0 errors, 0 failures, 0 skipped`；
-5. 第一轮 `./scripts/ci_software.sh`：
-   - 电机 package：`359 passed`；
-   - 风扇关键回归：`98 passed`；
-   - Flight/interface 专项：`29 passed`；
-   - 五包完整 colcon：`511 tests, 0 errors, 0 failures, 0 skipped`；
-6. validation 补强后专项：`31 passed`；
-7. 最终 `./scripts/ci_software.sh`：
-   - CI safety、whitespace、Python compile：通过；
-   - 五包 build：`5 packages finished`；
-   - 电机 package：`359 passed`；
-   - 风扇关键回归：`98 passed`；
-   - Flight/interface 专项：`33 passed`；
-   - 五包完整 colcon：`515 tests, 0 errors, 0 failures, 0 skipped`。
+```bash
+PYTHONPATH=src/windarmor_flight_control \
+python3 -m pytest \
+  src/windarmor_flight_control/test \
+  src/windarmor_interfaces/test -q
+```
 
-最终构建和测试没有报告 warning、failure、error 或 skipped。
+- 第一轮：`44 passed, 1 failed`；唯一失败是旧测试仍匹配旧 `e-stop` 错误文本，
+  新 validation 已输出更明确的 `e_stop_active` 文本；同步测试断言后重跑通过；
+- 最终专项：`45 passed`。
 
-## 9. Task 2 后续项
+```bash
+python3 -m py_compile \
+  src/windarmor_flight_control/windarmor_flight_control/*.py \
+  src/windarmor_flight_control/windarmor_flight_control/core/*.py \
+  src/windarmor_flight_control/windarmor_flight_control/algorithms/*.py
+git diff --check
+```
 
-Task 1 没有阻塞项。Task 2 接入前仍需明确并实现：
+- Python compile：通过；
+- `git diff --check`：通过。
 
-- 正式 logical motor names 及其与现有配置/CAN ID 的 adapter 映射；
-- 现有电机节点的结构化 feedback snapshot publisher；
-- IMU、电机、风扇和系统状态的 `StateAggregator`；
-- runtime 的 authority grant、generation/sequence 拒绝和
-  ARMING/ACTIVE/INHIBITED 状态机；
-- 归一化 fan command 与既有安全 fan manager 之间的 adapter；
-- flight motor command 进入现有 `MotorManager` 安全路径的接口。
+```bash
+./scripts/ci_software.sh
+```
 
-这些后续项不得绕过 E-STOP、ERROR、看门狗、软限位或既有命令仲裁，也不得在
-transport 恢复后自动恢复控制或重发旧目标。
+- CI safety：通过；
+- Git whitespace：通过；
+- Python compile：通过；
+- workspace build：`5 packages finished`；
+- motor package pure/fake tests：`359 passed`；
+- fan safety pure/mock regression：`98 passed`；
+- Flight/interface pure tests：`45 passed`；
+- workspace colcon：`527 tests, 0 errors, 0 failures, 0 skipped`。
 
-## 10. 硬件与未执行验证
+最终验证没有 warning、error、failure 或 skipped。全部命令均在无硬件路径运行。
 
-本次没有运行 `ros2 run`、`ros2 launch`、`ros2 topic` 或 `ros2 service`，没有
-运行 `sudo` 或 CAN setup。没有访问 IMU、`/dev/*`、真实串口、CAN、SocketCAN、
-USB-CAN、CyberGear、GPIO12/GPIO13、PWM 或电调。4 个微电机和 2 个风扇均未因
-本任务被控制，未执行任何实机测试或带电测试。
+## Runtime 与 Task 2
 
-真实消息发布、runtime integration、actuator authority 和所有实机验证均未执行，
-原因是它们明确属于后续任务且当前没有硬件授权。本次结果是纯软件验证，不是
-实机验证或硬件安全认证。
+本任务没有触碰现有 runtime、ROS topic/service、legacy AUTO、MANUAL、HOME、
+ERROR、E-STOP、transport recovery、motor feedback/temperature protection、fan
+safety 或 actuator dispatch。两个新 package 版本保持 `0.4.0`，三个稳定 package
+版本未修改。
 
-## 11. 最终工作区状态
+Task 1.1 没有发现进入 Task 2 的阻塞项。Task 2 仍需实现真实 StateAggregator、
+freshness、DRY_RUN Runtime 和 authority/arming，但必须遵守本次冻结的 unknown
+fail-closed 与 payload-free safe-stop 契约。
 
-- `git diff --check`：通过；
-- `git diff --stat`（tracked）为 `6 files changed, 799 insertions(+),
-  1263 deletions(-)`；其中 `docs/NEXT_COMMAND.md` 的大段差异完全是任务开始前的
-  用户修改；
-- 新增未跟踪文件共 25 个：Flight package 18 个、interfaces package 5 个、
-  架构/API 文档 2 个；
-- 最终状态包含本任务的 tracked 修改、新增两个 package/两份文档，以及用户原有
-  `docs/NEXT_COMMAND.md` 修改；
-- 未暂存任何文件；
-- 未执行 commit、push 或 tag；
-- 所有稳定标签保持不变。
+## 硬件安全声明
+
+本任务没有运行 ROS 2 node/launch/topic/service，没有运行 `sudo` 或 CAN setup，
+没有访问 IMU、`/dev/*`、真实串口、CAN、SocketCAN、USB-CAN、CyberGear、
+GPIO12/GPIO13、PWM 或电调。4 个微电机和 2 个风扇均未因本任务被控制。
+
+真实 Runtime、actuator integration 和所有实机验证均未执行，原因是它们超出
+Task 1.1 范围且当前没有硬件授权。本次结果是纯软件验证，不是实机验证或硬件
+安全认证。
+
+## Git 状态（反馈生成时）
+
+- HEAD：`63a30571f89229c2e53118fbc997b08470d8c647`；
+- 分支：`master`；本地 tracking ref 显示与 `origin/master` ahead/behind `0/0`；
+- 本任务实现/验证阶段执行 commit：否；
+- 本任务实现/验证阶段执行 push：否；
+- 本任务实现/验证阶段执行 tag：否；
+- 远端状态在本任务内核验：否；只检查本地 tracking ref，未执行网络查询；
+- `v0.3.2` 仍指向 `398ea9b035929f745be79c4d75cfd99d73c77702`；
+- 工作区包含 Task 1.1 修改以及任务开始前的 `docs/NEXT_COMMAND.md` 修改，均未暂存；
+- 稳定 tag 未创建、移动、删除或重建。

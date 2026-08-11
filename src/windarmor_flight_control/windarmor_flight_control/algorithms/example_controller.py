@@ -28,11 +28,11 @@ class NeutralExampleController:
 
         del dt
         if (
-            state.system.e_stop_active
+            state.system.e_stop_active is not False
             or not state.system.actuation_allowed
             or not state.system.required_inputs_fresh
         ):
-            return FlightCommand.safe_stop(self._neutral_motor_positions_rad)
+            return FlightCommand.safe_stop()
         return FlightCommand(
             motor_positions_rad=self._neutral_motor_positions_rad,
             fan_commands=FanCommand(left=0.0, right=0.0),

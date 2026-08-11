@@ -50,6 +50,18 @@ def _boolean(value: object, path: str, issues: list[str]) -> None:
         issues.append(f"{path} must be a bool")
 
 
+def _optional_boolean(value: object | None, path: str, issues: list[str]) -> None:
+    if value is not None:
+        _boolean(value, path, issues)
+
+
+def _optional_nonempty_string(
+    value: object | None, path: str, issues: list[str]
+) -> None:
+    if value is not None and (not isinstance(value, str) or not value):
+        issues.append(f"{path} must be None or a non-empty string")
+
+
 def _validate_vector(value: Vector3, path: str, issues: list[str]) -> None:
     for component in ("x", "y", "z"):
         _finite(getattr(value, component), f"{path}.{component}", issues)
@@ -86,13 +98,17 @@ def _validate_imu(imu: ImuState, issues: list[str]) -> None:
         )
     if imu.sample_age_sec is not None and imu.sample_age_sec < 0.0:
         issues.append("imu.sample_age_sec must not be negative")
-    _nonnegative_int(imu.zero_generation, "imu.zero_generation", issues)
-    for field in ("valid", "fresh", "connected"):
+    if imu.zero_generation is not None:
+        _nonnegative_int(imu.zero_generation, "imu.zero_generation", issues)
+    for field in ("valid", "fresh"):
         _boolean(getattr(imu, field), f"imu.{field}", issues)
+    _optional_boolean(imu.connected, "imu.connected", issues)
     if imu.fresh and not imu.valid:
         issues.append("imu.fresh requires imu.valid")
-    if imu.valid and not imu.connected:
-        issues.append("imu.valid requires imu.connected")
+    if imu.valid and imu.connected is not True:
+        issues.append("imu.valid requires connected to be explicitly true")
+    if imu.valid and imu.zero_generation is None:
+        issues.append("imu.valid requires an observed zero_generation")
     if (imu.valid or imu.fresh) and imu.sample_age_sec is None:
         issues.append("valid or fresh IMU data requires sample_age_sec")
     imu_measurements = (
@@ -229,9 +245,10 @@ def validate_flight_state(
             issues.append("fans.right must be a FanChannelState")
         else:
             _validate_fan_channel(state.fans.right, "fans.right", issues)
-        _boolean(state.fans.enabled, "fans.enabled", issues)
-        if not isinstance(state.fans.control_state, str) or not state.fans.control_state:
-            issues.append("fans.control_state must be a non-empty string")
+        _optional_boolean(state.fans.enabled, "fans.enabled", issues)
+        _optional_nonempty_string(
+            state.fans.control_state, "fans.control_state", issues
+        )
     if not isinstance(state.system, SystemState):
         issues.append("system must be a SystemState")
     else:
@@ -241,35 +258,48 @@ def validate_flight_state(
             state.system.authority_generation, "system.authority_generation", issues
         )
         for field in (
-            "e_stop_active",
             "flight_control_active",
             "actuation_allowed",
             "required_inputs_fresh",
         ):
             _boolean(getattr(state.system, field), f"system.{field}", issues)
-        if (
-            not isinstance(state.system.motor_control_mode, str)
-            or not state.system.motor_control_mode
-        ):
-            issues.append("system.motor_control_mode must be a non-empty string")
-        if (
-            not isinstance(state.system.fan_control_state, str)
-            or not state.system.fan_control_state
-        ):
-            issues.append("system.fan_control_state must be a non-empty string")
+        _optional_boolean(
+            state.system.e_stop_active, "system.e_stop_active", issues
+        )
+        _optional_nonempty_string(
+            state.system.motor_control_mode,
+            "system.motor_control_mode",
+            issues,
+        )
+        _optional_nonempty_string(
+            state.system.fan_control_state,
+            "system.fan_control_state",
+            issues,
+        )
         if isinstance(state.fans, FanSystemState) and (
             state.system.fan_control_state != state.fans.control_state
         ):
             issues.append("system and fan snapshot control states must agree")
         if (
-            state.system.flight_control_active
+            state.system.flight_control_active is True
             and state.system.command_authority is not CommandAuthority.FLIGHT_CONTROL
         ):
             issues.append("flight_control_active requires FLIGHT_CONTROL authority")
-        if state.system.actuation_allowed and state.system.e_stop_active:
-            issues.append("actuation cannot be allowed while e-stop is active")
-        if state.system.actuation_allowed and not state.system.required_inputs_fresh:
-            issues.append("actuation requires fresh required inputs")
+        if state.system.actuation_allowed is True:
+            if state.system.e_stop_active is not False:
+                issues.append(
+                    "actuation requires e_stop_active to be explicitly false"
+                )
+            if state.system.motor_control_mode is None:
+                issues.append("actuation requires an observed motor_control_mode")
+            if state.system.fan_control_state is None:
+                issues.append("actuation requires an observed fan_control_state")
+            if not state.system.required_inputs_fresh:
+                issues.append("actuation requires fresh required inputs")
+            if not state.system.flight_control_active:
+                issues.append("actuation requires flight_control_active")
+            if isinstance(state.fans, FanSystemState) and state.fans.enabled is not True:
+                issues.append("actuation requires fans.enabled to be explicitly true")
     if issues:
         raise FlightValidationError(issues)
 
@@ -290,22 +320,32 @@ def validate_flight_command(
 
     if not isinstance(command, FlightCommand):
         raise FlightValidationError(("command must be a FlightCommand",))
-    expected = _required_names(required_motor_names)
     issues: list[str] = []
-    _check_motor_keys(
-        command.motor_positions_rad.keys(),
-        expected,
-        "motor_positions_rad",
-        issues,
-    )
-    for name, value in command.motor_positions_rad.items():
-        _finite(value, f"motor_positions_rad[{name!r}]", issues)
-    if not isinstance(command.fan_commands, FanCommand):
-        issues.append("fan_commands must be a FanCommand")
-    else:
-        _validate_fan_command(command.fan_commands, issues)
-    if not isinstance(command.request_safe_stop, bool):
-        issues.append("request_safe_stop must be a bool")
+    _boolean(command.request_safe_stop, "request_safe_stop", issues)
+    if command.request_safe_stop is True:
+        if command.motor_positions_rad is not None or command.fan_commands is not None:
+            issues.append("safe-stop command must not carry actuator payload")
+        if issues:
+            raise FlightValidationError(issues)
+        return
+
+    expected = _required_names(required_motor_names)
+    if command.request_safe_stop is not True:
+        if command.motor_positions_rad is None:
+            issues.append("normal command requires motor_positions_rad")
+        else:
+            _check_motor_keys(
+                command.motor_positions_rad.keys(),
+                expected,
+                "motor_positions_rad",
+                issues,
+            )
+            for name, value in command.motor_positions_rad.items():
+                _finite(value, f"motor_positions_rad[{name!r}]", issues)
+        if not isinstance(command.fan_commands, FanCommand):
+            issues.append("normal command requires fan_commands")
+        else:
+            _validate_fan_command(command.fan_commands, issues)
     if issues:
         raise FlightValidationError(issues)
 

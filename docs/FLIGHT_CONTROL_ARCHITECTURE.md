@@ -86,6 +86,18 @@ class FlightController:
 严格校验完整性与有限值，不能静默补齐或限幅来掩盖算法错误；真正的软限位、
 推进限制和 PWM 映射仍由 actuator adapter 与既有安全层处理。
 
+safe-stop command 与 normal command 是互斥语义。`FlightCommand.safe_stop()`
+不携带 motor 或 fan target，只表示算法主动撤销继续控制的意图；runtime 不得
+把它解释为可执行 actuator frame，不得复制、缓存或重发上一帧目标。未来 runtime
+应将其解释为撤销或 inhibit Flight authority 的请求，再通过既有安全层进入安全
+状态。safe-stop 不是 hardware E-STOP，也不能清除 ERROR 或恢复控制模式。
+
+外部观测状态在 startup 可能尚未收到。adapter 必须用 `None` 显式表达 unknown，
+不能用 `False`、空字符串或数值零伪装已知安全状态。runtime 只有在 E-STOP、
+motor mode、fan enabled/control state 等关键状态均已观测且明确满足安全条件后，
+才可声明 actuation allowed 或进入真实 actuator arming。Task 1.1 只冻结该契约，
+不实现 runtime、arming 或 actuator path。
+
 `reset()` 只重置算法内部状态。它没有硬件对象，因此不能重置硬件、清除 ERROR、
 清除 E-STOP、设置电机零点或重新使能设备。
 
@@ -125,8 +137,9 @@ command authority。
 - 未来 flight fan command 必须进入现有 fan command manager；
 - runtime 校验与 authority 不能绕过电机/风扇状态机、看门狗、软限位、停用或
   安全退出；
-- `request_safe_stop` 只表示算法主动放弃继续控制。runtime 必须将其导向既有
-  安全停止路径；它不等同于硬件 E-STOP，也不是 ERROR recovery；
+- `request_safe_stop` 只表示算法主动放弃继续控制，且不得携带 actuator payload。
+  runtime 必须将其导向既有安全停止路径；它不等同于硬件 E-STOP，也不是
+  ERROR recovery；
 - 不从 torque 推导 `current_a`，不创建未经验证的 RPM 或 thrust；
 - 没有真实反馈时必须使用 presence/validity 与 `None` 表示 unknown，不能用
   `0.0` 冒充位置、速度、力矩、温度或风扇实际输出。

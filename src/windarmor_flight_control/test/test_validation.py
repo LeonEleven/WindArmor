@@ -14,7 +14,11 @@ from windarmor_flight_control.core.validation import (
     validate_flight_command,
     validate_flight_state,
 )
-from windarmor_flight_control.testing import make_fake_flight_state
+from windarmor_flight_control.testing import (
+    make_fake_flight_state,
+    make_stale_flight_state,
+    make_unobserved_flight_state,
+)
 
 
 MOTOR_NAMES = ("axis_a", "axis_b", "axis_c", "axis_d")
@@ -132,7 +136,7 @@ def test_state_rejects_actuation_during_estop() -> None:
     state = make_fake_flight_state(MOTOR_NAMES)
     bad_system = replace(state.system, e_stop_active=True)
 
-    with pytest.raises(FlightValidationError, match="e-stop"):
+    with pytest.raises(FlightValidationError, match="e_stop_active"):
         validate_flight_state(replace(state, system=bad_system), MOTOR_NAMES)
 
 
@@ -146,8 +150,120 @@ def test_state_rejects_missing_required_substate_explicitly() -> None:
 def test_command_rejects_missing_fan_command_explicitly() -> None:
     command = command_with()
 
-    with pytest.raises(FlightValidationError, match="must be a FanCommand"):
+    with pytest.raises(FlightValidationError, match="requires fan_commands"):
         validate_flight_command(replace(command, fan_commands=None), MOTOR_NAMES)
+
+
+def test_safe_stop_requires_no_actuator_payload() -> None:
+    command = FlightCommand.safe_stop()
+
+    validate_flight_command(command, MOTOR_NAMES)
+    validate_flight_command(command, ())
+    assert command.motor_positions_rad is None
+    assert command.fan_commands is None
+    assert command.request_safe_stop is True
+
+
+@pytest.mark.parametrize(
+    "motor_payload,fan_payload",
+    [
+        ({name: 0.0 for name in MOTOR_NAMES}, None),
+        (None, FanCommand(left=0.0, right=0.0)),
+        (
+            {name: 0.0 for name in MOTOR_NAMES},
+            FanCommand(left=0.0, right=0.0),
+        ),
+    ],
+)
+def test_safe_stop_rejects_mixed_actuator_payload(
+    motor_payload, fan_payload
+) -> None:
+    command = FlightCommand(
+        motor_positions_rad=motor_payload,
+        fan_commands=fan_payload,
+        request_safe_stop=True,
+    )
+
+    with pytest.raises(FlightValidationError, match="must not carry"):
+        validate_flight_command(command, MOTOR_NAMES)
+
+
+def test_normal_command_requires_both_payloads() -> None:
+    with pytest.raises(FlightValidationError, match="motor_positions_rad"):
+        validate_flight_command(
+            FlightCommand(None, FanCommand(left=0.0, right=0.0)),
+            MOTOR_NAMES,
+        )
+    with pytest.raises(FlightValidationError, match="fan_commands"):
+        validate_flight_command(
+            FlightCommand({name: 0.0 for name in MOTOR_NAMES}, None),
+            MOTOR_NAMES,
+        )
+
+
+def test_unobserved_state_is_valid_but_cannot_allow_actuation() -> None:
+    state = make_unobserved_flight_state(MOTOR_NAMES)
+
+    validate_flight_state(state, MOTOR_NAMES)
+    assert state.fans.enabled is None
+    assert state.fans.control_state is None
+    assert state.system.e_stop_active is None
+    assert state.system.motor_control_mode is None
+    assert state.system.fan_control_state is None
+    assert state.imu.connected is None
+    assert state.imu.zero_generation is None
+    assert state.system.actuation_allowed is False
+
+
+def test_unknown_and_explicit_false_states_remain_distinct() -> None:
+    unknown = make_unobserved_flight_state(MOTOR_NAMES)
+    observed = make_fake_flight_state(MOTOR_NAMES)
+    explicitly_disabled = replace(
+        observed,
+        fans=replace(observed.fans, enabled=False),
+        system=replace(observed.system, actuation_allowed=False),
+    )
+
+    assert unknown.fans.enabled is None
+    assert explicitly_disabled.fans.enabled is False
+    assert unknown.system.e_stop_active is None
+    assert observed.system.e_stop_active is False
+
+
+def test_empty_string_is_not_an_unknown_state_representation() -> None:
+    state = make_unobserved_flight_state(MOTOR_NAMES)
+    bad_system = replace(state.system, motor_control_mode="")
+
+    with pytest.raises(FlightValidationError, match="None or a non-empty string"):
+        validate_flight_state(replace(state, system=bad_system), MOTOR_NAMES)
+
+
+def test_actuation_rejects_unobserved_estop_and_modes() -> None:
+    state = make_unobserved_flight_state(MOTOR_NAMES)
+    unsafe_system = replace(
+        state.system,
+        command_authority=CommandAuthority.FLIGHT_CONTROL,
+        flight_control_active=True,
+        actuation_allowed=True,
+        required_inputs_fresh=True,
+    )
+
+    with pytest.raises(FlightValidationError) as raised:
+        validate_flight_state(replace(state, system=unsafe_system), MOTOR_NAMES)
+    assert "e_stop_active to be explicitly false" in str(raised.value)
+    assert "observed motor_control_mode" in str(raised.value)
+    assert "observed fan_control_state" in str(raised.value)
+
+
+def test_stale_helper_is_observed_but_inhibited() -> None:
+    state = make_stale_flight_state(MOTOR_NAMES)
+
+    validate_flight_state(state, MOTOR_NAMES)
+    assert state.imu.valid is True
+    assert state.imu.fresh is False
+    assert all(not motor.fresh for motor in state.motors.values())
+    assert state.system.required_inputs_fresh is False
+    assert state.system.actuation_allowed is False
 
 
 def test_authority_grant_reserves_nonnegative_generation_and_sequence() -> None:

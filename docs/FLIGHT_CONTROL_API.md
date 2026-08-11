@@ -61,8 +61,8 @@ mapping，算法不能意外改变当前 snapshot 或 adapter 持有的源字典
 | `sample_age_sec` | `float \| None` | snapshot 时的样本年龄，秒 |
 | `valid` | `bool` | 内容通过 adapter 的结构/数值校验 |
 | `fresh` | `bool` | 内容满足 runtime 配置的新鲜度条件 |
-| `connected` | `bool` | adapter 当前有通信连接证据 |
-| `zero_generation` | `int` | 当前 IMU 零点世代，非负 |
+| `connected` | `bool \| None` | 已观测连接状态；未观测为 `None` |
+| `zero_generation` | `int \| None` | 已观测 IMU 零点世代，非负；未观测为 `None` |
 
 API 不定义 `relative_yaw_rad`。需要该能力时必须先建立来源、零点和兼容契约。
 
@@ -103,8 +103,10 @@ sequence 和完整 motor 数组表达同一 snapshot。本任务只生成消息�
 - `output_known: bool`：是否有依据认为应用命令已知。
 
 `output_known=False` 时 `applied_command` 必须为 `None`；已知值必须在
-`[0.0, 1.0]`。该值不是 RPM 或 thrust。`FanSystemState` 还包含 `enabled` 和
-既有状态机的 `control_state` 字符串。
+`[0.0, 1.0]`。该值不是 RPM 或 thrust。`FanSystemState` 还包含
+`enabled: bool | None` 和 `control_state: str | None`。`None` 表示 runtime 尚未
+收到该状态；它与明确观测到 `enabled=False` 或一个真实状态字符串不同。空字符
+串不是 unknown 的合法表达。
 
 ### SystemState
 
@@ -112,27 +114,36 @@ sequence 和完整 motor 数组表达同一 snapshot。本任务只生成消息�
 |---|---|
 | `command_authority` | `NONE/MANUAL/LEGACY_AUTO/FLIGHT_CONTROL` |
 | `authority_generation` | 当前授权世代；旧世代命令不得接受 |
-| `e_stop_active` | 系统急停是否有效 |
-| `motor_control_mode` | 既有公开电机模式，不被 authority 替代 |
-| `fan_control_state` | 既有风扇管理器状态 |
+| `e_stop_active` | `bool \| None`；已观测急停状态，未观测为 `None` |
+| `motor_control_mode` | `str \| None`；既有公开电机模式，未观测为 `None` |
+| `fan_control_state` | `str \| None`；既有风扇管理器状态，未观测为 `None` |
 | `flight_control_active` | runtime 是否处于 Flight Control 活动状态 |
 | `actuation_allowed` | 上游安全/authority 是否允许普通输出 |
 | `required_inputs_fresh` | 本 tick 所需输入是否全部新鲜 |
 
 `CommandAuthority` 与既有 motor/fan 状态机正交。即使 authority 是
 `FLIGHT_CONTROL`，E-STOP、ERROR、disabled、watchdog 或 safety layer 仍可拒绝
-命令。
+命令。`command_authority`、`flight_control_active`、`actuation_allowed` 和
+`required_inputs_fresh` 是 runtime 本地裁决状态，不是假装成硬件观测的默认值；
+startup 时 authority 可明确为 `NONE`，其余裁决可明确为 false。
+
+`e_stop_active=None` 绝不等于 `False`。State validation 只允许在
+`e_stop_active is False`、fan enabled 明确为 true、电机/风扇模式均已观测、
+所需输入新鲜且 Flight authority 活动时声明 `actuation_allowed=True`。Task 2
+Runtime 必须等这些关键状态可判断后才能进入真实 actuator arming。
 
 ## None、valid、fresh 与 healthy
 
-- `None`：真实物理值从未获得、当前未知或不能由现有来源验证；
+- `None`：真实物理值或外部状态从未获得、当前未知或不能由现有来源验证；
 - `valid`：当前内容通过数据结构、有限值和协议范围等校验；
 - `fresh`：合法内容还满足 runtime 配置的新鲜度条件；
 - `healthy`：合法且新鲜，并且 adapter/既有安全层未发现该设备健康故障。
 
-四者不是同义词。连接存在不保证已有样本，合法旧样本不等于新鲜，温度回落或
-收到正常帧也不能自行清除既有锁存 ERROR。算法应在输入不满足其要求时返回
-safe-stop request，不能用零填充 unknown。
+四者不是同义词。`False` 是明确的布尔裁决或观测，不能用来代替尚未观测的外部
+状态；`valid/fresh/healthy=False` 则明确表示对应条件当前不成立。连接存在不
+保证已有样本，合法旧样本不等于新鲜，温度回落或收到正常帧也不能自行清除既有
+锁存 ERROR。算法应在输入不满足其要求时返回 safe-stop request，不能用零、空
+字符串或默认 false 填充 unknown。
 
 ## FlightCommand
 
@@ -145,22 +156,37 @@ class FanCommand:
 
 @dataclass(frozen=True)
 class FlightCommand:
-    motor_positions_rad: Mapping[str, float]
-    fan_commands: FanCommand
+    motor_positions_rad: Mapping[str, float] | None
+    fan_commands: FanCommand | None
     request_safe_stop: bool = False
 ```
 
 风扇命令是无量纲闭区间 `[0.0, 1.0]`：`0.0` 是停止请求，`1.0` 是 Flight
 API 允许的最大归一化请求。PWM 微秒映射、起转值和实际上限不属于算法层。
 
-正常 tick 必须包含配置要求的全部电机键。缺少一个键不能表示“保持旧目标”，
+normal command 的 `request_safe_stop` 为 false，两个 payload 都必须存在，且
+motor frame 必须包含配置要求的全部电机键。缺少一个键不能表示“保持旧目标”，
 多一个未知键也不能被忽略。NaN、Inf、越界风扇值和非有限电机目标全部明确
 拒绝，不做静默 clamp；硬件软限位和位置推进仍属于后续 adapter 与现有安全层。
 
-`FlightCommand.safe_stop(complete_motor_frame)` 设置双风扇为零并置
-`request_safe_stop=True`。完整电机 frame 只维持 API 结构一致，safe-stop flag
-要求未来 runtime 放弃普通 flight output 并进入既有安全停止路径；它本身不
-发布消息、不操作硬件、不触发 E-STOP，也不能恢复 ERROR。
+`FlightCommand.safe_stop()` 无参数返回：
+
+```python
+FlightCommand(
+    motor_positions_rad=None,
+    fan_commands=None,
+    request_safe_stop=True,
+)
+```
+
+safe-stop 只表示算法主动放弃继续提供普通 actuator command。它不携带可执行
+target，future runtime 不得缓存、复制或重发上一帧 command，也不得把 `None`
+替换成伪造的零目标。人为构造 safe-stop flag 与任一 actuator payload 的混合
+命令会被 validation 拒绝。
+
+safe-stop 后续由 runtime 解释为撤销或 inhibit Flight authority 的请求。它本身
+不发布消息、不操作硬件、不等于 hardware E-STOP、不清除 ERROR，也不恢复
+MANUAL、AUTO、HOME 或任何旧控制状态。
 
 ## Validation
 
@@ -181,13 +207,19 @@ validate_flight_command(command, required_motors)
 
 示例名称只用于测试，不代表实际机械命名。validation 是纯函数，失败时抛出
 `FlightValidationError`；它不修改输入、不访问硬件，也不把非法值修正为看似
-可执行的值。
+可执行的值。safe-stop 只校验 flag 与 payload 互斥，不运行 normal actuator
+payload 或 required motor-key 校验，因此 stale/invalid state、尚未建立 actuator
+key 集合都不会妨碍算法放弃控制。
 
 ## Fake state 示例
 
 ```python
 from windarmor_flight_control.algorithms import NeutralExampleController
-from windarmor_flight_control.testing import make_fake_flight_state
+from windarmor_flight_control.testing import (
+    make_fake_flight_state,
+    make_stale_flight_state,
+    make_unobserved_flight_state,
+)
 
 
 motor_names = ("axis_a", "axis_b", "axis_c", "axis_d")
@@ -199,11 +231,24 @@ command = controller.update(state, dt=0.01)
 ```
 
 `make_fake_flight_state` 只构造内存数据；其中数值明确是测试数据，不表示实机
-反馈或已确认的机械中位。要测试 unknown feedback：
+反馈、真实安全默认值或已确认的机械中位。它用于 fully observed healthy 场景。
+startup unknown 和 stale 场景分别使用：
 
 ```python
-state = make_fake_flight_state(motor_names, with_feedback=False)
-assert state.motors["axis_a"].position_rad is None
+startup = make_unobserved_flight_state(motor_names)
+assert startup.system.e_stop_active is None
+assert startup.fans.enabled is None
+
+stale = make_stale_flight_state(motor_names)
+assert stale.system.required_inputs_fresh is False
+assert stale.system.actuation_allowed is False
+```
+
+算法可以直接放弃控制，不应保存或复制旧 target：
+
+```python
+if not state.system.required_inputs_fresh:
+    return FlightCommand.safe_stop()
 ```
 
 ## Unit test 示例
