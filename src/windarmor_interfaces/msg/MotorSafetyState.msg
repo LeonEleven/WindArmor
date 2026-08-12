@@ -1,5 +1,6 @@
 # Authoritative, read-only motor safety snapshot.
 builtin_interfaces/Time stamp
+uint64 source_epoch
 uint64 observation_sequence
 bool node_active
 string controller_state

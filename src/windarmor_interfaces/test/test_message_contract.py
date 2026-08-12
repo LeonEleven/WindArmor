@@ -80,14 +80,22 @@ def test_command_preview_has_presence_for_payload_free_safe_stop() -> None:
 
 
 def test_motor_and_fan_safety_readbacks_are_structured():
-    assert {name for _, name in message_fields("MotorSafetyState.msg")} == {
-        "stamp", "observation_sequence", "node_active", "controller_state",
+    motor_fields = message_fields("MotorSafetyState.msg")
+    fan_fields = message_fields("FanSafetyState.msg")
+    assert {name: field_type for field_type, name in motor_fields}[
+        "source_epoch"
+    ] == "uint64"
+    assert {name: field_type for field_type, name in fan_fields}[
+        "source_epoch"
+    ] == "uint64"
+    assert {name for _, name in motor_fields} == {
+        "stamp", "source_epoch", "observation_sequence", "node_active", "controller_state",
         "public_control_mode", "e_stop_latched", "error_latched",
         "feedback_safety_fault_latched", "transition_present",
         "transition_sequence", "transition_reason", "transition_source",
     }
-    assert {name for _, name in message_fields("FanSafetyState.msg")} == {
-        "stamp", "observation_sequence", "e_stop_latched", "control_state",
+    assert {name for _, name in fan_fields} == {
+        "stamp", "source_epoch", "observation_sequence", "e_stop_latched", "control_state",
         "enabled_observed", "enabled", "manual_armed",
         "legacy_auto_requested", "legacy_auto_active", "safety_reason",
         "passive_for_takeover",

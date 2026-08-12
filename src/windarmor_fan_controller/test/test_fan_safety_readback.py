@@ -84,7 +84,7 @@ def test_legacy_auto_and_manual_ownership_are_never_passive():
 
 
 def test_publisher_is_transient_local_and_failure_has_no_pwm_side_effect():
-    node = FanCommandManager()
+    node = FanCommandManager(source_epoch_fn=lambda: 456)
     original = node._safety_state_pub
     try:
         assert original.qos_profile.durability is DurabilityPolicy.TRANSIENT_LOCAL
@@ -93,6 +93,23 @@ def test_publisher_is_transient_local_and_failure_has_no_pwm_side_effect():
         node._publish_safety_state()
         assert node._core.output == before
         assert node._core.safety_snapshot.control_state == before.state.value
+    finally:
+        node._safety_state_pub = original
+        node.destroy_node()
+
+
+def test_fan_safety_epoch_is_stable_and_sequence_strictly_increases():
+    node = FanCommandManager(source_epoch_fn=lambda: 456)
+    original = node._safety_state_pub
+    capture = CapturePublisher()
+    try:
+        node._safety_state_pub = capture
+        node._publish_safety_state()
+        node._publish_safety_state()
+        first, second = capture.messages
+        assert first.source_epoch == second.source_epoch == 456
+        assert first.observation_sequence > 0
+        assert second.observation_sequence > first.observation_sequence
     finally:
         node._safety_state_pub = original
         node.destroy_node()

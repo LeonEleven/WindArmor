@@ -110,11 +110,20 @@ class ImuMotorControllerNode(LifecycleNode):
         *,
         driver_factory: Callable[..., object] = CyberGearDriver,
         sleep_fn: Callable[[float], None] = time.sleep,
+        source_epoch_fn: Callable[[], int] = time.monotonic_ns,
     ):
+        source_epoch = source_epoch_fn()
+        if (
+            isinstance(source_epoch, bool)
+            or not isinstance(source_epoch, int)
+            or not 0 < source_epoch <= (2**64 - 1)
+        ):
+            raise ValueError("motor safety source epoch must be a positive uint64")
         super().__init__("imu_motor_controller_node")
         # 测试可注入完全内存化 fake；生产入口仍使用 CyberGearDriver。
         self._driver_factory = driver_factory
         self._sleep = sleep_fn
+        self._motor_safety_source_epoch = source_epoch
 
         # ================================================================
         # 声明全部参数（在 unconfigured 状态下可用）
@@ -282,7 +291,7 @@ class ImuMotorControllerNode(LifecycleNode):
         self._motor_feedback_structured_sequence = 0
         # This sequence spans lifecycle reconfigure within the same process so
         # observers never accept an old safety snapshot as a new one.
-        self._motor_safety_state_sequence = 0
+        self._motor_safety_state_sequence = 1
         self._motor_protection_flags: Dict[int, bool] = {}
         self._motor_temperature_warning_flags: Dict[int, bool] = {}
         self._motor_safety_fault_active = False
@@ -939,6 +948,7 @@ class ImuMotorControllerNode(LifecycleNode):
                 self._motor_safety_state_sequence += 1
             message = MotorSafetyState()
             message.stamp = self.get_clock().now().to_msg()
+            message.source_epoch = self._motor_safety_source_epoch
             message.observation_sequence = sequence
             message.node_active = snapshot.node_active
             message.controller_state = snapshot.controller_state

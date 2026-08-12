@@ -371,7 +371,7 @@ class FlightControlRuntimeNode(Node):
         if not self._controller_inhibited:
             self._last_error = error
             self.get_logger().error(
-                f"DRY_RUN controller inhibited until node restart: {error}"
+                f"DRY_RUN controller inhibited; explicit reset-inhibit is required: {error}"
             )
         self._controller_inhibited = True
         if self._authority.state is not AuthorityState.INHIBITED:
@@ -474,6 +474,7 @@ class FlightControlRuntimeNode(Node):
             self._authority.observe_preflight(
                 ready=result.ready,
                 reason=result.reason.value,
+                current_runtime_state_sequence=state.sequence,
             )
             if self._authority.state is AuthorityState.INHIBITED:
                 self._controller_inhibited = True
@@ -487,6 +488,7 @@ class FlightControlRuntimeNode(Node):
         self._authority.observe_preflight(
             ready=result.ready,
             reason=result.reason.value,
+            current_runtime_state_sequence=state.sequence,
         )
 
     def _arming_inhibit_reason(self, runtime_snapshot) -> str:

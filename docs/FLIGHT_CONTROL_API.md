@@ -1,7 +1,7 @@
 # WindArmor Flight Control API
 
 本文档面向飞控算法开发。v1 API 是 v0.4.0 Flight Control Integration
-Foundation 的纯算法接口；Task 3 已提供 authority preparation Runtime，但
+Foundation 的纯算法接口；Task 3.1 已加固 authority preparation contract，但
 当前版本仍不能控制真实 actuator。后续 authority/actuator 接入必须保持这里的
 模型、单位、校验和安全语义兼容。
 
@@ -98,6 +98,21 @@ sequence 和完整 motor 数组表达同一 snapshot。电机节点现在周期�
 不触发额外 driver I/O。没有反馈的配置电机仍有 entry，且 `has_feedback` 和全部
 presence flag 为 false。
 
+### Authoritative Safety Readback 顺序
+
+`MotorSafetyState.msg` 与 `FanSafetyState.msg` 都以两个正 `uint64` 字段定义来源内
+顺序：
+
+| 字段 | 语义 |
+|---|---|
+| `source_epoch` | publisher 进程节点实例的 monotonic epoch；`0` 非法 |
+| `observation_sequence` | 该 epoch 内从 `1` 开始严格递增的序列；`0` 非法 |
+
+同一节点实例经过 configure/deactivate/activate 或 reconfigure 时不重置 epoch 或
+sequence。消费者首次观测要求两者都大于零；同 epoch 只接受更大 sequence；更大
+epoch 接受任意正 sequence 并重建该来源 baseline；更小 epoch 永久拒绝。epoch 不
+使用 ROS time 或 wall time，Runtime 自身重启时重新建立接收 baseline。
+
 ### FanSystemState
 
 每个 `FanChannelState` 包含：
@@ -135,7 +150,7 @@ latch true 为 `True`，两路均已观测且新鲜并为 false 才为 `False`�
 `None`。`/e_stop=False` 不参与解除证明。`e_stop_active=None` 绝不等于 `False`。
 State validation 只允许在
 `e_stop_active is False`、fan enabled 明确为 true、电机/风扇模式均已观测、
-所需输入新鲜且 Flight authority 活动时声明 `actuation_allowed=True`。Task 3
+所需输入新鲜且 Flight authority 活动时声明 `actuation_allowed=True`。Task 3.1
 production 即使进入 `READY_TO_TAKEOVER` 也始终保持 `actuation_allowed=False`。
 
 ## None、valid、fresh 与 healthy
@@ -269,10 +284,25 @@ READY_TO_TAKEOVER。READY 阶段算法仍看到 authority `NONE`、generation `0
 始终为 `takeover_supported=false`，所以不会进入 ACTIVE。
 
 pure authority core 在 prepare 时分配 attempt generation；cancel/inhibit 后旧
-generation 永久失效。future ACTIVE 的第一条 command 必须封装在不可变
+generation 永久失效。owner ack 只记录 owner、当前 generation 和 owner 观察到的
+诊断 state sequence；ack 成功不改变 READY 状态，也不设置 cutoff。两路 owner 可按
+任意顺序 ack，duplicate、旧 generation、cancel/inhibit 后或 READY 前的 ack 均被
+拒绝。
+
+future runtime 必须在 READY、当前正 generation、两路 ack 齐全时另行调用一次
+atomic commit，并传入提交瞬间的当前 `FlightState.sequence`。该 sequence 不得早于
+进入 READY 时记录的 barrier，并且仅它能成为不可变
+`arming_cutoff_state_sequence`。commit 成功产生一次 immutable result，要求上层
+重置 controller 并丢弃 pre-commit preview；authority core 不导入或调用算法实现。
+duplicate/旧 generation commit 被拒绝。future ACTIVE 的第一条 command 必须封装在不可变
 `FlightCommandEnvelope` 中，并满足 generation、严格递增 command sequence、
 `FlightState.sequence > arming_cutoff_state_sequence` 和有限 produced time。
 handoff 前计算的 preview 从不缓存或复用。
+
+Task 3.1 production 没有 owner ack 或 atomic commit 的 service/topic/callback，
+`takeover_supported=false`；因此它始终保持 authority `NONE`、generation `0`、
+`flight_control_active=false`、`actuation_allowed=false`，没有 ACTIVE 或 actuator
+dispatch 路径。
 
 ## Fake state 示例
 
@@ -344,7 +374,7 @@ driver。
 - 绕过现有电机/风扇状态机、软限位、看门狗或安全退出；
 - 在 transport 恢复后自动恢复 MANUAL/AUTO/HOME 或重发旧目标。
 
-v0.4.0 Task 3 已包含 authoritative safety readback、preflight、ARMING/
+v0.4.0 Task 3.1 已包含 restart-aware authoritative safety readback、preflight、ARMING/
 READY_TO_TAKEOVER、generation/sequence validation 与 post-grant new-state barrier，
 但不包含 owner acknowledgement production implementation、ACTIVE、PWM 映射、
 actuator adapter 或 actuator dispatch。这些能力只有 Task 4 接入既有安全路径后

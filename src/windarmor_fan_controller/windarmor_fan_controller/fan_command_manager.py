@@ -3,7 +3,7 @@
 import math
 import threading
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 import rclpy
 from geometry_msgs.msg import Vector3Stamped
@@ -19,8 +19,20 @@ from .fan_control import FanControlConfig, FanControlCore, FanControlOutput
 class FanCommandManager(Node):
     """在公共手动输入和姿态 AUTO 之间进行唯一仲裁。"""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        source_epoch_fn: Callable[[], int] = time.monotonic_ns,
+    ) -> None:
+        source_epoch = source_epoch_fn()
+        if (
+            isinstance(source_epoch, bool)
+            or not isinstance(source_epoch, int)
+            or not 0 < source_epoch <= (2**64 - 1)
+        ):
+            raise ValueError("fan safety source epoch must be a positive uint64")
         super().__init__("fan_command_manager")
+        self._safety_source_epoch = source_epoch
         self._declare_parameters()
         control_rate = float(self.get_parameter("control_rate_hz").value)
         status_rate = float(self.get_parameter("status_publish_rate_hz").value)
@@ -69,7 +81,7 @@ class FanCommandManager(Node):
         self._core_lock = threading.RLock()
         self._last_pose_source_stamp_ns: Optional[int] = None
         self._last_observable_signature = None
-        self._safety_observation_sequence = 0
+        self._safety_observation_sequence = 1
 
         state_qos = QoSProfile(
             depth=1,
@@ -347,6 +359,7 @@ class FanCommandManager(Node):
                 self._safety_observation_sequence += 1
             message = FanSafetyState()
             message.stamp = self.get_clock().now().to_msg()
+            message.source_epoch = self._safety_source_epoch
             message.observation_sequence = sequence
             message.e_stop_latched = snapshot.e_stop_latched
             message.control_state = snapshot.control_state

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable
 
 
 class CommandAuthority(str, Enum):
@@ -23,6 +22,25 @@ class AuthorityGrant:
     authority: CommandAuthority
     generation: int
     sequence: int
+
+
+@dataclass(frozen=True)
+class OwnerAcknowledgement:
+    """Diagnostic owner acknowledgement; never an authority grant or cutoff."""
+
+    owner: OwnershipDomain
+    generation: int
+    observed_state_sequence: int
+
+
+@dataclass(frozen=True)
+class AuthorityCommitResult:
+    """One-shot result emitted by an explicit, atomic authority commit."""
+
+    generation: int
+    arming_cutoff_state_sequence: int
+    controller_reset_required: bool = True
+    discard_precommit_previews_required: bool = True
 
 
 class AuthorityState(str, Enum):
@@ -51,9 +69,9 @@ class AuthorityStateMachine:
         self._state = AuthorityState.DISABLED
         self._next_generation = 1
         self._attempt_generation: int | None = None
-        self._acks: set[OwnershipDomain] = set()
+        self._acks: dict[OwnershipDomain, OwnerAcknowledgement] = {}
+        self._ready_state_sequence: int | None = None
         self._arming_cutoff_state_sequence: int | None = None
-        self._controller_reset_for_generation: int | None = None
         self._last_preflight_failure_reason = ""
         self._last_inhibit_reason = ""
 
@@ -89,6 +107,22 @@ class AuthorityStateMachine:
         return self._arming_cutoff_state_sequence
 
     @property
+    def ready_state_sequence(self) -> int | None:
+        return self._ready_state_sequence
+
+    @property
+    def owner_acknowledgements(self) -> tuple[OwnerAcknowledgement, ...]:
+        return tuple(
+            self._acks[owner]
+            for owner in OwnershipDomain
+            if owner in self._acks
+        )
+
+    @property
+    def all_required_owners_acknowledged(self) -> bool:
+        return set(self._acks) == {OwnershipDomain.MOTOR, OwnershipDomain.FAN}
+
+    @property
     def last_preflight_failure_reason(self) -> str:
         return self._last_preflight_failure_reason
 
@@ -116,16 +150,26 @@ class AuthorityStateMachine:
             raise AuthorityTransitionError("authority generation must be positive")
         self._attempt_generation = generation
         self._acks.clear()
+        self._ready_state_sequence = None
         self._arming_cutoff_state_sequence = None
-        self._controller_reset_for_generation = None
         self._last_preflight_failure_reason = ""
         self._state = AuthorityState.ARMING
         return generation
 
-    def observe_preflight(self, *, ready: bool, reason: str) -> None:
+    def observe_preflight(
+        self,
+        *,
+        ready: bool,
+        reason: str,
+        current_runtime_state_sequence: int | None = None,
+    ) -> None:
         if self._state is AuthorityState.ARMING:
             if ready:
+                if not self._valid_state_sequence(current_runtime_state_sequence):
+                    self.inhibit("ready_state_sequence_invariant_failure")
+                    return
                 self._last_preflight_failure_reason = ""
+                self._ready_state_sequence = current_runtime_state_sequence
                 self._state = AuthorityState.READY_TO_TAKEOVER
             else:
                 self._last_preflight_failure_reason = reason
@@ -152,40 +196,71 @@ class AuthorityStateMachine:
         owner: OwnershipDomain,
         generation: int,
         *,
-        state_sequence: int,
-        reset_controller: Callable[[], None],
+        owner_observed_state_sequence: int,
     ) -> bool:
-        """Accept explicit owner acks; production Task 3 has no caller."""
+        """Record one diagnostic owner ack without granting authority."""
 
         if not self._takeover_supported:
             return False
         if (
             self._state is not AuthorityState.READY_TO_TAKEOVER
             or self._attempt_generation is None
+            or isinstance(generation, bool)
+            or not isinstance(generation, int)
+            or generation <= 0
             or generation != self._attempt_generation
             or not isinstance(owner, OwnershipDomain)
+            or owner in self._acks
         ):
             return False
-        if isinstance(state_sequence, bool) or not isinstance(state_sequence, int):
-            self.inhibit("state_sequence_invariant_failure")
+        if not self._valid_state_sequence(owner_observed_state_sequence):
             return False
-        if state_sequence < 0:
-            self.inhibit("state_sequence_invariant_failure")
-            return False
-        self._acks.add(owner)
-        if self._acks != {OwnershipDomain.MOTOR, OwnershipDomain.FAN}:
-            return False
-        if self._controller_reset_for_generation == generation:
-            return self._state is AuthorityState.ACTIVE
-        try:
-            reset_controller()
-        except Exception:
-            self.inhibit("controller_reset_failure")
-            raise
-        self._controller_reset_for_generation = generation
-        self._arming_cutoff_state_sequence = state_sequence
-        self._state = AuthorityState.ACTIVE
+        self._acks[owner] = OwnerAcknowledgement(
+            owner=owner,
+            generation=generation,
+            observed_state_sequence=owner_observed_state_sequence,
+        )
         return True
+
+    def commit_active(
+        self,
+        *,
+        generation: int,
+        current_runtime_state_sequence: int,
+    ) -> AuthorityCommitResult:
+        """Atomically grant authority at the Runtime's current state boundary."""
+
+        if not self._takeover_supported:
+            raise AuthorityTransitionError("authority takeover is not supported")
+        if self._state is not AuthorityState.READY_TO_TAKEOVER:
+            raise AuthorityTransitionError(
+                f"commit is not allowed from {self._state.value}"
+            )
+        if (
+            self._attempt_generation is None
+            or isinstance(generation, bool)
+            or not isinstance(generation, int)
+            or generation <= 0
+            or generation != self._attempt_generation
+        ):
+            raise AuthorityTransitionError("commit generation is not current")
+        if not self.all_required_owners_acknowledged:
+            raise AuthorityTransitionError("all required owners must acknowledge")
+        if not self._valid_state_sequence(current_runtime_state_sequence):
+            raise AuthorityTransitionError("commit state sequence is invalid")
+        if (
+            self._ready_state_sequence is None
+            or current_runtime_state_sequence < self._ready_state_sequence
+        ):
+            raise AuthorityTransitionError(
+                "commit state sequence precedes the ready barrier"
+            )
+        self._arming_cutoff_state_sequence = current_runtime_state_sequence
+        self._state = AuthorityState.ACTIVE
+        return AuthorityCommitResult(
+            generation=generation,
+            arming_cutoff_state_sequence=current_runtime_state_sequence,
+        )
 
     def handle_active_safe_stop(self) -> None:
         if self._state is AuthorityState.ACTIVE:
@@ -218,5 +293,9 @@ class AuthorityStateMachine:
     def _invalidate_attempt(self) -> None:
         self._attempt_generation = None
         self._acks.clear()
+        self._ready_state_sequence = None
         self._arming_cutoff_state_sequence = None
-        self._controller_reset_for_generation = None
+
+    @staticmethod
+    def _valid_state_sequence(value: object) -> bool:
+        return isinstance(value, int) and not isinstance(value, bool) and value >= 0

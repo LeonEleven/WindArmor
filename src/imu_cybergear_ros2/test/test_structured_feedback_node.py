@@ -146,6 +146,7 @@ def test_motor_safety_publisher_is_transient_local_observer_only():
     node = ImuMotorControllerNode(
         driver_factory=lambda **_kwargs: driver,
         sleep_fn=lambda _seconds: None,
+        source_epoch_fn=lambda: 100,
     )
     original = None
     try:
@@ -162,6 +163,8 @@ def test_motor_safety_publisher_is_transient_local_observer_only():
         node._publish_motor_safety_state()
         assert driver.calls == calls_before
         message = capture.messages[-1]
+        assert message.source_epoch == 100
+        assert message.observation_sequence > 0
         assert message.node_active
         assert message.controller_state == "MANUAL_RUNNING"
         assert message.public_control_mode == "MANUAL"
@@ -177,6 +180,52 @@ def test_motor_safety_publisher_is_transient_local_observer_only():
     finally:
         if original is not None:
             node._motor_safety_state_pub = original
+        node.on_deactivate(None)
+        node.on_cleanup(None)
+        node.destroy_node()
+
+
+def test_motor_safety_epoch_and_sequence_span_lifecycle_reconfigure():
+    drivers = [FakeMotorDriver(), FakeMotorDriver()]
+    created = []
+
+    def factory(**_kwargs):
+        driver = drivers[len(created)]
+        created.append(driver)
+        return driver
+
+    node = ImuMotorControllerNode(
+        driver_factory=factory,
+        sleep_fn=lambda _seconds: None,
+        source_epoch_fn=lambda: 321,
+    )
+    second_original = None
+    try:
+        assert node.on_configure(None) == TransitionCallbackReturn.SUCCESS
+        assert node.on_activate(None) == TransitionCallbackReturn.SUCCESS
+        first_original = node._motor_safety_state_pub
+        first_capture = CapturePublisher()
+        node._motor_safety_state_pub = first_capture
+        node._publish_motor_safety_state()
+        first = first_capture.messages[-1]
+        node._motor_safety_state_pub = first_original
+
+        assert node.on_deactivate(None) == TransitionCallbackReturn.SUCCESS
+        assert node.on_cleanup(None) == TransitionCallbackReturn.SUCCESS
+        assert node.on_configure(None) == TransitionCallbackReturn.SUCCESS
+        assert node.on_activate(None) == TransitionCallbackReturn.SUCCESS
+        second_original = node._motor_safety_state_pub
+        second_capture = CapturePublisher()
+        node._motor_safety_state_pub = second_capture
+        node._publish_motor_safety_state()
+        second = second_capture.messages[-1]
+
+        assert first.source_epoch == second.source_epoch == 321
+        assert first.observation_sequence > 0
+        assert second.observation_sequence > first.observation_sequence
+    finally:
+        if second_original is not None:
+            node._motor_safety_state_pub = second_original
         node.on_deactivate(None)
         node.on_cleanup(None)
         node.destroy_node()

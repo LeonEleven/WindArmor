@@ -65,7 +65,7 @@ control timer 每 tick 构造一次不可变 snapshot，再调用算法与校验
 只发布带 `dry_run`/`preview` 语义的结构化观察消息，不拥有 authority，没有
 actuator publisher、service client 或 dispatch。现有 bringup 默认路径不启动它。
 
-v0.4.0 Task 3 增加 observer-only `/motors/safety_state` 与
+v0.4.0 Task 3/3.1 增加并加固 observer-only `/motors/safety_state` 与
 `/fans/safety_state`，并在 pure core 中建立 authority/preflight/envelope 契约。
 production Runtime 允许 `DRY_RUN -> ARMING -> READY_TO_TAKEOVER`，但 hard-code
 `takeover_supported=false`，没有 owner acknowledgement path，所以不可能进入
@@ -152,12 +152,16 @@ DISABLED -> DRY_RUN -> ARMING -> READY_TO_TAKEOVER
 
 `prepare` 在进入 ARMING 时分配唯一正 generation；`0` 永远保留给 no-authority。
 cancel/inhibit 立即使 attempt generation 失效，reset-inhibit 只返回 DRY_RUN，之后
-必须重新 prepare。只有 Task 4 的 motor 与 fan owner 对当前 generation 都确认后，
-pure contract 才允许进入 ACTIVE；旧 generation、缺少 ack 或 duplicate ack 都不能
-产生 grant。
+必须重新 prepare。Task 3.1 的 pure contract 将 motor/fan owner ack 限定为诊断
+记录：ack 只保存 owner、当前正 generation 和 owner 观察到的 state sequence；两路
+ack 完成仍保持 READY，不能决定 cutoff 或产生 grant。旧 generation、缺少 ack、
+duplicate ack、cancel/inhibit 后的 ack 都被拒绝。
 
-未来 grant 必须记录 `arming_cutoff_state_sequence`，在 owner handoff 后对 controller
-执行一次 `reset()`，并等待 `FlightState.sequence > cutoff` 后才生成该 generation
+未来 grant 必须通过单独的 atomic commit：仅在 READY、当前 generation、两路 ack
+齐全且 Runtime 当前 `FlightState.sequence` 不早于 ready barrier 时提交一次。提交
+瞬间的 Runtime sequence 才成为不可变 `arming_cutoff_state_sequence`；成功结果只
+产生一次 controller reset 与丢弃 pre-commit preview 的要求，pure authority core
+不导入具体算法。之后必须等待 `FlightState.sequence > cutoff` 才生成该 generation
 第一条 `FlightCommandEnvelope`。ARMING/READY preview 不缓存、不复用。envelope
 还要求当前非零 generation、严格递增 command sequence、有限 monotonic timestamp
 和合法完整 `FlightCommand`。
@@ -208,6 +212,14 @@ fault latch；fan readback 的 E-STOP 直接来自唯一的
 `FanControlCore.e_stop_latched`。两者都使用 reliable transient-local QoS，publisher
 只读取内存快照，不参与 recovery、owner arbitration 或 hardware output。
 
+Task 3.1 为两种 readback 增加 `source_epoch`。publisher 在进程节点实例构造时从
+system monotonic clock 生成一次正 uint64 epoch，lifecycle configure/deactivate/
+activate 不得改变它；同一实例的 observation sequence 从 `1` 起严格递增且不得因
+reconfigure 回退。Runtime 以 `(source_epoch, observation_sequence)` 判序：新 epoch
+可从低 sequence 重新开始，旧 epoch 永久拒绝，同 epoch 只接受严格递增值，epoch
+或 sequence 为 `0` 一律非法。ROS/wall time 不参与这个顺序契约；Runtime 自身重启
+则重建 observation baseline。
+
 Runtime 的全局 E-STOP 聚合规则是：任一权威 latch true 为 `True`；两路都已观测、
 新鲜且 false 才为 `False`；其余为 `None`。`/e_stop=True` 作为即时风险证据，必须
 等两路在 trigger 之后给出新鲜 false 才能解除；`/e_stop=False` 永远不能单独清除。
@@ -222,5 +234,10 @@ false；motor node active、无 ERROR/feedback latch 且公开模式为 MANUAL�
 ARMING 初期可以等待尚未出现的 observation；明确危险、已观测 safety readback
 过期或已经满足过的 required inputs 再次失效会锁存 INHIBITED。READY 丢失任一
 preflight 条件必定进入 INHIBITED，不自动恢复。
+
+Task 3.1 production 仍固定 `takeover_supported=false`，没有 owner ack/atomic commit
+service、topic 或 callback；因此 `MotionSource.FLIGHT`、fan FLIGHT source、ACTIVE 和
+actuator dispatch 仍不存在。Runtime 在全部现有状态继续发布 authority `NONE`、
+generation `0`、`flight_control_active=false`、`actuation_allowed=false`。
 
 > Initial architecture baseline introduced for v0.4.0.

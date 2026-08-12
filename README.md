@@ -14,7 +14,7 @@ WindArmor 当前把两个已经过实机测试的前置项目整合为一个 ROS
   最终整机正常功能回归。
 
 当前开发目标为 `v0.4.0 Flight Control Integration Foundation`。开发中的
-Flight API 保持纯 Python 算法边界；Task 3 已接入权威 motor/fan safety readback、
+Flight API 保持纯 Python 算法边界；Task 3.1 已加固权威 motor/fan safety readback、
 全局 E-STOP 聚合以及只允许准备到 `READY_TO_TAKEOVER` 的 authority runtime，
 但仍没有真实 actuator command path，也不改变
 v0.3.2 的电机、风扇、IMU 或安全运行语义。
@@ -26,6 +26,9 @@ v0.3.2 的电机、风扇、IMU 或安全运行语义。
 电机控制节点提供 `/motors/feedback` 结构化完整 snapshot，同时保留旧
 `/motor/status`；另以 transient-local `/motors/safety_state` 发布 lifecycle、
 `ControllerState`、公开模式、E-STOP/ERROR/feedback safety latch 和最近 transition。
+每条 safety readback 还携带进程实例固定的 monotonic `source_epoch` 与从 `1` 开始、
+严格递增的 `observation_sequence`；Runtime 可接受新进程 epoch 的低 sequence，同时
+永久拒绝旧 epoch 回流、同 epoch 重复或倒退。
 这些 topic 只读取现有合法 feedback cache 与内存安全状态和本地 monotonic 接收
 时间，不触发额外 CAN read，也不改变 feedback safety、ERROR 或 reconnect。
 observer freshness 默认 `0.5 s`，与保持为 `0.0` 的底层
@@ -51,6 +54,13 @@ Flight authority state machine。状态可从 `DRY_RUN` 经 `ARMING` 到
 `READY_TO_TAKEOVER`；`READY_TO_TAKEOVER` 只表示 preflight 已满足，不表示真实 owner
 handoff。Task 3 production 明确发布 `takeover_supported=false`，没有 motor/fan
 owner acknowledgement 输入，因此不能进入 `ACTIVE`。
+
+pure authority core 已把 owner acknowledgement 与 grant 截止线分离：ack 只记录
+owner、generation 和诊断 state sequence；两路 ack 完成后仍停留在
+`READY_TO_TAKEOVER`。未来接管代码必须再以 Runtime 提交瞬间的当前
+`FlightState.sequence` 显式调用一次 atomic commit，该值才成为不可变 cutoff，
+并产生一次 controller reset/丢弃 pre-commit preview 的结果事件。当前 production
+没有 ack 或 commit 入口，以上契约只能由 pure/fake 测试驱动。
 
 全局 E-STOP 只有在两路权威 readback 均已观测、新鲜且 latch 都为 false 时才是
 `False`；任一路 latch true 或新的 `/e_stop=True` 立即为 `True`；其他情况为

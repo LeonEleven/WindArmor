@@ -70,8 +70,9 @@ def motor_message(names=("axis_a", "axis_b"), **entry_overrides):
     )
 
 
-def motor_safety_message(sequence=0, **overrides):
+def motor_safety_message(sequence=1, source_epoch=100, **overrides):
     values = dict(
+        source_epoch=source_epoch,
         observation_sequence=sequence,
         node_active=True,
         controller_state="MANUAL_RUNNING",
@@ -88,8 +89,9 @@ def motor_safety_message(sequence=0, **overrides):
     return SimpleNamespace(**values)
 
 
-def fan_safety_message(sequence=0, **overrides):
+def fan_safety_message(sequence=1, source_epoch=100, **overrides):
     values = dict(
+        source_epoch=source_epoch,
         observation_sequence=sequence,
         e_stop_latched=False,
         control_state="MANUAL_DISARMED",

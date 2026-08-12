@@ -108,3 +108,22 @@ def test_envelope_is_immutable_and_sequencer_never_reuses_pre_cutoff_target():
             produced_at_sec=2.2,
             command=normal(0.7),
         )
+
+
+@pytest.mark.parametrize("state_sequence", [90, 95, 100, 119, 120])
+def test_ack_observations_and_precommit_states_do_not_cross_commit_cutoff(
+    state_sequence,
+):
+    with pytest.raises(FlightValidationError):
+        validate(
+            envelope(state_sequence=state_sequence),
+            arming_cutoff_state_sequence=120,
+        )
+
+
+@pytest.mark.parametrize("state_sequence", [121, 122])
+def test_only_post_commit_states_cross_commit_cutoff(state_sequence):
+    validate(
+        envelope(state_sequence=state_sequence),
+        arming_cutoff_state_sequence=120,
+    )

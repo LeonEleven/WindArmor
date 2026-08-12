@@ -59,3 +59,4 @@ def test_runtime_does_not_define_task3_authority_or_actuator_sources() -> None:
     assert "CommandAuthority.FLIGHT_CONTROL" not in text
     assert "takeover_supported=True" not in text
     assert "acknowledge_owner(" not in text
+    assert "commit_active(" not in text

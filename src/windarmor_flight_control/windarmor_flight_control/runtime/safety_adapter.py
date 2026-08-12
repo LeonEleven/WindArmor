@@ -12,6 +12,7 @@ from ..core.preflight import FanSafetyReadback, MotorSafetyReadback
 @dataclass(frozen=True)
 class ReceivedMotorSafety:
     value: MotorSafetyReadback
+    source_epoch: int
     sequence: int
     received_at: float
 
@@ -19,6 +20,7 @@ class ReceivedMotorSafety:
 @dataclass(frozen=True)
 class ReceivedFanSafety:
     value: FanSafetyReadback
+    source_epoch: int
     sequence: int
     received_at: float
 
@@ -32,11 +34,41 @@ def _receive_time(value: float) -> float:
     return result
 
 
-def _sequence(message: Any) -> int:
-    value = message.observation_sequence
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise ValueError("safety observation sequence must be non-negative")
+def _positive_uint64(value: Any, name: str) -> int:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not 0 < value <= (2**64 - 1)
+    ):
+        raise ValueError(f"{name} must be a positive uint64")
     return value
+
+
+def _ordering(message: Any) -> tuple[int, int]:
+    return (
+        _positive_uint64(message.source_epoch, "safety source epoch"),
+        _positive_uint64(
+            message.observation_sequence,
+            "safety observation sequence",
+        ),
+    )
+
+
+def _validate_ordering(
+    *,
+    subsystem: str,
+    source_epoch: int,
+    sequence: int,
+    previous: ReceivedMotorSafety | ReceivedFanSafety | None,
+) -> None:
+    if previous is None:
+        return
+    if source_epoch < previous.source_epoch:
+        raise ValueError(f"{subsystem} safety source epoch moved backwards")
+    if source_epoch == previous.source_epoch and sequence <= previous.sequence:
+        raise ValueError(
+            f"{subsystem} safety sequence must strictly increase within an epoch"
+        )
 
 
 def _text(value: Any, name: str, *, allow_empty: bool = False) -> str:
@@ -58,9 +90,13 @@ class SafetyReadbackAdapter:
 
     def update_motor(self, message: Any, received_at: float) -> MotorSafetyReadback:
         received = _receive_time(received_at)
-        sequence = _sequence(message)
-        if self.motor is not None and sequence <= self.motor.sequence:
-            raise ValueError("motor safety sequence must strictly increase")
+        source_epoch, sequence = _ordering(message)
+        _validate_ordering(
+            subsystem="motor",
+            source_epoch=source_epoch,
+            sequence=sequence,
+            previous=self.motor,
+        )
         controller_state = _text(message.controller_state, "controller_state")
         public_mode = _text(message.public_control_mode, "public_control_mode")
         if controller_state not in {
@@ -92,14 +128,18 @@ class SafetyReadbackAdapter:
             raise ValueError("motor ERROR must be latched")
         if value.feedback_safety_fault_latched and not value.error_latched:
             raise ValueError("motor feedback safety fault requires error latch")
-        self.motor = ReceivedMotorSafety(value, sequence, received)
+        self.motor = ReceivedMotorSafety(value, source_epoch, sequence, received)
         return value
 
     def update_fan(self, message: Any, received_at: float) -> FanSafetyReadback:
         received = _receive_time(received_at)
-        sequence = _sequence(message)
-        if self.fan is not None and sequence <= self.fan.sequence:
-            raise ValueError("fan safety sequence must strictly increase")
+        source_epoch, sequence = _ordering(message)
+        _validate_ordering(
+            subsystem="fan",
+            source_epoch=source_epoch,
+            sequence=sequence,
+            previous=self.fan,
+        )
         state = _text(message.control_state, "fan control_state")
         if state not in {
             "SAFE_STOP",
@@ -142,7 +182,7 @@ class SafetyReadbackAdapter:
             or state not in {"SAFE_STOP", "MANUAL_DISARMED"}
         ):
             raise ValueError("fan passive predicate conflicts with owner state")
-        self.fan = ReceivedFanSafety(value, sequence, received)
+        self.fan = ReceivedFanSafety(value, source_epoch, sequence, received)
         return value
 
     @staticmethod
