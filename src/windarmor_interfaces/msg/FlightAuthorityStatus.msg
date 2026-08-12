@@ -1,0 +1,18 @@
+# Task 3 authority preparation status. This message does not grant ownership.
+builtin_interfaces/Time stamp
+uint64 state_sequence
+string authority_state
+string command_authority
+uint64 authority_generation
+bool attempt_present
+uint64 attempt_generation
+bool preparing
+bool preflight_ready
+bool controller_inhibited
+bool global_e_stop_observed
+bool global_e_stop_active
+bool motor_safety_state_fresh
+bool fan_safety_state_fresh
+string last_preflight_failure_reason
+string last_inhibit_reason
+bool takeover_supported

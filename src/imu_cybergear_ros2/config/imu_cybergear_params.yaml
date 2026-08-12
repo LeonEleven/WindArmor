@@ -282,5 +282,6 @@ imu_motor_controller_node:
     # Flight/diagnostic observer-only structured snapshot. These settings never
     # change motor safety decisions or motor_feedback_timeout_sec.
     motor_feedback_structured_topic: "/motors/feedback"
+    motor_safety_state_topic: "/motors/safety_state"
     motor_feedback_publish_rate_hz: 10.0
     motor_feedback_observer_freshness_sec: 0.5

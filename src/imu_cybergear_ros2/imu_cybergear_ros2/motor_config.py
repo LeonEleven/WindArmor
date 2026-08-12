@@ -105,6 +105,7 @@ DEFAULT_PARAMETER_VALUES = {
     "reconnect_backoff_multiplier": 1.5,
     "motor_status_topic": "/motor/status",
     "motor_feedback_structured_topic": "/motors/feedback",
+    "motor_safety_state_topic": "/motors/safety_state",
     "motor_feedback_publish_rate_hz": 10.0,
     "motor_feedback_observer_freshness_sec": 0.5,
 }
@@ -188,6 +189,7 @@ class MotorRosInterfaceConfig:
     motor_mode_topic: str
     motor_status_topic: str
     motor_feedback_structured_topic: str
+    motor_safety_state_topic: str
     motor_mode_publish_rate_hz: float
     motor_feedback_publish_rate_hz: float
     motor_feedback_observer_freshness_sec: float
@@ -609,6 +611,9 @@ def build_motor_node_config(raw: Mapping[str, object]) -> MotorNodeConfig:
             motor_feedback_structured_topic=_validate_topic_name(
                 "motor_feedback_structured_topic",
                 raw["motor_feedback_structured_topic"],
+            ),
+            motor_safety_state_topic=_validate_topic_name(
+                "motor_safety_state_topic", raw["motor_safety_state_topic"]
             ),
             motor_mode_publish_rate_hz=rate,
             motor_feedback_publish_rate_hz=feedback_publish_rate,

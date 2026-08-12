@@ -18,7 +18,7 @@
 | **急停接口** | 三重通道：键盘[空格]、话题 `/e_stop`、服务 `/e_stop` |
 | **远程启停** | `/enable_motor` 服务（std_srvs/SetBool） |
 | **电机反馈** | 实时读取电机位置/速度/力矩/温度/模式/故障 |
-| **结构化观测** | `/motors/feedback` 周期发布全部配置电机的只读 presence-aware snapshot |
+| **结构化观测** | `/motors/feedback` 发布 presence-aware feedback；`/motors/safety_state` 发布权威只读安全快照 |
 | **故障保护** | 任一电机固件故障位或临界温度锁存后停止全部电机并进入 ERROR |
 | **反馈健康** | 配置 ID/数值/量程校验、连续无效帧保护和可配置的新鲜度框架 |
 | **连接与恢复** | 初始连接重试与运行期 transport-only 受控重连相互独立 |
@@ -423,6 +423,12 @@ critical` 只限频告警且不降速；`temperature >= critical` 单帧即锁�
 observer freshness 为 `0.5 s`。该 observer threshold 只影响消息中的
 `fresh/healthy`，不会读取 driver、发送命令、改变 ERROR，也不会修改默认仍为
 `0.0` 的 `motor_feedback_timeout_sec`。
+
+`/motors/safety_state` (`windarmor_interfaces/msg/MotorSafetyState`) 使用 reliable
+transient-local QoS，只复制 `StateManager`、lifecycle active flag 和既有 motor
+feedback safety latch。消息包含 observation sequence、内部/公开状态、
+E-STOP/ERROR latch 及最近 transition metadata。publisher 不查询 driver、不发送
+CAN 命令；发布异常只记录日志，不改变安全状态。
 
 数值电流能力边界必须明确区分：固件的过流 bit 已是立即保护；
 `motor_current_limit_a` 只是保留参数，当前没有实际 `current_a` 可供比较。代码

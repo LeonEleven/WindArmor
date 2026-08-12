@@ -1,7 +1,7 @@
 # WindArmor Flight Control API
 
 本文档面向飞控算法开发。v1 API 是 v0.4.0 Flight Control Integration
-Foundation 的纯算法接口；Task 2 已提供 observation-only DRY_RUN Runtime，但
+Foundation 的纯算法接口；Task 3 已提供 authority preparation Runtime，但
 当前版本仍不能控制真实 actuator。后续 authority/actuator 接入必须保持这里的
 模型、单位、校验和安全语义兼容。
 
@@ -130,10 +130,13 @@ presence flag 为 false。
 `required_inputs_fresh` 是 runtime 本地裁决状态，不是假装成硬件观测的默认值；
 startup 时 authority 可明确为 `NONE`，其余裁决可明确为 false。
 
-`e_stop_active=None` 绝不等于 `False`。State validation 只允许在
+`e_stop_active` 现在来自 motor/fan authoritative safety readback 聚合：任一路
+latch true 为 `True`，两路均已观测且新鲜并为 false 才为 `False`，其他情况为
+`None`。`/e_stop=False` 不参与解除证明。`e_stop_active=None` 绝不等于 `False`。
+State validation 只允许在
 `e_stop_active is False`、fan enabled 明确为 true、电机/风扇模式均已观测、
-所需输入新鲜且 Flight authority 活动时声明 `actuation_allowed=True`。Task 2
-DRY_RUN 不进入 arming，所以即使观测齐全也始终保持 `actuation_allowed=False`。
+所需输入新鲜且 Flight authority 活动时声明 `actuation_allowed=True`。Task 3
+production 即使进入 `READY_TO_TAKEOVER` 也始终保持 `actuation_allowed=False`。
 
 ## None、valid、fresh 与 healthy
 
@@ -215,7 +218,7 @@ validate_flight_command(command, required_motors)
 payload 或 required motor-key 校验，因此 stale/invalid state、尚未建立 actuator
 key 集合都不会妨碍算法放弃控制。
 
-## DRY_RUN Runtime 与 controller factory
+## DRY_RUN / Authority Preparation Runtime 与 controller factory
 
 独立 observer launch 为 `flight_control_dry_run.launch.py`，只启动 Flight Runtime
 本身；它不会启动 IMU、电机、风扇或 bringup，也没有 actuator publisher/client。
@@ -249,6 +252,27 @@ output 只发布到：
 ```
 
 这两个 topic 是只读观察契约，不是 actuator command。
+
+Task 3 另提供：
+
+```text
+/flight_control/authority/status
+/flight_control/authority/prepare
+/flight_control/authority/cancel
+/flight_control/authority/reset_inhibit
+```
+
+算法不负责调用这些服务，也不负责 arm、清除 E-STOP/ERROR 或管理 generation。
+prepare 只使本地状态进入 ARMING 并检查 preflight；满足后进入
+READY_TO_TAKEOVER。READY 阶段算法仍看到 authority `NONE`、generation `0`、
+`flight_control_active=false`、`actuation_allowed=false`。Task 3 production status
+始终为 `takeover_supported=false`，所以不会进入 ACTIVE。
+
+pure authority core 在 prepare 时分配 attempt generation；cancel/inhibit 后旧
+generation 永久失效。future ACTIVE 的第一条 command 必须封装在不可变
+`FlightCommandEnvelope` 中，并满足 generation、严格递增 command sequence、
+`FlightState.sequence > arming_cutoff_state_sequence` 和有限 produced time。
+handoff 前计算的 preview 从不缓存或复用。
 
 ## Fake state 示例
 
@@ -320,7 +344,8 @@ driver。
 - 绕过现有电机/风扇状态机、软限位、看门狗或安全退出；
 - 在 transport 恢复后自动恢复 MANUAL/AUTO/HOME 或重发旧目标。
 
-v0.4.0 Task 2 已包含 ROS state adapters、immutable aggregation、controller loading
-和 DRY_RUN preview，但不包含 authority service、generation 执行校验、PWM 映射、
-actuator adapter 或 actuator dispatch。这些能力只有在后续任务中接入既有安全
-路径后才能存在。
+v0.4.0 Task 3 已包含 authoritative safety readback、preflight、ARMING/
+READY_TO_TAKEOVER、generation/sequence validation 与 post-grant new-state barrier，
+但不包含 owner acknowledgement production implementation、ACTIVE、PWM 映射、
+actuator adapter 或 actuator dispatch。这些能力只有 Task 4 接入既有安全路径后
+才能存在。

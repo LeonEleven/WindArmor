@@ -77,3 +77,30 @@ def test_command_preview_has_presence_for_payload_free_safe_stop() -> None:
         ("float64", "fan_left"),
         ("float64", "fan_right"),
     ]
+
+
+def test_motor_and_fan_safety_readbacks_are_structured():
+    assert {name for _, name in message_fields("MotorSafetyState.msg")} == {
+        "stamp", "observation_sequence", "node_active", "controller_state",
+        "public_control_mode", "e_stop_latched", "error_latched",
+        "feedback_safety_fault_latched", "transition_present",
+        "transition_sequence", "transition_reason", "transition_source",
+    }
+    assert {name for _, name in message_fields("FanSafetyState.msg")} == {
+        "stamp", "observation_sequence", "e_stop_latched", "control_state",
+        "enabled_observed", "enabled", "manual_armed",
+        "legacy_auto_requested", "legacy_auto_active", "safety_reason",
+        "passive_for_takeover",
+    }
+
+
+def test_authority_status_exposes_preparation_without_claiming_takeover():
+    names = {name for _, name in message_fields("FlightAuthorityStatus.msg")}
+    assert {
+        "authority_state", "command_authority", "authority_generation",
+        "attempt_present", "attempt_generation", "preparing",
+        "preflight_ready", "controller_inhibited", "global_e_stop_observed",
+        "global_e_stop_active", "motor_safety_state_fresh",
+        "fan_safety_state_fresh", "last_preflight_failure_reason",
+        "last_inhibit_reason", "takeover_supported",
+    } <= names

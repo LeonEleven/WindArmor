@@ -68,3 +68,38 @@ def motor_message(names=("axis_a", "axis_b"), **entry_overrides):
             for index, name in enumerate(names)
         ]
     )
+
+
+def motor_safety_message(sequence=0, **overrides):
+    values = dict(
+        observation_sequence=sequence,
+        node_active=True,
+        controller_state="MANUAL_RUNNING",
+        public_control_mode="MANUAL",
+        e_stop_latched=False,
+        error_latched=False,
+        feedback_safety_fault_latched=False,
+        transition_present=True,
+        transition_sequence=1,
+        transition_reason="configure_success",
+        transition_source="lifecycle",
+    )
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def fan_safety_message(sequence=0, **overrides):
+    values = dict(
+        observation_sequence=sequence,
+        e_stop_latched=False,
+        control_state="MANUAL_DISARMED",
+        enabled_observed=True,
+        enabled=True,
+        manual_armed=False,
+        legacy_auto_requested=False,
+        legacy_auto_active=False,
+        safety_reason="safe stop",
+        passive_for_takeover=True,
+    )
+    values.update(overrides)
+    return SimpleNamespace(**values)

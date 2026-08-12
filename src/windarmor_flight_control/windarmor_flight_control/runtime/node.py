@@ -1,4 +1,4 @@
-"""Observation-only Flight Runtime node with non-negotiable DRY_RUN semantics."""
+"""Flight Runtime with local preparation and no production actuator takeover."""
 
 from __future__ import annotations
 
@@ -11,13 +11,19 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Imu
 from std_msgs.msg import Bool, Int32MultiArray, String, UInt64
+from std_srvs.srv import Trigger
 from windarmor_interfaces.msg import (
+    FanSafetyState,
+    FlightAuthorityStatus,
     FlightCommandPreview,
     FlightRuntimeStatus,
     MotorFeedbackArray,
+    MotorSafetyState,
 )
 
+from ..core.authority import AuthorityState, AuthorityStateMachine, CommandAuthority
 from ..core.models import FlightCommand
+from ..core.preflight import PreflightContext, PreflightReason, evaluate_preflight
 from ..core.validation import validate_flight_command, validate_flight_state
 from .config import PARAMETER_DEFAULTS, RuntimeConfig, build_runtime_config
 from .controller_loader import load_controller
@@ -25,7 +31,7 @@ from .state_aggregator import StateAggregator
 
 
 class FlightControlRuntimeNode(Node):
-    """Build snapshots and preview controller output; never dispatch actuators."""
+    """Build snapshots, prepare authority, and never dispatch actuators."""
 
     def __init__(
         self,
@@ -35,6 +41,7 @@ class FlightControlRuntimeNode(Node):
     ) -> None:
         super().__init__("flight_control_runtime_node")
         self._monotonic = monotonic_fn
+        self._controller_loader = controller_loader
         for name, default in PARAMETER_DEFAULTS.items():
             self.declare_parameter(name, default)
         raw = {
@@ -42,10 +49,16 @@ class FlightControlRuntimeNode(Node):
         }
         self._config: RuntimeConfig = build_runtime_config(raw)
         self._aggregator = StateAggregator(self._config)
+        # Task 3 production has no owner acknowledgement path and cannot ACTIVE.
+        self._authority = AuthorityStateMachine(takeover_supported=False)
+        self._authority.enable_dry_run()
         self._controller = None
         self._controller_inhibited = False
         self._last_error = ""
         self._last_state_sequence = 0
+        self._last_runtime_snapshot = None
+        self._last_preflight_reason = PreflightReason.MOTOR_SAFETY_UNOBSERVED.value
+        self._attempt_inputs_were_fresh = False
         self._last_tick_at = self._monotonic()
 
         try:
@@ -77,6 +90,11 @@ class FlightControlRuntimeNode(Node):
             FlightCommandPreview,
             self._config.command_preview_topic,
             observation_qos,
+        )
+        self._authority_status_pub = self.create_publisher(
+            FlightAuthorityStatus,
+            self._config.authority_status_topic,
+            state_qos,
         )
 
         self.create_subscription(
@@ -116,6 +134,12 @@ class FlightControlRuntimeNode(Node):
             state_qos,
         )
         self.create_subscription(
+            MotorSafetyState,
+            self._config.motor_safety_state_topic,
+            self._on_motor_safety,
+            state_qos,
+        )
+        self.create_subscription(
             Int32MultiArray,
             self._config.fan_status_pwm_topic,
             self._on_fan_output,
@@ -134,28 +158,61 @@ class FlightControlRuntimeNode(Node):
             state_qos,
         )
         self.create_subscription(
+            FanSafetyState,
+            self._config.fan_safety_state_topic,
+            self._on_fan_safety,
+            state_qos,
+        )
+        self.create_subscription(
             Bool,
             self._config.e_stop_topic,
             self._on_e_stop,
             observation_qos,
+        )
+        self._prepare_service = self.create_service(
+            Trigger,
+            self._config.authority_prepare_service,
+            self._on_prepare,
+        )
+        self._cancel_service = self.create_service(
+            Trigger,
+            self._config.authority_cancel_service,
+            self._on_cancel,
+        )
+        self._reset_inhibit_service = self.create_service(
+            Trigger,
+            self._config.authority_reset_inhibit_service,
+            self._on_reset_inhibit,
         )
         self._control_timer = self.create_timer(
             1.0 / self._config.control_rate_hz,
             self._control_tick,
         )
         self.get_logger().warn(
-            "Flight Runtime started in DRY_RUN: authority=NONE, "
+            "Flight Runtime started with Task 3 preparation only: "
+            "takeover_supported=false, authority=NONE, "
             "actuation_allowed=false, no actuator dispatch exists"
         )
 
     def _now(self) -> float:
         return float(self._monotonic())
 
-    def _observe(self, label: str, callback: Callable[[], object]) -> None:
+    def _observe(
+        self,
+        label: str,
+        callback: Callable[[], object],
+        *,
+        safety_critical: bool = False,
+    ) -> None:
         try:
             callback()
         except Exception as exc:
             self.get_logger().warn(f"rejected {label} observation: {exc}")
+            if safety_critical and self._authority.state in (
+                AuthorityState.ARMING,
+                AuthorityState.READY_TO_TAKEOVER,
+            ):
+                self._inhibit(f"invalid {label} observation: {exc}")
 
     def _on_imu_raw(self, message: Imu) -> None:
         received_at = self._now()
@@ -196,6 +253,14 @@ class FlightControlRuntimeNode(Node):
             lambda: self._aggregator.update_motor_mode(message.data, received_at),
         )
 
+    def _on_motor_safety(self, message: MotorSafetyState) -> None:
+        received_at = self._now()
+        self._observe(
+            "motor safety",
+            lambda: self._aggregator.update_motor_safety(message, received_at),
+            safety_critical=True,
+        )
+
     def _on_fan_output(self, message: Int32MultiArray) -> None:
         received_at = self._now()
         self._observe(
@@ -221,11 +286,86 @@ class FlightControlRuntimeNode(Node):
             ),
         )
 
+    def _on_fan_safety(self, message: FanSafetyState) -> None:
+        received_at = self._now()
+        self._observe(
+            "fan safety",
+            lambda: self._aggregator.update_fan_safety(message, received_at),
+            safety_critical=True,
+        )
+
     def _on_e_stop(self, message: Bool) -> None:
+        received_at = self._now()
         self._observe(
             "e-stop trigger",
-            lambda: self._aggregator.update_e_stop(bool(message.data)),
+            lambda: self._aggregator.update_e_stop(
+                bool(message.data), received_at
+            ),
         )
+        if bool(message.data) and self._authority.state in (
+            AuthorityState.ARMING,
+            AuthorityState.READY_TO_TAKEOVER,
+        ):
+            self._inhibit("global_estop_active")
+
+    def _on_prepare(
+        self, _request: Trigger.Request, response: Trigger.Response
+    ) -> Trigger.Response:
+        try:
+            generation = self._authority.prepare()
+            self._attempt_inputs_were_fresh = False
+            response.success = True
+            response.message = (
+                f"authority preparation started: generation={generation}; "
+                "takeover remains unsupported"
+            )
+        except Exception as exc:
+            response.success = False
+            response.message = str(exc)
+        self._publish_authority_status()
+        return response
+
+    def _on_cancel(
+        self, _request: Trigger.Request, response: Trigger.Response
+    ) -> Trigger.Response:
+        try:
+            self._authority.cancel()
+            self._attempt_inputs_were_fresh = False
+            response.success = True
+            response.message = "authority preparation cancelled; attempt invalidated"
+        except Exception as exc:
+            response.success = False
+            response.message = str(exc)
+        self._publish_authority_status()
+        return response
+
+    def _on_reset_inhibit(
+        self, _request: Trigger.Request, response: Trigger.Response
+    ) -> Trigger.Response:
+        try:
+            if self._authority.state is not AuthorityState.INHIBITED:
+                raise RuntimeError("authority is not inhibited")
+            if self._controller is None:
+                self._controller = self._controller_loader(
+                    self._config.controller_factory,
+                    self._config.motor_names,
+                )
+            self._controller.reset()
+            self._authority.reset_inhibit()
+            self._controller_inhibited = False
+            self._last_error = ""
+            self._last_preflight_reason = ""
+            self._attempt_inputs_were_fresh = False
+            self._last_tick_at = self._now()
+            response.success = True
+            response.message = "inhibit reset to DRY_RUN; explicit prepare is required"
+        except Exception as exc:
+            response.success = False
+            response.message = str(exc)
+            if self._authority.state is not AuthorityState.INHIBITED:
+                self._inhibit(f"reset-inhibit failure: {exc}")
+        self._publish_authority_status()
+        return response
 
     def _inhibit(self, error: str) -> None:
         if not self._controller_inhibited:
@@ -234,7 +374,8 @@ class FlightControlRuntimeNode(Node):
                 f"DRY_RUN controller inhibited until node restart: {error}"
             )
         self._controller_inhibited = True
-        self._controller = None
+        if self._authority.state is not AuthorityState.INHIBITED:
+            self._authority.inhibit(error)
 
     def _control_tick(self) -> None:
         now = self._now()
@@ -243,9 +384,11 @@ class FlightControlRuntimeNode(Node):
         command_valid = False
         latest_safe_stop = False
         try:
-            state = self._aggregator.build_snapshot(now)
+            runtime_snapshot = self._aggregator.build_runtime_snapshot(now)
+            state = runtime_snapshot.flight_state
             self._last_state_sequence = state.sequence
             validate_flight_state(state, self._config.motor_names)
+            self._last_runtime_snapshot = runtime_snapshot
             state_valid = True
         except Exception as exc:
             self._inhibit(f"invalid FlightState: {exc}")
@@ -256,6 +399,8 @@ class FlightControlRuntimeNode(Node):
                 latest_safe_stop=False,
             )
             return
+
+        self._evaluate_authority(runtime_snapshot)
 
         if self._controller_inhibited or self._controller is None:
             self._publish_status(
@@ -302,6 +447,82 @@ class FlightControlRuntimeNode(Node):
             latest_safe_stop=latest_safe_stop,
         )
 
+    def _evaluate_authority(self, runtime_snapshot) -> None:
+        if self._authority.state not in (
+            AuthorityState.ARMING,
+            AuthorityState.READY_TO_TAKEOVER,
+        ):
+            return
+        state = runtime_snapshot.flight_state
+        context = PreflightContext(
+            state=state,
+            motor_safety=runtime_snapshot.motor_safety,
+            fan_safety=runtime_snapshot.fan_safety,
+            motor_safety_fresh=runtime_snapshot.motor_safety_fresh,
+            fan_safety_fresh=runtime_snapshot.fan_safety_fresh,
+            controller_loaded=self._controller is not None,
+            controller_inhibited=self._controller_inhibited,
+            monotonic_valid=True,
+            no_conflicting_attempt=self._authority.attempt_generation is not None,
+        )
+        result = evaluate_preflight(context)
+        self._last_preflight_reason = "" if result.ready else result.reason.value
+        if state.system.required_inputs_fresh:
+            self._attempt_inputs_were_fresh = True
+
+        if self._authority.state is AuthorityState.READY_TO_TAKEOVER:
+            self._authority.observe_preflight(
+                ready=result.ready,
+                reason=result.reason.value,
+            )
+            if self._authority.state is AuthorityState.INHIBITED:
+                self._controller_inhibited = True
+                self._last_error = result.reason.value
+            return
+
+        fatal = self._arming_inhibit_reason(runtime_snapshot)
+        if fatal:
+            self._inhibit(fatal)
+            return
+        self._authority.observe_preflight(
+            ready=result.ready,
+            reason=result.reason.value,
+        )
+
+    def _arming_inhibit_reason(self, runtime_snapshot) -> str:
+        state = runtime_snapshot.flight_state
+        motor = runtime_snapshot.motor_safety
+        fan = runtime_snapshot.fan_safety
+        if state.system.e_stop_active is True:
+            return PreflightReason.GLOBAL_ESTOP_ACTIVE.value
+        if motor is not None and not runtime_snapshot.motor_safety_fresh:
+            return PreflightReason.MOTOR_SAFETY_STALE.value
+        if fan is not None and not runtime_snapshot.fan_safety_fresh:
+            return PreflightReason.FAN_SAFETY_STALE.value
+        if motor is not None:
+            if motor.error_latched:
+                return PreflightReason.MOTOR_ERROR_LATCHED.value
+            if motor.feedback_safety_fault_latched:
+                return PreflightReason.MOTOR_FEEDBACK_SAFETY_FAULT.value
+            if motor.public_control_mode in {
+                "AUTO", "ERROR", "EMERGENCY_STOP", "DISABLED"
+            }:
+                return PreflightReason.MOTOR_MODE_NOT_MANUAL.value
+        if fan is not None:
+            if fan.e_stop_latched:
+                return PreflightReason.FAN_ESTOP_LATCHED.value
+            if fan.enabled_observed and not fan.enabled:
+                return PreflightReason.FAN_DISABLED.value
+            if fan.legacy_auto_requested or fan.legacy_auto_active:
+                return PreflightReason.FAN_LEGACY_AUTO_ACTIVE.value
+            if fan.manual_armed:
+                return PreflightReason.FAN_MANUAL_ARMED.value
+            if not fan.passive_for_takeover:
+                return PreflightReason.FAN_NOT_PASSIVE.value
+        if self._attempt_inputs_were_fresh and not state.system.required_inputs_fresh:
+            return PreflightReason.REQUIRED_INPUTS_STALE.value
+        return ""
+
     def _publish_preview(self, sequence: int, command: FlightCommand) -> None:
         message = FlightCommandPreview()
         message.stamp = self.get_clock().now().to_msg()
@@ -343,6 +564,43 @@ class FlightControlRuntimeNode(Node):
             self._status_pub.publish(message)
         except Exception as exc:
             self.get_logger().error(f"failed to publish DRY_RUN status: {exc}")
+        self._publish_authority_status()
+
+    def _publish_authority_status(self) -> None:
+        if not hasattr(self, "_authority_status_pub"):
+            return
+        message = FlightAuthorityStatus()
+        message.stamp = self.get_clock().now().to_msg()
+        message.state_sequence = self._last_state_sequence
+        message.authority_state = self._authority.state.value
+        # Task 3 production truth is fixed regardless of preparation state.
+        message.command_authority = CommandAuthority.NONE.value
+        message.authority_generation = 0
+        attempt = self._authority.attempt_generation
+        message.attempt_present = attempt is not None
+        message.attempt_generation = 0 if attempt is None else attempt
+        message.preparing = self._authority.state in (
+            AuthorityState.ARMING,
+            AuthorityState.READY_TO_TAKEOVER,
+        )
+        message.preflight_ready = (
+            self._authority.state is AuthorityState.READY_TO_TAKEOVER
+        )
+        message.controller_inhibited = self._controller_inhibited
+        snapshot = self._last_runtime_snapshot
+        if snapshot is not None:
+            e_stop = snapshot.flight_state.system.e_stop_active
+            message.global_e_stop_observed = e_stop is not None
+            message.global_e_stop_active = e_stop is True
+            message.motor_safety_state_fresh = snapshot.motor_safety_fresh
+            message.fan_safety_state_fresh = snapshot.fan_safety_fresh
+        message.last_preflight_failure_reason = self._last_preflight_reason
+        message.last_inhibit_reason = self._authority.last_inhibit_reason
+        message.takeover_supported = False
+        try:
+            self._authority_status_pub.publish(message)
+        except Exception as exc:
+            self.get_logger().error(f"failed to publish authority status: {exc}")
 
 
 def main(args: list[str] | None = None) -> None:

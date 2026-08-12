@@ -12,6 +12,7 @@
   <depend>geometry_msgs</depend>
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
+  <depend>windarmor_interfaces</depend>
   <depend>launch</depend>
   <depend>launch_ros</depend>
 

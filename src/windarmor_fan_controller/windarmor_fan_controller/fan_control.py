@@ -107,6 +107,21 @@ class FanControlOutput:
     auto_active: bool
 
 
+@dataclass(frozen=True)
+class FanSafetySnapshot:
+    """Read-only view of the existing core; it owns no control state."""
+
+    e_stop_latched: bool
+    control_state: str
+    enabled_observed: bool
+    enabled: bool
+    manual_armed: bool
+    legacy_auto_requested: bool
+    legacy_auto_active: bool
+    safety_reason: str
+    passive_for_takeover: bool
+
+
 def attitude_activities(
     relative_roll_rad: float,
     relative_pitch_rad: float,
@@ -214,6 +229,29 @@ class FanControlCore:
     @property
     def manual_neutral_received(self) -> bool:
         return self._manual_neutral_received
+
+    @property
+    def safety_snapshot(self) -> FanSafetySnapshot:
+        """Return authoritative safety readback without advancing control."""
+
+        passive = (
+            not self.e_stop_latched
+            and not self.manual_armed
+            and not self.auto_requested
+            and self.state
+            in (FanControlState.SAFE_STOP, FanControlState.MANUAL_DISARMED)
+        )
+        return FanSafetySnapshot(
+            e_stop_latched=self.e_stop_latched,
+            control_state=self.state.value,
+            enabled_observed=self._fan_enabled is not None,
+            enabled=self._fan_enabled is True,
+            manual_armed=self.manual_armed,
+            legacy_auto_requested=self.auto_requested,
+            legacy_auto_active=self.state is FanControlState.AUTO_ACTIVE,
+            safety_reason=self._safety_reason,
+            passive_for_takeover=passive,
+        )
 
     def _stop_immediately(self) -> None:
         stop = self.config.fan_stop_pwm_us

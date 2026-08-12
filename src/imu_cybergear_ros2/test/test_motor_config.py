@@ -34,6 +34,7 @@ def test_default_config_preserves_current_motor_mapping_and_control_values() -> 
     assert config.safety.motor_feedback_startup_grace_sec == 3.0
     assert config.safety.motor_feedback_check_rate_hz == 10.0
     assert config.ros.motor_feedback_structured_topic == "/motors/feedback"
+    assert config.ros.motor_safety_state_topic == "/motors/safety_state"
     assert config.ros.motor_feedback_publish_rate_hz == 10.0
     assert config.ros.motor_feedback_observer_freshness_sec == 0.5
     assert config.safety.reconnect_on_disconnect

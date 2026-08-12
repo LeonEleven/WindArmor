@@ -89,11 +89,7 @@ run_stage() {
       section "Fan safety regression"
       source_workspace
       "${WINDARMOR_CI_PYTHON}" -m pytest \
-        src/windarmor_fan_controller/test/test_fan_control.py \
-        src/windarmor_fan_controller/test/test_pwm.py \
-        src/windarmor_fan_controller/test/test_fan_keyboard.py \
-        src/windarmor_fan_controller/test/test_interface_routing.py \
-        -q
+        src/windarmor_fan_controller/test -q
       ;;
     flight-tests)
       section "Flight API pure-Python tests"

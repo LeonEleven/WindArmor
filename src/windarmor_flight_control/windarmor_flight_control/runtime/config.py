@@ -18,6 +18,8 @@ PARAMETER_DEFAULTS = {
     "flight_fan_output_freshness_sec": 1.0,
     "flight_fan_state_freshness_sec": 1.0,
     "flight_control_state_freshness_sec": 1.0,
+    "flight_motor_safety_state_freshness_sec": 1.0,
+    "flight_fan_safety_state_freshness_sec": 1.0,
     "fan_observer_min_pwm_us": 800.0,
     "fan_observer_max_pwm_us": 2200.0,
     "controller_factory": (
@@ -29,12 +31,18 @@ PARAMETER_DEFAULTS = {
     "imu_zero_generation_topic": "/imu/zero_generation",
     "motor_feedback_topic": "/motors/feedback",
     "motor_control_mode_topic": "/motors/control_mode",
+    "motor_safety_state_topic": "/motors/safety_state",
     "fan_status_pwm_topic": "/fans/status_pwm",
     "fan_enabled_topic": "/fans/enabled",
     "fan_control_state_topic": "/fans/control_state",
+    "fan_safety_state_topic": "/fans/safety_state",
     "e_stop_topic": "/e_stop",
     "runtime_status_topic": "/flight_control/dry_run/status",
     "command_preview_topic": "/flight_control/dry_run/command_preview",
+    "authority_status_topic": "/flight_control/authority/status",
+    "authority_prepare_service": "/flight_control/authority/prepare",
+    "authority_cancel_service": "/flight_control/authority/cancel",
+    "authority_reset_inhibit_service": "/flight_control/authority/reset_inhibit",
 }
 
 
@@ -47,6 +55,8 @@ class RuntimeConfig:
     flight_fan_output_freshness_sec: float
     flight_fan_state_freshness_sec: float
     flight_control_state_freshness_sec: float
+    flight_motor_safety_state_freshness_sec: float
+    flight_fan_safety_state_freshness_sec: float
     fan_observer_min_pwm_us: float
     fan_observer_max_pwm_us: float
     controller_factory: str
@@ -56,12 +66,18 @@ class RuntimeConfig:
     imu_zero_generation_topic: str
     motor_feedback_topic: str
     motor_control_mode_topic: str
+    motor_safety_state_topic: str
     fan_status_pwm_topic: str
     fan_enabled_topic: str
     fan_control_state_topic: str
+    fan_safety_state_topic: str
     e_stop_topic: str
     runtime_status_topic: str
     command_preview_topic: str
+    authority_status_topic: str
+    authority_prepare_service: str
+    authority_cancel_service: str
+    authority_reset_inhibit_service: str
 
 
 POSITIVE_FIELDS = (
@@ -71,6 +87,8 @@ POSITIVE_FIELDS = (
     "flight_fan_output_freshness_sec",
     "flight_fan_state_freshness_sec",
     "flight_control_state_freshness_sec",
+    "flight_motor_safety_state_freshness_sec",
+    "flight_fan_safety_state_freshness_sec",
 )
 
 TOPIC_FIELDS = (
@@ -80,12 +98,18 @@ TOPIC_FIELDS = (
     "imu_zero_generation_topic",
     "motor_feedback_topic",
     "motor_control_mode_topic",
+    "motor_safety_state_topic",
     "fan_status_pwm_topic",
     "fan_enabled_topic",
     "fan_control_state_topic",
+    "fan_safety_state_topic",
     "e_stop_topic",
     "runtime_status_topic",
     "command_preview_topic",
+    "authority_status_topic",
+    "authority_prepare_service",
+    "authority_cancel_service",
+    "authority_reset_inhibit_service",
 )
 
 

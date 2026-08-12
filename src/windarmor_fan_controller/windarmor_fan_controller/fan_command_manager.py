@@ -11,6 +11,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, Int32, Int32MultiArray, String, UInt64
 from std_srvs.srv import SetBool, Trigger
+from windarmor_interfaces.msg import FanSafetyState
 
 from .fan_control import FanControlConfig, FanControlCore, FanControlOutput
 
@@ -68,6 +69,7 @@ class FanCommandManager(Node):
         self._core_lock = threading.RLock()
         self._last_pose_source_stamp_ns: Optional[int] = None
         self._last_observable_signature = None
+        self._safety_observation_sequence = 0
 
         state_qos = QoSProfile(
             depth=1,
@@ -92,6 +94,9 @@ class FanCommandManager(Node):
         )
         self._control_state_pub = self.create_publisher(
             String, "/fans/control_state", state_qos
+        )
+        self._safety_state_pub = self.create_publisher(
+            FanSafetyState, "/fans/safety_state", state_qos
         )
 
         self.create_subscription(
@@ -305,6 +310,7 @@ class FanCommandManager(Node):
         if output is None:
             with self._core_lock:
                 output = self._core.output
+        self._publish_safety_state()
         signature = (
             output.state,
             output.auto_enabled,
@@ -330,6 +336,32 @@ class FanCommandManager(Node):
         target = Int32MultiArray()
         target.data = list(output.auto_target_pwm)
         self._auto_target_pub.publish(target)
+
+    def _publish_safety_state(self) -> None:
+        """Publish a core snapshot without producing or advancing PWM output."""
+
+        try:
+            with self._core_lock:
+                snapshot = self._core.safety_snapshot
+                sequence = self._safety_observation_sequence
+                self._safety_observation_sequence += 1
+            message = FanSafetyState()
+            message.stamp = self.get_clock().now().to_msg()
+            message.observation_sequence = sequence
+            message.e_stop_latched = snapshot.e_stop_latched
+            message.control_state = snapshot.control_state
+            message.enabled_observed = snapshot.enabled_observed
+            message.enabled = snapshot.enabled
+            message.manual_armed = snapshot.manual_armed
+            message.legacy_auto_requested = snapshot.legacy_auto_requested
+            message.legacy_auto_active = snapshot.legacy_auto_active
+            message.safety_reason = snapshot.safety_reason
+            message.passive_for_takeover = snapshot.passive_for_takeover
+            self._safety_state_pub.publish(message)
+        except Exception as exc:
+            self.get_logger().error(
+                f"发布风扇安全只读快照失败（不改变 core 或 PWM）: {exc}"
+            )
 
     def destroy_node(self) -> None:
         with self._core_lock:

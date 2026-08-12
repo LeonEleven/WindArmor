@@ -56,7 +56,11 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Imu
 from std_msgs.msg import Bool, Float64MultiArray, String, UInt64
 from std_srvs.srv import Trigger, SetBool
-from windarmor_interfaces.msg import MotorFeedback, MotorFeedbackArray
+from windarmor_interfaces.msg import (
+    MotorFeedback,
+    MotorFeedbackArray,
+    MotorSafetyState,
+)
 
 from .controller_state import (
     ControllerState,
@@ -79,6 +83,7 @@ from .motor_manager import MotorManager, clamp, deg_to_rad
 from .motor_motion import auto_attitude_commands
 from .safety_monitor import SafetyMonitor
 from .structured_feedback import build_structured_feedback
+from .structured_safety import build_motor_safety_snapshot
 from .transport_recovery import (
     TransportEvent,
     TransportEventType,
@@ -218,6 +223,7 @@ class ImuMotorControllerNode(LifecycleNode):
         self.declare_parameter(
             "motor_feedback_structured_topic", "/motors/feedback"
         )
+        self.declare_parameter("motor_safety_state_topic", "/motors/safety_state")
         self.declare_parameter("motor_feedback_publish_rate_hz", 10.0)
         self.declare_parameter("motor_feedback_observer_freshness_sec", 0.5)
 
@@ -232,6 +238,7 @@ class ImuMotorControllerNode(LifecycleNode):
         self._driver = None
         self._motor_status_pub = None
         self._motor_feedback_structured_pub = None
+        self._motor_safety_state_pub = None
         self._motor_feedback_structured_timer = None
         self._system_e_stop_pub = None
         self._relative_attitude_pub = None
@@ -273,6 +280,9 @@ class ImuMotorControllerNode(LifecycleNode):
         self._motor_feedback = {}
         self._motor_feedback_received_at: Dict[int, float] = {}
         self._motor_feedback_structured_sequence = 0
+        # This sequence spans lifecycle reconfigure within the same process so
+        # observers never accept an old safety snapshot as a new one.
+        self._motor_safety_state_sequence = 0
         self._motor_protection_flags: Dict[int, bool] = {}
         self._motor_temperature_warning_flags: Dict[int, bool] = {}
         self._motor_safety_fault_active = False
@@ -424,6 +434,11 @@ class ImuMotorControllerNode(LifecycleNode):
                 depth=1,
                 reliability=ReliabilityPolicy.RELIABLE,
                 durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            )
+            self._motor_safety_state_pub = self.create_publisher(
+                MotorSafetyState,
+                ros_config.motor_safety_state_topic,
+                state_qos,
             )
             self._relative_attitude_pub = self.create_publisher(
                 Vector3Stamped, ros_config.relative_attitude_topic, 20
@@ -767,6 +782,7 @@ class ImuMotorControllerNode(LifecycleNode):
             for attr in (
                 "_motor_status_pub",
                 "_motor_feedback_structured_pub",
+                "_motor_safety_state_pub",
                 "_system_e_stop_pub",
                 "_relative_attitude_pub",
                 "_imu_zero_generation_pub",
@@ -902,6 +918,45 @@ class ImuMotorControllerNode(LifecycleNode):
             active=self._is_active,
         )
         self._motor_mode_pub.publish(msg)
+        self._publish_motor_safety_state()
+
+    def _publish_motor_safety_state(self) -> None:
+        """Publish authoritative readback without touching the motor driver."""
+
+        publisher = self._motor_safety_state_pub
+        if publisher is None:
+            return
+        try:
+            with self._lock:
+                snapshot = build_motor_safety_snapshot(
+                    self._state_mgr,
+                    node_active=self._is_active,
+                    feedback_safety_fault_latched=(
+                        self._motor_safety_fault_active
+                    ),
+                )
+                sequence = self._motor_safety_state_sequence
+                self._motor_safety_state_sequence += 1
+            message = MotorSafetyState()
+            message.stamp = self.get_clock().now().to_msg()
+            message.observation_sequence = sequence
+            message.node_active = snapshot.node_active
+            message.controller_state = snapshot.controller_state
+            message.public_control_mode = snapshot.public_control_mode
+            message.e_stop_latched = snapshot.e_stop_latched
+            message.error_latched = snapshot.error_latched
+            message.feedback_safety_fault_latched = (
+                snapshot.feedback_safety_fault_latched
+            )
+            message.transition_present = snapshot.transition_present
+            message.transition_sequence = snapshot.transition_sequence
+            message.transition_reason = snapshot.transition_reason
+            message.transition_source = snapshot.transition_source
+            publisher.publish(message)
+        except Exception as exc:
+            self.get_logger().error(
+                f"发布电机安全只读快照失败（不改变安全状态）: {exc}"
+            )
 
     def _publish_structured_motor_feedback(self) -> None:
         """Publish a complete observer snapshot without any driver operation."""

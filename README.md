@@ -14,32 +14,51 @@ WindArmor 当前把两个已经过实机测试的前置项目整合为一个 ROS
   最终整机正常功能回归。
 
 当前开发目标为 `v0.4.0 Flight Control Integration Foundation`。开发中的
-Flight API 保持纯 Python 算法边界；Task 2 已接入结构化只读 ROS state 和只能
-DRY_RUN 的 observer runtime，但仍没有真实 actuator command path，也不改变
+Flight API 保持纯 Python 算法边界；Task 3 已接入权威 motor/fan safety readback、
+全局 E-STOP 聚合以及只允许准备到 `READY_TO_TAKEOVER` 的 authority runtime，
+但仍没有真实 actuator command path，也不改变
 v0.3.2 的电机、风扇、IMU 或安全运行语义。
 架构依据见 [Flight Control Architecture](docs/FLIGHT_CONTROL_ARCHITECTURE.md)，
 算法开发接口见 [Flight Control API](docs/FLIGHT_CONTROL_API.md)。
 
-### v0.4.0 DRY_RUN Flight Runtime
+### v0.4.0 Authority Preparation Runtime
 
-电机控制节点新增 `/motors/feedback` 结构化完整 snapshot，同时保留旧
-`/motor/status`。新 topic 只读取现有合法 feedback cache 和本地 monotonic 接收
+电机控制节点提供 `/motors/feedback` 结构化完整 snapshot，同时保留旧
+`/motor/status`；另以 transient-local `/motors/safety_state` 发布 lifecycle、
+`ControllerState`、公开模式、E-STOP/ERROR/feedback safety latch 和最近 transition。
+这些 topic 只读取现有合法 feedback cache 与内存安全状态和本地 monotonic 接收
 时间，不触发额外 CAN read，也不改变 feedback safety、ERROR 或 reconnect。
 observer freshness 默认 `0.5 s`，与保持为 `0.0` 的底层
 `motor_feedback_timeout_sec` 完全独立。
 
-`windarmor_flight_control` 的 runtime 订阅 IMU、电机、风扇、公开控制模式和
-E-STOP trigger observation，按本地 monotonic 时间构造不可变 `FlightState`，再由
+风扇 command manager 以 transient-local `/fans/safety_state` 直接发布
+`FanControlCore.e_stop_latched`、enabled presence、MANUAL/legacy AUTO ownership、
+safe-stop reason 和 passive takeover predicate；publisher 不推进控制 tick 或 PWM。
+
+`windarmor_flight_control` 的 runtime 订阅 IMU、电机、风扇、两路权威 safety
+readback、公开控制模式和 E-STOP trigger observation，按本地 monotonic 时间构造
+不可变 `FlightState`，再由
 固定 timer 调用配置的纯 Python controller factory。它只发布：
 
 ```text
 /flight_control/dry_run/status
 /flight_control/dry_run/command_preview
+/flight_control/authority/status
 ```
 
-Runtime 始终保持 authority `NONE`、generation `0`、
+本地服务 `/flight_control/authority/prepare`、`cancel` 和 `reset_inhibit` 只操作
+Flight authority state machine。状态可从 `DRY_RUN` 经 `ARMING` 到
+`READY_TO_TAKEOVER`；`READY_TO_TAKEOVER` 只表示 preflight 已满足，不表示真实 owner
+handoff。Task 3 production 明确发布 `takeover_supported=false`，没有 motor/fan
+owner acknowledgement 输入，因此不能进入 `ACTIVE`。
+
+全局 E-STOP 只有在两路权威 readback 均已观测、新鲜且 latch 都为 false 时才是
+`False`；任一路 latch true 或新的 `/e_stop=True` 立即为 `True`；其他情况为
+`None`。`/e_stop=False`、MANUAL mode 或非 E-STOP fan state 都不能单独证明解除。
+
+Runtime 在 `DRY_RUN`、`ARMING` 和 `READY_TO_TAKEOVER` 始终保持 authority `NONE`、generation `0`、
 `flight_control_active=false` 和 `actuation_allowed=false`。它没有 actuator
-publisher、service client、enable/zero/recovery 调用或实际 command dispatch；
+publisher、hardware service client、enable/zero/recovery 调用或实际 command dispatch；
 也没有加入统一 bringup 默认路径。独立 launch 只启动 observer runtime：
 
 ```bash

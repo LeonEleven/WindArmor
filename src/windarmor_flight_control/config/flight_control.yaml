@@ -10,6 +10,8 @@ flight_control_runtime_node:
     flight_fan_output_freshness_sec: 1.0
     flight_fan_state_freshness_sec: 1.0
     flight_control_state_freshness_sec: 1.0
+    flight_motor_safety_state_freshness_sec: 1.0
+    flight_fan_safety_state_freshness_sec: 1.0
 
     # Normalize observed applied PWM only; no command mapping exists here.
     fan_observer_min_pwm_us: 800.0
@@ -23,9 +25,15 @@ flight_control_runtime_node:
     imu_zero_generation_topic: "/imu/zero_generation"
     motor_feedback_topic: "/motors/feedback"
     motor_control_mode_topic: "/motors/control_mode"
+    motor_safety_state_topic: "/motors/safety_state"
     fan_status_pwm_topic: "/fans/status_pwm"
     fan_enabled_topic: "/fans/enabled"
     fan_control_state_topic: "/fans/control_state"
+    fan_safety_state_topic: "/fans/safety_state"
     e_stop_topic: "/e_stop"
     runtime_status_topic: "/flight_control/dry_run/status"
     command_preview_topic: "/flight_control/dry_run/command_preview"
+    authority_status_topic: "/flight_control/authority/status"
+    authority_prepare_service: "/flight_control/authority/prepare"
+    authority_cancel_service: "/flight_control/authority/cancel"
+    authority_reset_inhibit_service: "/flight_control/authority/reset_inhibit"

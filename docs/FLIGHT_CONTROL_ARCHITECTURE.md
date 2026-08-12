@@ -65,6 +65,13 @@ control timer 每 tick 构造一次不可变 snapshot，再调用算法与校验
 只发布带 `dry_run`/`preview` 语义的结构化观察消息，不拥有 authority，没有
 actuator publisher、service client 或 dispatch。现有 bringup 默认路径不启动它。
 
+v0.4.0 Task 3 增加 observer-only `/motors/safety_state` 与
+`/fans/safety_state`，并在 pure core 中建立 authority/preflight/envelope 契约。
+production Runtime 允许 `DRY_RUN -> ARMING -> READY_TO_TAKEOVER`，但 hard-code
+`takeover_supported=false`，没有 owner acknowledgement path，所以不可能进入
+`ACTIVE`、声明 `FLIGHT_CONTROL` 或 dispatch actuator。真正的 atomic owner handoff
+与 actuator adapter 属于 Task 4。
+
 `windarmor_flight_control/core` 与 `algorithms` 禁止依赖 `rclpy`、ROS message
 class、CAN/serial library、GPIO/PWM backend、CyberGear driver、SocketCAN，
 也禁止包含 ROS topic 或 service 名称。ROS message 与纯模型之间的转换属于
@@ -135,6 +142,26 @@ Flight failure 后不得自动把 authority 赋予 MANUAL。后续 authority run
 控制必须经过明确的新授权流程。E-STOP 和 ERROR 的裁决优先级永远高于任何
 command authority。
 
+Task 3 authority state machine 为：
+
+```text
+DISABLED -> DRY_RUN -> ARMING -> READY_TO_TAKEOVER
+                         |              |
+                         +-----> INHIBITED <----+
+```
+
+`prepare` 在进入 ARMING 时分配唯一正 generation；`0` 永远保留给 no-authority。
+cancel/inhibit 立即使 attempt generation 失效，reset-inhibit 只返回 DRY_RUN，之后
+必须重新 prepare。只有 Task 4 的 motor 与 fan owner 对当前 generation 都确认后，
+pure contract 才允许进入 ACTIVE；旧 generation、缺少 ack 或 duplicate ack 都不能
+产生 grant。
+
+未来 grant 必须记录 `arming_cutoff_state_sequence`，在 owner handoff 后对 controller
+执行一次 `reset()`，并等待 `FlightState.sequence > cutoff` 后才生成该 generation
+第一条 `FlightCommandEnvelope`。ARMING/READY preview 不缓存、不复用。envelope
+还要求当前非零 generation、严格递增 command sequence、有限 monotonic timestamp
+和合法完整 `FlightCommand`。
+
 ## 不可妥协的安全契约
 
 - ERROR 不自动恢复；
@@ -170,7 +197,30 @@ ROS 或硬件类型泄漏进 core。
 IMU raw 与 relative roll/pitch 只按相同 source stamp 配对；control timestamp、
 `dt` 和所有 freshness 都使用 runtime 本地 monotonic 时间。fan PWM 只作为实际
 应用输出观察并归一化，不代表 RPM 或 thrust。fan 与 motor mode 过期后回到
-`None`/unknown。现有 `/e_stop` 是触发通道而非权威解除回读，因此 Runtime 启动为
-`None`，只锁存收到的 `True`，不会把 `False` 或 silence 推断为已解除。
+`None`/unknown。现有 `/e_stop` 是触发通道而非权威解除回读；Task 2 因而只锁存
+`True`。Task 3 仍不接受 `False` 或 silence 作为解除证据，而改由下述两路权威
+readback 聚合完成解除判断。
+
+## Task 3 权威安全观测
+
+motor readback 的 E-STOP/ERROR 分别来自既有 `ControllerState` 和 feedback safety
+fault latch；fan readback 的 E-STOP 直接来自唯一的
+`FanControlCore.e_stop_latched`。两者都使用 reliable transient-local QoS，publisher
+只读取内存快照，不参与 recovery、owner arbitration 或 hardware output。
+
+Runtime 的全局 E-STOP 聚合规则是：任一权威 latch true 为 `True`；两路都已观测、
+新鲜且 false 才为 `False`；其余为 `None`。`/e_stop=True` 作为即时风险证据，必须
+等两路在 trigger 之后给出新鲜 false 才能解除；`/e_stop=False` 永远不能单独清除。
+readback freshness 使用 Runtime 本地 monotonic receive time，且不改变 motor
+watchdog、feedback safety、fan timeout 或 `motor_feedback_timeout_sec`。
+
+preflight 要求 IMU 与全部 required motor 合法、新鲜、健康；全局 E-STOP 明确
+false；motor node active、无 ERROR/feedback latch 且公开模式为 MANUAL；fan enabled
+明确为 true、无 E-STOP、legacy AUTO 未 requested/active、MANUAL 未 armed 且处于
+既有 passive safe-stop state。稳定 reason code 会发布到 authority status。
+
+ARMING 初期可以等待尚未出现的 observation；明确危险、已观测 safety readback
+过期或已经满足过的 required inputs 再次失效会锁存 INHIBITED。READY 丢失任一
+preflight 条件必定进入 INHIBITED，不自动恢复。
 
 > Initial architecture baseline introduced for v0.4.0.

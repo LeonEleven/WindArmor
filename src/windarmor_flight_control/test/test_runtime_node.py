@@ -1,10 +1,15 @@
 import os
+from dataclasses import replace
 
 import pytest
 import rclpy
 
 from windarmor_flight_control.core.models import FanCommand, FlightCommand
+from windarmor_flight_control.core.authority import AuthorityState, CommandAuthority
+from windarmor_flight_control.core.preflight import FanSafetyReadback, MotorSafetyReadback
 from windarmor_flight_control.runtime.node import FlightControlRuntimeNode
+from windarmor_flight_control.runtime.state_aggregator import RuntimeSnapshot
+from windarmor_flight_control.testing import make_fake_flight_state
 
 
 class MutableClock:
@@ -60,6 +65,7 @@ def make_node(controller, clock):
     )
     node._status_pub = CapturingPublisher()
     node._preview_pub = CapturingPublisher()
+    node._authority_status_pub = CapturingPublisher()
     return node
 
 
@@ -188,7 +194,7 @@ def test_invalid_state_contract_inhibits_without_controller_call() -> None:
     controller = FakeController()
     node = make_node(controller, clock)
     try:
-        node._aggregator.build_snapshot = lambda _now: object()
+        node._aggregator.build_runtime_snapshot = lambda _now: object()
         clock.value = 10.01
         node._control_tick()
         assert node._controller_inhibited
@@ -215,5 +221,106 @@ def test_loader_failure_is_latched_but_observer_node_still_constructs() -> None:
         clock.value = 10.01
         node._control_tick()
         assert "injected loader" in node._status_pub.messages[-1].last_error
+    finally:
+        node.destroy_node()
+
+
+def ready_runtime_snapshot():
+    names = ("left_lift", "left_pitch", "right_pitch", "right_lift")
+    state = make_fake_flight_state(names)
+    state = replace(
+        state,
+        sequence=42,
+        fans=replace(state.fans, control_state="MANUAL_DISARMED"),
+        system=replace(
+            state.system,
+            command_authority=CommandAuthority.NONE,
+            authority_generation=0,
+            motor_control_mode="MANUAL",
+            fan_control_state="MANUAL_DISARMED",
+            flight_control_active=False,
+            actuation_allowed=False,
+        ),
+    )
+    return RuntimeSnapshot(
+        flight_state=state,
+        motor_safety=MotorSafetyReadback(
+            node_active=True,
+            controller_state="MANUAL_RUNNING",
+            public_control_mode="MANUAL",
+            e_stop_latched=False,
+            error_latched=False,
+            feedback_safety_fault_latched=False,
+        ),
+        fan_safety=FanSafetyReadback(
+            e_stop_latched=False,
+            control_state="MANUAL_DISARMED",
+            enabled_observed=True,
+            enabled=True,
+            manual_armed=False,
+            legacy_auto_requested=False,
+            legacy_auto_active=False,
+            passive_for_takeover=True,
+        ),
+        motor_safety_fresh=True,
+        fan_safety_fresh=True,
+    )
+
+
+def test_production_prepare_reaches_ready_but_never_claims_authority():
+    from std_srvs.srv import Trigger
+
+    clock = MutableClock()
+    controller = FakeController()
+    node = make_node(controller, clock)
+    try:
+        response = node._on_prepare(Trigger.Request(), Trigger.Response())
+        assert response.success
+        node._aggregator.build_runtime_snapshot = lambda _now: ready_runtime_snapshot()
+        clock.value = 10.01
+        node._control_tick()
+        assert node._authority.state is AuthorityState.READY_TO_TAKEOVER
+        status = node._authority_status_pub.messages[-1]
+        assert status.authority_state == "READY_TO_TAKEOVER"
+        assert status.command_authority == "NONE"
+        assert status.authority_generation == 0
+        assert status.attempt_present and status.attempt_generation > 0
+        assert status.preflight_ready
+        assert not status.takeover_supported
+        state = controller.updates[-1][0]
+        assert state.system.command_authority is CommandAuthority.NONE
+        assert not state.system.flight_control_active
+        assert not state.system.actuation_allowed
+    finally:
+        node.destroy_node()
+
+
+def test_ready_safety_loss_inhibits_without_auto_recovery():
+    from std_srvs.srv import Trigger
+
+    clock = MutableClock()
+    controller = FakeController()
+    node = make_node(controller, clock)
+    try:
+        node._on_prepare(Trigger.Request(), Trigger.Response())
+        current = ready_runtime_snapshot()
+        node._aggregator.build_runtime_snapshot = lambda _now: current
+        clock.value = 10.01
+        node._control_tick()
+        assert node._authority.state is AuthorityState.READY_TO_TAKEOVER
+
+        current = replace(
+            current,
+            fan_safety=replace(current.fan_safety, enabled=False),
+        )
+        clock.value = 10.02
+        node._control_tick()
+        assert node._authority.state is AuthorityState.INHIBITED
+        assert node._controller_inhibited
+
+        current = ready_runtime_snapshot()
+        clock.value = 10.03
+        node._control_tick()
+        assert node._authority.state is AuthorityState.INHIBITED
     finally:
         node.destroy_node()

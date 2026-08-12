@@ -1,0 +1,13 @@
+# Authoritative, read-only motor safety snapshot.
+builtin_interfaces/Time stamp
+uint64 observation_sequence
+bool node_active
+string controller_state
+string public_control_mode
+bool e_stop_latched
+bool error_latched
+bool feedback_safety_fault_latched
+bool transition_present
+uint64 transition_sequence
+string transition_reason
+string transition_source
