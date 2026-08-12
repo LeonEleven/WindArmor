@@ -24,6 +24,7 @@ def normal(value=0.0):
 
 def envelope(**overrides):
     values = dict(
+        authority_epoch=100,
         generation=3,
         command_sequence=1,
         state_sequence=11,
@@ -36,6 +37,7 @@ def envelope(**overrides):
 
 def validate(value, **overrides):
     args = dict(
+        expected_authority_epoch=100,
         expected_generation=3,
         last_command_sequence=0,
         arming_cutoff_state_sequence=10,
@@ -54,6 +56,8 @@ def test_current_generation_increasing_sequence_and_commands_validate():
     "value",
     [
         envelope(generation=0),
+        envelope(authority_epoch=0),
+        envelope(authority_epoch=99),
         envelope(generation=2),
         envelope(command_sequence=0),
         envelope(command_sequence=-1),
@@ -87,7 +91,9 @@ def test_envelope_is_immutable_and_sequencer_never_reuses_pre_cutoff_target():
         value.generation = 4
 
     sequencer = CommandEnvelopeSequencer(NAMES)
-    sequencer.activate(generation=8, state_sequence_cutoff=20)
+    sequencer.activate(
+        authority_epoch=100, generation=8, state_sequence_cutoff=20
+    )
     with pytest.raises(FlightValidationError):
         sequencer.build(
             state_sequence=20,
@@ -100,6 +106,7 @@ def test_envelope_is_immutable_and_sequencer_never_reuses_pre_cutoff_target():
         command=normal(0.7),
     )
     assert first.command_sequence == 0
+    assert first.authority_epoch == 100
     assert set(first.command.motor_positions_rad.values()) == {0.7}
     sequencer.invalidate()
     with pytest.raises(FlightValidationError):

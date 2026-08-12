@@ -88,6 +88,7 @@ class FanSystemState:
 @dataclass(frozen=True)
 class SystemState:
     command_authority: CommandAuthority
+    authority_epoch: int
     authority_generation: int
     e_stop_active: bool | None
     motor_control_mode: str | None

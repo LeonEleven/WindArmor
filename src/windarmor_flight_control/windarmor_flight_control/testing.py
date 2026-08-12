@@ -92,6 +92,7 @@ def make_fake_flight_state(
         ),
         system=SystemState(
             command_authority=CommandAuthority.FLIGHT_CONTROL,
+            authority_epoch=1,
             authority_generation=1,
             e_stop_active=False,
             motor_control_mode="AUTO",
@@ -133,6 +134,7 @@ def make_unobserved_flight_state(motor_names: Iterable[str]) -> FlightState:
         ),
         system=SystemState(
             command_authority=CommandAuthority.NONE,
+            authority_epoch=0,
             authority_generation=0,
             e_stop_active=None,
             motor_control_mode=None,

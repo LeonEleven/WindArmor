@@ -1,0 +1,12 @@
+# Authoritative ordinary-command ownership readback from one actuator owner.
+builtin_interfaces/Time stamp
+uint64 source_epoch
+uint64 observation_sequence
+string owner_domain
+string ownership_phase
+bool authority_present
+uint64 authority_epoch
+uint64 generation
+bool last_accepted_flight_command_present
+uint64 last_accepted_flight_command_sequence
+float64 last_valid_flight_command_age_sec

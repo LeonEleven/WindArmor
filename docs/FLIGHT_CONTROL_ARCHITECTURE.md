@@ -72,10 +72,15 @@ production Runtime 允许 `DRY_RUN -> ARMING -> READY_TO_TAKEOVER`，但 hard-co
 `ACTIVE`、声明 `FLIGHT_CONTROL` 或 dispatch actuator。真正的 atomic owner handoff
 与 actuator adapter 属于 Task 4。
 
+v0.4.0 Task 4 实现该 adapter，但以 `flight_takeover_enabled=false` 默认关闭。
+开关关闭时 Runtime 不创建 command publisher 或 ownership clients，安全行为与
+Task 3.1 等价；开关打开只允许走 Runtime ownership services / envelope、既有
+`MotorManager` / `FanCommandManager` 和既有安全层，Runtime 仍不接触硬件 backend。
+
 `windarmor_flight_control/core` 与 `algorithms` 禁止依赖 `rclpy`、ROS message
 class、CAN/serial library、GPIO/PWM backend、CyberGear driver、SocketCAN，
 也禁止包含 ROS topic 或 service 名称。ROS message 与纯模型之间的转换属于
-未来 adapter，不属于算法。
+runtime adapter，不属于算法。
 
 ## Flight API 边界
 
@@ -101,8 +106,8 @@ class FlightController:
 
 safe-stop command 与 normal command 是互斥语义。`FlightCommand.safe_stop()`
 不携带 motor 或 fan target，只表示算法主动撤销继续控制的意图；runtime 不得
-把它解释为可执行 actuator frame，不得复制、缓存或重发上一帧目标。Task 2
-DRY_RUN 只观察该意图；后续 authority runtime 才能将其解释为撤销或 inhibit
+把它解释为 normal actuator frame，不得复制、缓存或重发上一帧目标。Task 2
+DRY_RUN 只观察该意图；ACTIVE authority runtime 将其解释为撤销或 inhibit
 Flight authority 的请求，再通过既有安全层进入安全状态。safe-stop 不是 hardware
 E-STOP，也不能清除 ERROR 或恢复控制模式。
 
@@ -129,42 +134,74 @@ FLIGHT_CONTROL
 ```
 
 同一时刻只能有一个普通 command owner。`CommandAuthority` 与既有
-`ControllerState` 正交：不得给现有状态机新增 `FLIGHT_RUNNING`；未来
+`ControllerState` 正交：不得给现有状态机新增 `FLIGHT_RUNNING`；
 `FLIGHT_CONTROL` 可以复用 `AUTO_RUNNING` 的硬件安全语义，但必须由 authority
 明确区分命令来源。
 
-每次 authority grant 必须带单调 generation。runtime 只能接受当前 generation
-的命令，旧 generation 命令永久拒绝；sequence 用于同 generation 内识别旧帧或
-乱序帧。Task 1 只定义纯数据模型，不把 generation 接入真实执行路径。
+正式 authority identity 是 `(authority_epoch, generation)`。`authority_epoch` 在
+Runtime 进程实例构造时由可注入的 boot-session monotonic source 生成一次，reset
+不改变，Runtime 重启产生新 epoch；`0` 永远非法。owner 对旧 epoch 永久拒绝，且
+newer epoch 不能抢占仍 active 的旧 Flight owner。command sequence 用于同一 token
+内拒绝重复或乱序帧。
 
-Flight failure 后不得自动把 authority 赋予 MANUAL。后续 authority runtime 的
+Flight failure 后不得自动把 authority 赋予 MANUAL。authority runtime 的
 `INHIBITED` 不得因输入重新新鲜或 transport 恢复而自动回到 `ACTIVE`；重新进入
 控制必须经过明确的新授权流程。E-STOP 和 ERROR 的裁决优先级永远高于任何
 command authority。
 
-Task 3 authority state machine 为：
+Task 4 authority state machine 为：
 
 ```text
 DISABLED -> DRY_RUN -> ARMING -> READY_TO_TAKEOVER
+                                      |
+                                      v
+                                   ACTIVE
                          |              |
                          +-----> INHIBITED <----+
 ```
 
-`prepare` 在进入 ARMING 时分配唯一正 generation；`0` 永远保留给 no-authority。
+`prepare` 在进入 ARMING 时分配当前 epoch 内唯一正 generation；`0` 永远保留给 no-authority。
 cancel/inhibit 立即使 attempt generation 失效，reset-inhibit 只返回 DRY_RUN，之后
 必须重新 prepare。Task 3.1 的 pure contract 将 motor/fan owner ack 限定为诊断
 记录：ack 只保存 owner、当前正 generation 和 owner 观察到的 state sequence；两路
 ack 完成仍保持 READY，不能决定 cutoff 或产生 grant。旧 generation、缺少 ack、
 duplicate ack、cancel/inhibit 后的 ack 都被拒绝。
 
-未来 grant 必须通过单独的 atomic commit：仅在 READY、当前 generation、两路 ack
+grant 必须通过单独的 atomic commit：仅在 READY、当前 token、两路 commit ack
 齐全且 Runtime 当前 `FlightState.sequence` 不早于 ready barrier 时提交一次。提交
 瞬间的 Runtime sequence 才成为不可变 `arming_cutoff_state_sequence`；成功结果只
 产生一次 controller reset 与丢弃 pre-commit preview 的要求，pure authority core
 不导入具体算法。之后必须等待 `FlightState.sequence > cutoff` 才生成该 generation
 第一条 `FlightCommandEnvelope`。ARMING/READY preview 不缓存、不复用。envelope
-还要求当前非零 generation、严格递增 command sequence、有限 monotonic timestamp
+还要求当前非零 epoch/generation、严格递增 command sequence、有限 monotonic timestamp
 和合法完整 `FlightCommand`。
+
+## Task 4 Owner 与 actuator adapter
+
+Motor owner 为 `MANUAL / LEGACY_AUTO / NONE / FLIGHT_RESERVED /
+FLIGHT_CONTROL`，fan owner 为 `LEGACY_MANUAL / LEGACY_AUTO / NONE /
+FLIGHT_RESERVED / FLIGHT_CONTROL`。reserve 先校验 token 与本地安全状态，再冻结或
+safe-stop、丢弃旧目标并阻止 legacy command；两边 reserve 成功后才能 commit。
+commit response 才是 owner acknowledgement，owner readback 还必须确认同一 token。
+任何失败都 best-effort revoke 双方，不能 fallback 到 legacy owner。
+
+atomic Runtime commit 记录当时最新 state sequence 为 cutoff，controller 只重置
+一次，且 envelope sequencer 只接受新于 cutoff 的状态。normal envelope 携带完整
+motor frame 与 fan payload；safe-stop envelope 不携带任何 actuator payload。motor
+和 fan 独立校验 token、严格递增 command sequence 和 payload，只有合法接收才刷新
+本地 monotonic lease。
+
+Motor `MotionSource.FLIGHT` 不增加 `ControllerState.FLIGHT_RUNNING`，而是在
+`AUTO_RUNNING + owner=FLIGHT_CONTROL` 下复用唯一 motion timer、软限位、最大步长、
+mode/motor speed limit 与现有写失败 ERROR 路径。fan Flight source 不创建第二个
+GPIO controller，继续由 manager 的唯一 command publisher 和既有 rise/fall slew
+输出。`[0,1]` fan command 是无量纲 command intent，不是 RPM 或 thrust；默认上限
+不超过既有 legacy AUTO max。
+
+owner lease timeout、owner readback timeout/process epoch change、Runtime 消失、
+safe-stop、E-STOP、ERROR、关键 safety stale/unknown、算法或 envelope 异常都会
+stop/hold、清除 token，并使 Runtime 进入 `INHIBITED`。reset-inhibit 后仍需完整的
+新 prepare/reserve/commit；legacy owner 也必须由 operator 显式 reclaim。
 
 ## 不可妥协的安全契约
 
@@ -173,12 +210,12 @@ duplicate ack、cancel/inhibit 后的 ack 都被拒绝。
 - 不自动恢复 MANUAL、AUTO 或 HOME，也不重发旧目标；
 - Flight Runtime 不得清除 ERROR 或 E-STOP，不得 enable hardware 或 set zero；
 - Flight Runtime 和算法不得直接访问 CyberGear driver、CAN、GPIO 或 PWM；
-- 未来 flight motor command 必须进入现有 `MotorManager` 安全路径；
-- 未来 flight fan command 必须进入现有 fan command manager；
+- flight motor command 必须进入现有 `MotorManager` 安全路径；
+- flight fan command 必须进入现有 fan command manager；
 - runtime 校验与 authority 不能绕过电机/风扇状态机、看门狗、软限位、停用或
   安全退出；
 - `request_safe_stop` 只表示算法主动放弃继续控制，且不得携带 actuator payload。
-  Task 2 只观察它；后续 authority runtime 必须将其导向既有安全停止路径。它不
+  DRY_RUN 只观察它；ACTIVE Runtime 必须将其导向既有安全停止路径。它不
   等同于硬件 E-STOP，也不是 ERROR recovery；
 - 不从 torque 推导 `current_a`，不创建未经验证的 RPM 或 thrust；
 - 没有真实反馈时必须使用 presence/validity 与 `None` 表示 unknown，不能用
@@ -235,9 +272,10 @@ ARMING 初期可以等待尚未出现的 observation；明确危险、已观测 
 过期或已经满足过的 required inputs 再次失效会锁存 INHIBITED。READY 丢失任一
 preflight 条件必定进入 INHIBITED，不自动恢复。
 
-Task 3.1 production 仍固定 `takeover_supported=false`，没有 owner ack/atomic commit
-service、topic 或 callback；因此 `MotionSource.FLIGHT`、fan FLIGHT source、ACTIVE 和
-actuator dispatch 仍不存在。Runtime 在全部现有状态继续发布 authority `NONE`、
-generation `0`、`flight_control_active=false`、`actuation_allowed=false`。
+Task 4 production 具有 owner handoff 与 envelope adapter，但配置仍固定默认
+`flight_takeover_enabled=false`。默认 launch 因而不创建这些接管资源，继续发布
+authority `NONE`、generation `0`、`flight_control_active=false` 和
+`actuation_allowed=false`。所有 Task 4 验证均为 pure/fake/in-memory 软件验证；
+真实 CAN、串口、GPIO/PWM、ESC、电机、风扇与整机 takeover 尚未验证。
 
 > Initial architecture baseline introduced for v0.4.0.

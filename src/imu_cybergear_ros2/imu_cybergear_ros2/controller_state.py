@@ -37,6 +37,8 @@ class TransitionReason(str, Enum):
     MOTOR_INIT_FAILURE = "motor_init_failure"
     USER_MODE_TOGGLE = "user_mode_toggle"
     HOME_REQUEST = "home_request"
+    FLIGHT_OWNERSHIP_COMMIT = "flight_ownership_commit"
+    FLIGHT_OWNERSHIP_REVOKE = "flight_ownership_revoke"
     IMU_WATCHDOG_TIMEOUT = "imu_watchdog_timeout"
     USER_ESTOP = "user_estop"
     TOPIC_ESTOP = "topic_estop"

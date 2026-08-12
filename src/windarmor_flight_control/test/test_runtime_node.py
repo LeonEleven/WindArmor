@@ -235,6 +235,7 @@ def ready_runtime_snapshot():
         system=replace(
             state.system,
             command_authority=CommandAuthority.NONE,
+            authority_epoch=0,
             authority_generation=0,
             motor_control_mode="MANUAL",
             fan_control_state="MANUAL_DISARMED",

@@ -1,0 +1,9 @@
+uint64 authority_epoch
+uint64 generation
+uint64 runtime_state_sequence
+---
+bool success
+string reason_code
+uint64 authority_epoch
+uint64 generation
+uint64 owner_observation_sequence

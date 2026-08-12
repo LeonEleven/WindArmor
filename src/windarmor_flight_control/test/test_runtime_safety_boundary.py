@@ -33,7 +33,7 @@ def test_runtime_source_contains_no_actuator_topic_or_service_name() -> None:
     assert not literals & ACTUATOR_NAMES
 
 
-def test_runtime_has_only_three_observation_publishers_no_clients_and_local_services() -> None:
+def test_runtime_adds_only_structured_flight_transport_and_owner_clients() -> None:
     tree = ast.parse(NODE_PATH.read_text(encoding="utf-8"))
     calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
 
@@ -41,22 +41,29 @@ def test_runtime_has_only_three_observation_publishers_no_clients_and_local_serv
         return call.func.attr if isinstance(call.func, ast.Attribute) else None
 
     publisher_calls = [call for call in calls if method_name(call) == "create_publisher"]
-    assert len(publisher_calls) == 3
+    assert len(publisher_calls) == 4
     assert {
         call.args[0].id
         for call in publisher_calls
         if call.args and isinstance(call.args[0], ast.Name)
-    } == {"FlightRuntimeStatus", "FlightCommandPreview", "FlightAuthorityStatus"}
-    assert not any(method_name(call) == "create_client" for call in calls)
+    } == {
+        "FlightRuntimeStatus",
+        "FlightCommandPreview",
+        "FlightAuthorityStatus",
+        "FlightCommandEnvelopeMessage",
+    }
+    assert len([call for call in calls if method_name(call) == "create_client"]) == 6
     assert len([call for call in calls if method_name(call) == "create_service"]) == 3
 
 
-def test_runtime_does_not_define_task3_authority_or_actuator_sources() -> None:
+def test_runtime_uses_owner_protocol_and_never_imports_hardware_backends() -> None:
     text = "\n".join(
         path.read_text(encoding="utf-8") for path in sorted(RUNTIME_ROOT.glob("*.py"))
     )
     assert "MotionSource.FLIGHT" not in text
-    assert "CommandAuthority.FLIGHT_CONTROL" not in text
-    assert "takeover_supported=True" not in text
-    assert "acknowledge_owner(" not in text
-    assert "commit_active(" not in text
+    assert "CyberGearDriver" not in text
+    assert "GPIO" not in text
+    assert "pigpio" not in text
+    assert "serial.Serial" not in text
+    assert "acknowledge_owner(" in text
+    assert "commit_active(" in text

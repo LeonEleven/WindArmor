@@ -1,9 +1,8 @@
 # WindArmor Flight Control API
 
 本文档面向飞控算法开发。v1 API 是 v0.4.0 Flight Control Integration
-Foundation 的纯算法接口；Task 3.1 已加固 authority preparation contract，但
-当前版本仍不能控制真实 actuator。后续 authority/actuator 接入必须保持这里的
-模型、单位、校验和安全语义兼容。
+Foundation 的纯算法接口；Task 4 已实现默认关闭的 authority/actuator adapter，
+但没有执行真实硬件验证。adapter 必须保持这里的模型、单位、校验和安全语义兼容。
 
 ## 算法入口
 
@@ -131,6 +130,7 @@ epoch 接受任意正 sequence 并重建该来源 baseline；更小 epoch 永久
 | 字段 | 语义 |
 |---|---|
 | `command_authority` | `NONE/MANUAL/LEGACY_AUTO/FLIGHT_CONTROL` |
+| `authority_epoch` | Runtime 进程 session 的正 `uint64`；无 authority 时为 `0` |
 | `authority_generation` | 当前授权世代；旧世代命令不得接受 |
 | `e_stop_active` | `bool \| None`；已观测急停状态，未观测为 `None` |
 | `motor_control_mode` | `str \| None`；既有公开电机模式，未观测为 `None` |
@@ -150,8 +150,10 @@ latch true 为 `True`，两路均已观测且新鲜并为 false 才为 `False`�
 `None`。`/e_stop=False` 不参与解除证明。`e_stop_active=None` 绝不等于 `False`。
 State validation 只允许在
 `e_stop_active is False`、fan enabled 明确为 true、电机/风扇模式均已观测、
-所需输入新鲜且 Flight authority 活动时声明 `actuation_allowed=True`。Task 3.1
-production 即使进入 `READY_TO_TAKEOVER` 也始终保持 `actuation_allowed=False`。
+所需输入新鲜、两个 owner readback 均为当前 `(authority_epoch, generation)` 的
+`FLIGHT_CONTROL`，且 Flight authority 已 atomic commit 时声明
+`actuation_allowed=True`。默认 takeover 关闭时，即使进入 `READY_TO_TAKEOVER`
+也始终保持 `actuation_allowed=False`。
 
 ## None、valid、fresh 与 healthy
 
@@ -236,7 +238,9 @@ key 集合都不会妨碍算法放弃控制。
 ## DRY_RUN / Authority Preparation Runtime 与 controller factory
 
 独立 observer launch 为 `flight_control_dry_run.launch.py`，只启动 Flight Runtime
-本身；它不会启动 IMU、电机、风扇或 bringup，也没有 actuator publisher/client。
+本身；它不会启动 IMU、电机、风扇或 bringup。默认
+`flight_takeover_enabled=false` 时不创建 actuator envelope publisher 或 ownership
+clients。
 Runtime 从 `flight_control.yaml` 读取逻辑电机键、observer PWM 范围、各输入
 freshness 和 factory contract：
 
@@ -258,7 +262,7 @@ command 可继续用 fake state 离线测试，或用明确的 test controller �
 
 每个 control timer tick 使用一次 monotonic snapshot 和真实 monotonic `dt`。loader、
 `reset()`、state validation、`update()` 或 command validation 失败都会锁存本地
-inhibited，停止继续调用故障 controller，且不会因 sensor 恢复自动解除。合法
+inhibited，停止继续调用故障 controller，且不会因 sensor 恢复自动解除。非 ACTIVE
 output 只发布到：
 
 ```text
@@ -279,30 +283,39 @@ Task 3 另提供：
 
 算法不负责调用这些服务，也不负责 arm、清除 E-STOP/ERROR 或管理 generation。
 prepare 只使本地状态进入 ARMING 并检查 preflight；满足后进入
-READY_TO_TAKEOVER。READY 阶段算法仍看到 authority `NONE`、generation `0`、
-`flight_control_active=false`、`actuation_allowed=false`。Task 3 production status
-始终为 `takeover_supported=false`，所以不会进入 ACTIVE。
+READY_TO_TAKEOVER。READY 阶段算法仍看到 authority `NONE`、epoch/generation `0`、
+`flight_control_active=false`、`actuation_allowed=false`。默认 takeover 关闭时
+`takeover_supported=false`，所以不会进入 ACTIVE。
 
-pure authority core 在 prepare 时分配 attempt generation；cancel/inhibit 后旧
-generation 永久失效。owner ack 只记录 owner、当前 generation 和 owner 观察到的
+pure authority core 在 Runtime 构造时固定正 `authority_epoch`，在 prepare 时分配
+attempt generation；正式 token 为 `(authority_epoch, generation)`。cancel/inhibit
+后旧 token 永久失效，Runtime 重启也不会恢复旧 authority。owner ack 只记录 owner、当前 token 和 owner 观察到的
 诊断 state sequence；ack 成功不改变 READY 状态，也不设置 cutoff。两路 owner 可按
 任意顺序 ack，duplicate、旧 generation、cancel/inhibit 后或 READY 前的 ack 均被
 拒绝。
 
-future runtime 必须在 READY、当前正 generation、两路 ack 齐全时另行调用一次
+takeover 开启时，Runtime 必须在 READY 后依次完成 motor/fan reserve 与 commit；
+只有 commit response 可作为 ack。当前 token、两路 ack 与 ownership readback 齐全
+后才能另行调用一次
 atomic commit，并传入提交瞬间的当前 `FlightState.sequence`。该 sequence 不得早于
 进入 READY 时记录的 barrier，并且仅它能成为不可变
 `arming_cutoff_state_sequence`。commit 成功产生一次 immutable result，要求上层
 重置 controller 并丢弃 pre-commit preview；authority core 不导入或调用算法实现。
-duplicate/旧 generation commit 被拒绝。future ACTIVE 的第一条 command 必须封装在不可变
-`FlightCommandEnvelope` 中，并满足 generation、严格递增 command sequence、
+duplicate/旧 token commit 被拒绝。ACTIVE 的第一条 command 必须封装在不可变
+`FlightCommandEnvelope` 中，并满足 epoch/generation、严格递增 command sequence、
 `FlightState.sequence > arming_cutoff_state_sequence` 和有限 produced time。
 handoff 前计算的 preview 从不缓存或复用。
 
-Task 3.1 production 没有 owner ack 或 atomic commit 的 service/topic/callback，
-`takeover_supported=false`；因此它始终保持 authority `NONE`、generation `0`、
-`flight_control_active=false`、`actuation_allowed=false`，没有 ACTIVE 或 actuator
-dispatch 路径。
+ownership endpoints 为 `/motors|fans/flight_ownership/{prepare,commit,revoke}`，
+owner readback 为 `/motors|fans/ownership_state`，唯一 actuator transport 为
+`/flight_control/command`。Motor adapter 仍走 `MotorManager` 的 FLIGHT motion source
+与原有安全推进；fan adapter 仍走 `FanCommandManager`，把 `(0,1]` 映射到
+`[fan_start_pwm_us, flight_fan_max_pwm_us]`，`0` 映射 stop，并保留既有 slew。该
+归一化值不是 thrust fraction。
+
+双方 command lease、Runtime owner-readback freshness 与 handoff timeout 都使用
+本地 monotonic 时间。timeout、Runtime/Owner 重启或失联、safe-stop、E-STOP、ERROR、
+safety loss 或非法 command 会 revoke/inhibit，且不会自动恢复 legacy owner。
 
 ## Fake state 示例
 
@@ -364,18 +377,17 @@ driver。
 
 ## 禁止能力与当前边界
 
-算法与当前 DRY_RUN Runtime 没有以下能力：
+算法没有以下能力，Flight Runtime 也不得直接取得这些能力：
 
 - 直接访问 CyberGear、CAN、串口、GPIO、PWM 或电调；
-- 发布 actuator topic 或调用硬件 service；
+- 直接调用 hardware service 或 backend；
 - 清除 ERROR 或 E-STOP；
 - enable/disable hardware 或 set zero；
 - 修改 command authority；
 - 绕过现有电机/风扇状态机、软限位、看门狗或安全退出；
 - 在 transport 恢复后自动恢复 MANUAL/AUTO/HOME 或重发旧目标。
 
-v0.4.0 Task 3.1 已包含 restart-aware authoritative safety readback、preflight、ARMING/
-READY_TO_TAKEOVER、generation/sequence validation 与 post-grant new-state barrier，
-但不包含 owner acknowledgement production implementation、ACTIVE、PWM 映射、
-actuator adapter 或 actuator dispatch。这些能力只有 Task 4 接入既有安全路径后
-才能存在。
+v0.4.0 Task 4 已包含 restart-safe epoch、两阶段 owner handoff、atomic commit、
+post-grant new-state barrier、motor/fan adapter 与 fail-closed lease，但 takeover
+默认关闭。验证仅覆盖 pure/fake/in-memory 软件路径；硬件方向、动态响应、PWM/ESC、
+电机与风扇联合 takeover 均等待单独授权后的实机验证。

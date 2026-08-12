@@ -20,6 +20,7 @@ class AuthorityGrant:
     """Immutable authority token metadata; it does not grant hardware access."""
 
     authority: CommandAuthority
+    authority_epoch: int
     generation: int
     sequence: int
 
@@ -29,6 +30,7 @@ class OwnerAcknowledgement:
     """Diagnostic owner acknowledgement; never an authority grant or cutoff."""
 
     owner: OwnershipDomain
+    authority_epoch: int
     generation: int
     observed_state_sequence: int
 
@@ -37,6 +39,7 @@ class OwnerAcknowledgement:
 class AuthorityCommitResult:
     """One-shot result emitted by an explicit, atomic authority commit."""
 
+    authority_epoch: int
     generation: int
     arming_cutoff_state_sequence: int
     controller_reset_required: bool = True
@@ -64,7 +67,10 @@ class AuthorityTransitionError(RuntimeError):
 class AuthorityStateMachine:
     """Generation-safe preparation and fake-testable ownership handshake."""
 
-    def __init__(self, *, takeover_supported: bool) -> None:
+    def __init__(self, *, authority_epoch: int, takeover_supported: bool) -> None:
+        if not self._valid_uint64(authority_epoch):
+            raise ValueError("authority_epoch must be a positive uint64")
+        self._authority_epoch = authority_epoch
         self._takeover_supported = bool(takeover_supported)
         self._state = AuthorityState.DISABLED
         self._next_generation = 1
@@ -82,6 +88,10 @@ class AuthorityStateMachine:
     @property
     def takeover_supported(self) -> bool:
         return self._takeover_supported
+
+    @property
+    def authority_epoch(self) -> int:
+        return self._authority_epoch
 
     @property
     def attempt_generation(self) -> int | None:
@@ -145,7 +155,7 @@ class AuthorityStateMachine:
             )
         generation = self._next_generation
         self._next_generation += 1
-        if generation <= 0:
+        if not 0 < generation <= (2**64 - 1):
             self.inhibit("generation_invariant_failure")
             raise AuthorityTransitionError("authority generation must be positive")
         self._attempt_generation = generation
@@ -194,6 +204,7 @@ class AuthorityStateMachine:
     def acknowledge_owner(
         self,
         owner: OwnershipDomain,
+        authority_epoch: int,
         generation: int,
         *,
         owner_observed_state_sequence: int,
@@ -205,9 +216,11 @@ class AuthorityStateMachine:
         if (
             self._state is not AuthorityState.READY_TO_TAKEOVER
             or self._attempt_generation is None
+            or not self._valid_uint64(authority_epoch)
+            or authority_epoch != self._authority_epoch
             or isinstance(generation, bool)
             or not isinstance(generation, int)
-            or generation <= 0
+            or not 0 < generation <= (2**64 - 1)
             or generation != self._attempt_generation
             or not isinstance(owner, OwnershipDomain)
             or owner in self._acks
@@ -217,6 +230,7 @@ class AuthorityStateMachine:
             return False
         self._acks[owner] = OwnerAcknowledgement(
             owner=owner,
+            authority_epoch=authority_epoch,
             generation=generation,
             observed_state_sequence=owner_observed_state_sequence,
         )
@@ -225,6 +239,7 @@ class AuthorityStateMachine:
     def commit_active(
         self,
         *,
+        authority_epoch: int,
         generation: int,
         current_runtime_state_sequence: int,
     ) -> AuthorityCommitResult:
@@ -238,9 +253,11 @@ class AuthorityStateMachine:
             )
         if (
             self._attempt_generation is None
+            or not self._valid_uint64(authority_epoch)
+            or authority_epoch != self._authority_epoch
             or isinstance(generation, bool)
             or not isinstance(generation, int)
-            or generation <= 0
+            or not 0 < generation <= (2**64 - 1)
             or generation != self._attempt_generation
         ):
             raise AuthorityTransitionError("commit generation is not current")
@@ -258,6 +275,7 @@ class AuthorityStateMachine:
         self._arming_cutoff_state_sequence = current_runtime_state_sequence
         self._state = AuthorityState.ACTIVE
         return AuthorityCommitResult(
+            authority_epoch=authority_epoch,
             generation=generation,
             arming_cutoff_state_sequence=current_runtime_state_sequence,
         )
@@ -299,3 +317,11 @@ class AuthorityStateMachine:
     @staticmethod
     def _valid_state_sequence(value: object) -> bool:
         return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+    @staticmethod
+    def _valid_uint64(value: object) -> bool:
+        return (
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            and 0 < value <= (2**64 - 1)
+        )

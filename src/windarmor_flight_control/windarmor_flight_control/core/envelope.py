@@ -12,6 +12,7 @@ from .validation import FlightValidationError, validate_flight_command
 
 @dataclass(frozen=True)
 class FlightCommandEnvelope:
+    authority_epoch: int
     generation: int
     command_sequence: int
     state_sequence: int
@@ -22,6 +23,7 @@ class FlightCommandEnvelope:
 def validate_command_envelope(
     envelope: FlightCommandEnvelope,
     *,
+    expected_authority_epoch: int,
     expected_generation: int,
     last_command_sequence: int | None,
     arming_cutoff_state_sequence: int,
@@ -30,11 +32,20 @@ def validate_command_envelope(
     issues: list[str] = []
     if not isinstance(envelope, FlightCommandEnvelope):
         raise FlightValidationError(("envelope must be a FlightCommandEnvelope",))
+    epoch_valid = (
+        isinstance(envelope.authority_epoch, int)
+        and not isinstance(envelope.authority_epoch, bool)
+        and 0 < envelope.authority_epoch <= (2**64 - 1)
+    )
+    if not epoch_valid:
+        issues.append("envelope authority_epoch must be a positive uint64")
+    if envelope.authority_epoch != expected_authority_epoch:
+        issues.append("envelope authority_epoch does not match current authority")
     generation_valid = (
         isinstance(envelope.generation, int)
         and not isinstance(envelope.generation, bool)
     )
-    if not generation_valid or envelope.generation <= 0:
+    if not generation_valid or not 0 < envelope.generation <= (2**64 - 1):
         issues.append("envelope generation 0 is never authoritative")
     if envelope.generation != expected_generation:
         issues.append("envelope generation does not match current authority")
@@ -80,14 +91,24 @@ class CommandEnvelopeSequencer:
         self._required_motor_names = tuple(required_motor_names)
         self.invalidate()
 
-    def activate(self, *, generation: int, state_sequence_cutoff: int) -> None:
-        if generation <= 0 or state_sequence_cutoff < 0:
+    def activate(
+        self, *, authority_epoch: int, generation: int, state_sequence_cutoff: int
+    ) -> None:
+        if (
+            isinstance(authority_epoch, bool)
+            or not isinstance(authority_epoch, int)
+            or not 0 < authority_epoch <= (2**64 - 1)
+            or not 0 < generation <= (2**64 - 1)
+            or state_sequence_cutoff < 0
+        ):
             raise ValueError("active envelope metadata is invalid")
+        self._authority_epoch = authority_epoch
         self._generation = generation
         self._cutoff = state_sequence_cutoff
         self._last_sequence = None
 
     def invalidate(self) -> None:
+        self._authority_epoch: int | None = None
         self._generation: int | None = None
         self._cutoff: int | None = None
         self._last_sequence: int | None = None
@@ -99,10 +120,11 @@ class CommandEnvelopeSequencer:
         produced_at_sec: float,
         command: FlightCommand,
     ) -> FlightCommandEnvelope:
-        if self._generation is None or self._cutoff is None:
+        if self._authority_epoch is None or self._generation is None or self._cutoff is None:
             raise FlightValidationError(("no active authority generation",))
         sequence = 0 if self._last_sequence is None else self._last_sequence + 1
         envelope = FlightCommandEnvelope(
+            authority_epoch=self._authority_epoch,
             generation=self._generation,
             command_sequence=sequence,
             state_sequence=state_sequence,
@@ -111,6 +133,7 @@ class CommandEnvelopeSequencer:
         )
         validate_command_envelope(
             envelope,
+            expected_authority_epoch=self._authority_epoch,
             expected_generation=self._generation,
             last_command_sequence=self._last_sequence,
             arming_cutoff_state_sequence=self._cutoff,

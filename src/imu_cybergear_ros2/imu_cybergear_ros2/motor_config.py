@@ -62,6 +62,7 @@ DEFAULT_PARAMETER_VALUES = {
     "command_interval_sec": 0.02,
     "manual_motion_speed_rad_s": 4.0,
     "auto_motion_speed_rad_s": 4.0,
+    "flight_motion_speed_rad_s": 4.0,
     "home_motion_speed_rad_s": 4.0,
     "motion_dt_max_sec": 0.05,
     "target_reached_tolerance_rad": 0.001,
@@ -106,6 +107,12 @@ DEFAULT_PARAMETER_VALUES = {
     "motor_status_topic": "/motor/status",
     "motor_feedback_structured_topic": "/motors/feedback",
     "motor_safety_state_topic": "/motors/safety_state",
+    "motor_ownership_state_topic": "/motors/ownership_state",
+    "motor_flight_prepare_service": "/motors/flight_ownership/prepare",
+    "motor_flight_commit_service": "/motors/flight_ownership/commit",
+    "motor_flight_revoke_service": "/motors/flight_ownership/revoke",
+    "flight_command_topic": "/flight_control/command",
+    "motor_flight_command_timeout_sec": 0.25,
     "motor_feedback_publish_rate_hz": 10.0,
     "motor_feedback_observer_freshness_sec": 0.5,
 }
@@ -179,6 +186,7 @@ class MotorSafetyConfig:
     warning_throttle_sec: float
     reconnect_on_disconnect: bool
     reconnect_policy: ReconnectPolicy
+    motor_flight_command_timeout_sec: float
 
 
 @dataclass(frozen=True)
@@ -190,6 +198,11 @@ class MotorRosInterfaceConfig:
     motor_status_topic: str
     motor_feedback_structured_topic: str
     motor_safety_state_topic: str
+    motor_ownership_state_topic: str
+    motor_flight_prepare_service: str
+    motor_flight_commit_service: str
+    motor_flight_revoke_service: str
+    flight_command_topic: str
     motor_mode_publish_rate_hz: float
     motor_feedback_publish_rate_hz: float
     motor_feedback_observer_freshness_sec: float
@@ -454,6 +467,9 @@ def build_motor_node_config(raw: Mapping[str, object]) -> MotorNodeConfig:
         manual_speed_step=_require_finite_number(
             "manual_speed_step", raw["manual_speed_step"]
         ),
+        flight_motion_speed_rad_s=_require_finite_number(
+            "flight_motion_speed_rad_s", raw["flight_motion_speed_rad_s"]
+        ),
     )
     validate_motion_parameters(motion)
     deadband = _require_finite_number("deadband_rad", raw["deadband_rad"])
@@ -514,6 +530,12 @@ def build_motor_node_config(raw: Mapping[str, object]) -> MotorNodeConfig:
     )
     if warning_throttle <= 0.0:
         raise ValueError("warning_throttle_sec 必须大于 0")
+    flight_command_timeout = _require_finite_number(
+        "motor_flight_command_timeout_sec",
+        raw["motor_flight_command_timeout_sec"],
+    )
+    if flight_command_timeout <= 0.0:
+        raise ValueError("motor_flight_command_timeout_sec 必须大于 0")
 
     rate = _require_finite_number(
         "motor_mode_publish_rate_hz", raw["motor_mode_publish_rate_hz"]
@@ -593,6 +615,7 @@ def build_motor_node_config(raw: Mapping[str, object]) -> MotorNodeConfig:
             warning_throttle_sec=warning_throttle,
             reconnect_on_disconnect=raw["reconnect_on_disconnect"],
             reconnect_policy=reconnect_policy,
+            motor_flight_command_timeout_sec=flight_command_timeout,
         ),
         ros=MotorRosInterfaceConfig(
             imu_topic=_validate_topic_name("imu_topic", raw["imu_topic"]),
@@ -614,6 +637,21 @@ def build_motor_node_config(raw: Mapping[str, object]) -> MotorNodeConfig:
             ),
             motor_safety_state_topic=_validate_topic_name(
                 "motor_safety_state_topic", raw["motor_safety_state_topic"]
+            ),
+            motor_ownership_state_topic=_validate_topic_name(
+                "motor_ownership_state_topic", raw["motor_ownership_state_topic"]
+            ),
+            motor_flight_prepare_service=_validate_topic_name(
+                "motor_flight_prepare_service", raw["motor_flight_prepare_service"]
+            ),
+            motor_flight_commit_service=_validate_topic_name(
+                "motor_flight_commit_service", raw["motor_flight_commit_service"]
+            ),
+            motor_flight_revoke_service=_validate_topic_name(
+                "motor_flight_revoke_service", raw["motor_flight_revoke_service"]
+            ),
+            flight_command_topic=_validate_topic_name(
+                "flight_command_topic", raw["flight_command_topic"]
             ),
             motor_mode_publish_rate_hz=rate,
             motor_feedback_publish_rate_hz=feedback_publish_rate,

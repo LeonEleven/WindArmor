@@ -57,9 +57,16 @@ from sensor_msgs.msg import Imu
 from std_msgs.msg import Bool, Float64MultiArray, String, UInt64
 from std_srvs.srv import Trigger, SetBool
 from windarmor_interfaces.msg import (
+    FlightCommandEnvelope,
     MotorFeedback,
     MotorFeedbackArray,
     MotorSafetyState,
+    OwnershipState,
+)
+from windarmor_interfaces.srv import (
+    CommitFlightOwnership,
+    PrepareFlightOwnership,
+    RevokeFlightOwnership,
 )
 
 from .controller_state import (
@@ -175,6 +182,7 @@ class ImuMotorControllerNode(LifecycleNode):
         self.declare_parameter("command_interval_sec", 0.02)
         self.declare_parameter("manual_motion_speed_rad_s", 4.0)
         self.declare_parameter("auto_motion_speed_rad_s", 4.0)
+        self.declare_parameter("flight_motion_speed_rad_s", 4.0)
         self.declare_parameter("home_motion_speed_rad_s", 4.0)
         self.declare_parameter("motion_dt_max_sec", 0.05)
         self.declare_parameter("target_reached_tolerance_rad", 0.001)
@@ -233,6 +241,12 @@ class ImuMotorControllerNode(LifecycleNode):
             "motor_feedback_structured_topic", "/motors/feedback"
         )
         self.declare_parameter("motor_safety_state_topic", "/motors/safety_state")
+        self.declare_parameter("motor_ownership_state_topic", "/motors/ownership_state")
+        self.declare_parameter("motor_flight_prepare_service", "/motors/flight_ownership/prepare")
+        self.declare_parameter("motor_flight_commit_service", "/motors/flight_ownership/commit")
+        self.declare_parameter("motor_flight_revoke_service", "/motors/flight_ownership/revoke")
+        self.declare_parameter("flight_command_topic", "/flight_control/command")
+        self.declare_parameter("motor_flight_command_timeout_sec", 0.25)
         self.declare_parameter("motor_feedback_publish_rate_hz", 10.0)
         self.declare_parameter("motor_feedback_observer_freshness_sec", 0.5)
 
@@ -248,6 +262,11 @@ class ImuMotorControllerNode(LifecycleNode):
         self._motor_status_pub = None
         self._motor_feedback_structured_pub = None
         self._motor_safety_state_pub = None
+        self._motor_ownership_state_pub = None
+        self._flight_command_sub = None
+        self._motor_flight_prepare_srv = None
+        self._motor_flight_commit_srv = None
+        self._motor_flight_revoke_srv = None
         self._motor_feedback_structured_timer = None
         self._system_e_stop_pub = None
         self._relative_attitude_pub = None
@@ -292,6 +311,7 @@ class ImuMotorControllerNode(LifecycleNode):
         # This sequence spans lifecycle reconfigure within the same process so
         # observers never accept an old safety snapshot as a new one.
         self._motor_safety_state_sequence = 1
+        self._motor_ownership_state_sequence = 1
         self._motor_protection_flags: Dict[int, bool] = {}
         self._motor_temperature_warning_flags: Dict[int, bool] = {}
         self._motor_safety_fault_active = False
@@ -322,6 +342,7 @@ class ImuMotorControllerNode(LifecycleNode):
         self._target_reached_tolerance = 0.001
         self._manual_motion_speed = 4.0
         self._auto_motion_speed = 4.0
+        self._flight_motion_speed = 4.0
         self._home_motion_speed = 4.0
         self._manual_repeat_gap = 0.8
         self._manual_repeat_dt_max = 0.08
@@ -449,6 +470,11 @@ class ImuMotorControllerNode(LifecycleNode):
                 ros_config.motor_safety_state_topic,
                 state_qos,
             )
+            self._motor_ownership_state_pub = self.create_publisher(
+                OwnershipState,
+                ros_config.motor_ownership_state_topic,
+                state_qos,
+            )
             self._relative_attitude_pub = self.create_publisher(
                 Vector3Stamped, ros_config.relative_attitude_topic, 20
             )
@@ -474,6 +500,12 @@ class ImuMotorControllerNode(LifecycleNode):
                 self._on_manual_targets,
                 10,
             )
+            self._flight_command_sub = self.create_subscription(
+                FlightCommandEnvelope,
+                ros_config.flight_command_topic,
+                self._on_flight_command,
+                10,
+            )
             self._e_stop_srv = self.create_service(
                 Trigger, "/e_stop", self._safety.on_e_stop_service
             )
@@ -485,6 +517,21 @@ class ImuMotorControllerNode(LifecycleNode):
             )
             self._motor_zero_srv = self.create_service(
                 Trigger, "/motors/set_zero", self._on_motor_zero_service
+            )
+            self._motor_flight_prepare_srv = self.create_service(
+                PrepareFlightOwnership,
+                ros_config.motor_flight_prepare_service,
+                self._on_flight_prepare,
+            )
+            self._motor_flight_commit_srv = self.create_service(
+                CommitFlightOwnership,
+                ros_config.motor_flight_commit_service,
+                self._on_flight_commit,
+            )
+            self._motor_flight_revoke_srv = self.create_service(
+                RevokeFlightOwnership,
+                ros_config.motor_flight_revoke_service,
+                self._on_flight_revoke,
             )
 
             # ---- 连接电机并初始化 ----
@@ -564,6 +611,7 @@ class ImuMotorControllerNode(LifecycleNode):
         self._command_interval = motion.command_interval_sec
         self._manual_motion_speed = motion.manual_motion_speed_rad_s
         self._auto_motion_speed = motion.auto_motion_speed_rad_s
+        self._flight_motion_speed = motion.flight_motion_speed_rad_s
         self._home_motion_speed = motion.home_motion_speed_rad_s
         self._motion_dt_max = motion.motion_dt_max_sec
         self._target_reached_tolerance = motion.target_reached_tolerance_rad
@@ -592,6 +640,9 @@ class ImuMotorControllerNode(LifecycleNode):
             config.safety.position_error_threshold_rad
         )
         self._warning_throttle_sec = config.safety.warning_throttle_sec
+        self._motor_flight_command_timeout_sec = (
+            config.safety.motor_flight_command_timeout_sec
+        )
         self._reconnect_on_disconnect = config.safety.reconnect_on_disconnect
         self._reconnect_policy = config.safety.reconnect_policy
         self._roll_axis_sign = config.control.roll_axis_sign
@@ -792,6 +843,7 @@ class ImuMotorControllerNode(LifecycleNode):
                 "_motor_status_pub",
                 "_motor_feedback_structured_pub",
                 "_motor_safety_state_pub",
+                "_motor_ownership_state_pub",
                 "_system_e_stop_pub",
                 "_relative_attitude_pub",
                 "_imu_zero_generation_pub",
@@ -800,7 +852,9 @@ class ImuMotorControllerNode(LifecycleNode):
                 self._destroy_ros_resource(
                     attr, f"publisher:{attr}", self.destroy_publisher, failures, reason
                 )
-            for attr in ("_sub", "_e_stop_sub", "_manual_targets_sub"):
+            for attr in (
+                "_sub", "_e_stop_sub", "_manual_targets_sub", "_flight_command_sub"
+            ):
                 self._destroy_ros_resource(
                     attr, f"subscription:{attr}", self.destroy_subscription, failures, reason
                 )
@@ -809,6 +863,9 @@ class ImuMotorControllerNode(LifecycleNode):
                 "_enable_motor_srv",
                 "_imu_zero_srv",
                 "_motor_zero_srv",
+                "_motor_flight_prepare_srv",
+                "_motor_flight_commit_srv",
+                "_motor_flight_revoke_srv",
             ):
                 self._destroy_ros_resource(
                     attr, f"service:{attr}", self.destroy_service, failures, reason
@@ -928,6 +985,40 @@ class ImuMotorControllerNode(LifecycleNode):
         )
         self._motor_mode_pub.publish(msg)
         self._publish_motor_safety_state()
+        self._publish_motor_ownership_state()
+
+    def _publish_motor_ownership_state(self) -> None:
+        publisher = self._motor_ownership_state_pub
+        manager = self._motor_mgr
+        if publisher is None or manager is None:
+            return
+        try:
+            ownership = manager.ownership
+            sequence = self._motor_ownership_state_sequence
+            self._motor_ownership_state_sequence += 1
+            message = OwnershipState()
+            message.stamp = self.get_clock().now().to_msg()
+            message.source_epoch = self._motor_safety_source_epoch
+            message.observation_sequence = sequence
+            message.owner_domain = "motor"
+            message.ownership_phase = ownership.owner.value
+            message.authority_present = ownership.authority_epoch is not None
+            message.authority_epoch = ownership.authority_epoch or 0
+            message.generation = ownership.generation or 0
+            message.last_accepted_flight_command_present = (
+                ownership.last_command_sequence is not None
+            )
+            message.last_accepted_flight_command_sequence = (
+                ownership.last_command_sequence or 0
+            )
+            message.last_valid_flight_command_age_sec = (
+                ownership.last_valid_command_age(time.monotonic())
+            )
+            publisher.publish(message)
+        except Exception as exc:
+            self.get_logger().error(
+                f"发布电机 ownership 快照失败（不改变控制状态）: {exc}"
+            )
 
     def _publish_motor_safety_state(self) -> None:
         """Publish authoritative readback without touching the motor driver."""
@@ -1184,6 +1275,91 @@ class ImuMotorControllerNode(LifecycleNode):
             for motor_id in self._motor_ids
         )
         self.get_logger().info(f"收到 MANUAL 电机目标(rad): {target_text}")
+
+    def _ownership_response(self, response, result):
+        response.success = result.success
+        response.reason_code = result.reason_code
+        response.authority_epoch = result.authority_epoch
+        response.generation = result.generation
+        response.owner_observation_sequence = max(
+            0, self._motor_ownership_state_sequence - 1
+        )
+        return response
+
+    def _on_flight_prepare(self, request, response):
+        result = self._motor_mgr.prepare_flight_ownership(
+            int(request.authority_epoch),
+            int(request.generation),
+            now=time.monotonic(),
+        )
+        return self._ownership_response(response, result)
+
+    def _on_flight_commit(self, request, response):
+        result = self._motor_mgr.commit_flight_ownership(
+            int(request.authority_epoch),
+            int(request.generation),
+            now=time.monotonic(),
+        )
+        return self._ownership_response(response, result)
+
+    def _on_flight_revoke(self, request, response):
+        result = self._motor_mgr.revoke_flight_ownership(
+            int(request.authority_epoch), int(request.generation)
+        )
+        return self._ownership_response(response, result)
+
+    def _on_flight_command(self, message: FlightCommandEnvelope) -> None:
+        names = list(message.motor_names)
+        positions = list(message.motor_positions_rad)
+        common_valid = (
+            len(names) == len(positions)
+            and len(set(names)) == len(names)
+            and all(isinstance(name, str) and name for name in names)
+        )
+        if message.request_safe_stop:
+            valid = common_valid and not names and not positions and not message.fan_commands_present
+            if not valid:
+                self.get_logger().warn("拒绝携带 actuator payload 的 Flight safe-stop")
+                self._motor_mgr.fail_closed_flight("invalid_safe_stop_envelope")
+                return
+            result = self._motor_mgr.accept_flight_safe_stop(
+                int(message.authority_epoch),
+                int(message.generation),
+                int(message.command_sequence),
+                now=time.monotonic(),
+            )
+        else:
+            valid = (
+                common_valid
+                and set(names) == {cfg.name for cfg in self._motor_configs}
+                and all(math.isfinite(float(value)) for value in positions)
+                and message.fan_commands_present
+                and math.isfinite(float(message.fan_left))
+                and math.isfinite(float(message.fan_right))
+                and 0.0 <= float(message.fan_left) <= 1.0
+                and 0.0 <= float(message.fan_right) <= 1.0
+            )
+            if not valid:
+                self.get_logger().warn("拒绝 payload contract 非法的 Flight command")
+                self._motor_mgr.fail_closed_flight("invalid_flight_envelope")
+                return
+            result = self._motor_mgr.set_flight_targets(
+                int(message.authority_epoch),
+                int(message.generation),
+                int(message.command_sequence),
+                dict(zip(names, positions)),
+                now=time.monotonic(),
+            )
+        if not result.success:
+            self.get_logger().warn(
+                f"拒绝 Flight motor command: {result.reason_code}"
+            )
+            if result.reason_code in {
+                "invalid_token",
+                "authority_token_mismatch",
+                "flight_command_not_allowed",
+            }:
+                self._motor_mgr.fail_closed_flight(result.reason_code)
 
     def publish_system_emergency_stop(self) -> None:
         """发布系统级急停，让电机与风扇使用同一安全通道。"""

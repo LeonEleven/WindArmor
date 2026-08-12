@@ -19,6 +19,8 @@ def test_default_runtime_config_is_explicitly_dry_run_observability() -> None:
     )
     assert config.runtime_status_topic == "/flight_control/dry_run/status"
     assert config.command_preview_topic.endswith("/command_preview")
+    assert config.flight_takeover_enabled is False
+    assert config.flight_command_topic == "/flight_control/command"
 
 
 @pytest.mark.parametrize(
@@ -30,11 +32,15 @@ def test_default_runtime_config_is_explicitly_dry_run_observability() -> None:
         ("flight_fan_output_freshness_sec", float("inf")),
         ("flight_fan_state_freshness_sec", 0.0),
         ("flight_control_state_freshness_sec", 0.0),
+        ("flight_owner_state_freshness_sec", 0.0),
+        ("flight_handoff_timeout_sec", float("inf")),
         ("fan_observer_min_pwm_us", float("nan")),
         ("controller_factory", ""),
         ("imu_raw_topic", "bad topic"),
         ("runtime_status_topic", "/flight_control/status"),
         ("command_preview_topic", "/flight_control/command"),
+        ("flight_takeover_enabled", "false"),
+        ("motor_flight_prepare_service", "bad service"),
     ],
 )
 def test_invalid_runtime_config_fails_before_ros_resources(name, value) -> None:

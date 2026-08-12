@@ -105,10 +105,74 @@ def test_motor_and_fan_safety_readbacks_are_structured():
 def test_authority_status_exposes_preparation_without_claiming_takeover():
     names = {name for _, name in message_fields("FlightAuthorityStatus.msg")}
     assert {
-        "authority_state", "command_authority", "authority_generation",
+        "authority_epoch", "authority_state", "command_authority", "authority_generation",
         "attempt_present", "attempt_generation", "preparing",
         "preflight_ready", "controller_inhibited", "global_e_stop_observed",
         "global_e_stop_active", "motor_safety_state_fresh",
         "fan_safety_state_fresh", "last_preflight_failure_reason",
-        "last_inhibit_reason", "takeover_supported",
+        "last_inhibit_reason", "takeover_supported", "takeover_enabled",
+        "motor_reserved", "motor_committed", "fan_reserved", "fan_committed",
+        "owner_tokens_match", "atomic_cutoff_present",
+        "atomic_cutoff_state_sequence", "last_command_present",
+        "last_command_sequence", "last_valid_command_age_sec",
+        "actuation_allowed",
     } <= names
+
+
+def test_flight_command_and_ownership_readback_are_presence_aware():
+    assert message_fields("FlightCommandEnvelope.msg") == [
+        ("builtin_interfaces/Time", "stamp"),
+        ("uint64", "authority_epoch"),
+        ("uint64", "generation"),
+        ("uint64", "command_sequence"),
+        ("uint64", "state_sequence"),
+        ("bool", "request_safe_stop"),
+        ("string[]", "motor_names"),
+        ("float64[]", "motor_positions_rad"),
+        ("bool", "fan_commands_present"),
+        ("float64", "fan_left"),
+        ("float64", "fan_right"),
+    ]
+    names = {name for _, name in message_fields("OwnershipState.msg")}
+    assert {
+        "source_epoch", "observation_sequence", "owner_domain",
+        "ownership_phase", "authority_present", "authority_epoch",
+        "generation", "last_accepted_flight_command_present",
+        "last_accepted_flight_command_sequence",
+        "last_valid_flight_command_age_sec",
+    } <= names
+
+
+def service_fields(name: str) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    request: list[tuple[str, str]] = []
+    response: list[tuple[str, str]] = []
+    target = request
+    for raw_line in (PACKAGE_ROOT / "srv" / name).read_text(encoding="utf-8").splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        if line == "---":
+            target = response
+        elif line:
+            field_type, field_name = line.split()
+            target.append((field_type, field_name))
+    return request, response
+
+
+def test_ownership_services_return_structured_reason_and_token():
+    for name in (
+        "PrepareFlightOwnership.srv",
+        "CommitFlightOwnership.srv",
+        "RevokeFlightOwnership.srv",
+    ):
+        request, response = service_fields(name)
+        assert request == [
+            ("uint64", "authority_epoch"),
+            ("uint64", "generation"),
+            ("uint64", "runtime_state_sequence"),
+        ]
+        assert response == [
+            ("bool", "success"),
+            ("string", "reason_code"),
+            ("uint64", "authority_epoch"),
+            ("uint64", "generation"),
+            ("uint64", "owner_observation_sequence"),
+        ]

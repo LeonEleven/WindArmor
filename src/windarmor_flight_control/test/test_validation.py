@@ -268,9 +268,19 @@ def test_stale_helper_is_observed_but_inhibited() -> None:
 
 def test_authority_grant_reserves_nonnegative_generation_and_sequence() -> None:
     validate_authority_grant(
-        AuthorityGrant(CommandAuthority.FLIGHT_CONTROL, generation=4, sequence=8)
+        AuthorityGrant(
+            CommandAuthority.FLIGHT_CONTROL,
+            authority_epoch=3,
+            generation=4,
+            sequence=8,
+        )
     )
     with pytest.raises(FlightValidationError, match="generation"):
         validate_authority_grant(
-            AuthorityGrant(CommandAuthority.FLIGHT_CONTROL, generation=-1, sequence=8)
+            AuthorityGrant(
+                CommandAuthority.FLIGHT_CONTROL,
+                authority_epoch=3,
+                generation=-1,
+                sequence=8,
+            )
         )

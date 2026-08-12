@@ -255,6 +255,9 @@ def validate_flight_state(
         if not isinstance(state.system.command_authority, CommandAuthority):
             issues.append("system.command_authority must be a CommandAuthority")
         _nonnegative_int(
+            state.system.authority_epoch, "system.authority_epoch", issues
+        )
+        _nonnegative_int(
             state.system.authority_generation, "system.authority_generation", issues
         )
         for field in (
@@ -285,6 +288,21 @@ def validate_flight_state(
             and state.system.command_authority is not CommandAuthority.FLIGHT_CONTROL
         ):
             issues.append("flight_control_active requires FLIGHT_CONTROL authority")
+        if state.system.flight_control_active is True:
+            if state.system.authority_epoch <= 0:
+                issues.append("flight_control_active requires a positive authority_epoch")
+            if state.system.authority_generation <= 0:
+                issues.append("flight_control_active requires a positive authority_generation")
+        if state.system.command_authority is CommandAuthority.FLIGHT_CONTROL:
+            if state.system.authority_epoch <= 0:
+                issues.append("FLIGHT_CONTROL authority requires a positive authority_epoch")
+            if state.system.authority_generation <= 0:
+                issues.append("FLIGHT_CONTROL authority requires a positive authority_generation")
+        elif (
+            state.system.authority_epoch != 0
+            or state.system.authority_generation != 0
+        ):
+            issues.append("non-Flight authority must not expose a Flight authority token")
         if state.system.actuation_allowed is True:
             if state.system.e_stop_active is not False:
                 issues.append(
@@ -358,7 +376,18 @@ def validate_authority_grant(grant: AuthorityGrant) -> None:
         raise FlightValidationError(("grant must be an AuthorityGrant",))
     if not isinstance(grant.authority, CommandAuthority):
         issues.append("authority must be a CommandAuthority")
-    _nonnegative_int(grant.generation, "generation", issues)
+    if (
+        isinstance(grant.authority_epoch, bool)
+        or not isinstance(grant.authority_epoch, int)
+        or not 0 < grant.authority_epoch <= (2**64 - 1)
+    ):
+        issues.append("authority_epoch must be a positive uint64")
+    if (
+        isinstance(grant.generation, bool)
+        or not isinstance(grant.generation, int)
+        or not 0 < grant.generation <= (2**64 - 1)
+    ):
+        issues.append("generation must be a positive integer")
     _nonnegative_int(grant.sequence, "sequence", issues)
     if issues:
         raise FlightValidationError(issues)

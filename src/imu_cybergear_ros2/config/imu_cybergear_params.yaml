@@ -123,11 +123,12 @@ imu_motor_controller_node:
     # 固定电机目标推进定时器的期望周期（秒）。
     command_interval_sec: 0.02
 
-    # MANUAL、AUTO、HOME 的软件目标位置变化率（rad/s）。
+    # MANUAL、AUTO、HOME、FLIGHT 的软件目标位置变化率（rad/s）。
     # RC 冻结值相同；已进行正常功能回归，但尚未完成精确机械速度标定。
     manual_motion_speed_rad_s: 4.0
     auto_motion_speed_rad_s: 4.0
     home_motion_speed_rad_s: 4.0
+    flight_motion_speed_rad_s: 4.0
 
     # 定时器延迟时允许用于单次推进计算的最大真实 dt（秒）。
     motion_dt_max_sec: 0.05
@@ -283,5 +284,11 @@ imu_motor_controller_node:
     # change motor safety decisions or motor_feedback_timeout_sec.
     motor_feedback_structured_topic: "/motors/feedback"
     motor_safety_state_topic: "/motors/safety_state"
+    motor_ownership_state_topic: "/motors/ownership_state"
+    motor_flight_prepare_service: "/motors/flight_ownership/prepare"
+    motor_flight_commit_service: "/motors/flight_ownership/commit"
+    motor_flight_revoke_service: "/motors/flight_ownership/revoke"
+    flight_command_topic: "/flight_control/command"
+    motor_flight_command_timeout_sec: 0.25
     motor_feedback_publish_rate_hz: 10.0
     motor_feedback_observer_freshness_sec: 0.5

@@ -200,6 +200,8 @@ def test_public_modes_and_state_qos_are_frozen() -> None:
         "MANUAL_ACTIVE",
         "AUTO_WAITING",
         "AUTO_ACTIVE",
+        "FLIGHT_WAITING",
+        "FLIGHT_ACTIVE",
         "DISABLED",
         "EMERGENCY_STOP",
     }

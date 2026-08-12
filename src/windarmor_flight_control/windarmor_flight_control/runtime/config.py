@@ -20,6 +20,8 @@ PARAMETER_DEFAULTS = {
     "flight_control_state_freshness_sec": 1.0,
     "flight_motor_safety_state_freshness_sec": 1.0,
     "flight_fan_safety_state_freshness_sec": 1.0,
+    "flight_owner_state_freshness_sec": 1.0,
+    "flight_handoff_timeout_sec": 1.0,
     "fan_observer_min_pwm_us": 800.0,
     "fan_observer_max_pwm_us": 2200.0,
     "controller_factory": (
@@ -43,6 +45,16 @@ PARAMETER_DEFAULTS = {
     "authority_prepare_service": "/flight_control/authority/prepare",
     "authority_cancel_service": "/flight_control/authority/cancel",
     "authority_reset_inhibit_service": "/flight_control/authority/reset_inhibit",
+    "flight_takeover_enabled": False,
+    "motor_flight_prepare_service": "/motors/flight_ownership/prepare",
+    "motor_flight_commit_service": "/motors/flight_ownership/commit",
+    "motor_flight_revoke_service": "/motors/flight_ownership/revoke",
+    "fan_flight_prepare_service": "/fans/flight_ownership/prepare",
+    "fan_flight_commit_service": "/fans/flight_ownership/commit",
+    "fan_flight_revoke_service": "/fans/flight_ownership/revoke",
+    "motor_ownership_state_topic": "/motors/ownership_state",
+    "fan_ownership_state_topic": "/fans/ownership_state",
+    "flight_command_topic": "/flight_control/command",
 }
 
 
@@ -57,6 +69,8 @@ class RuntimeConfig:
     flight_control_state_freshness_sec: float
     flight_motor_safety_state_freshness_sec: float
     flight_fan_safety_state_freshness_sec: float
+    flight_owner_state_freshness_sec: float
+    flight_handoff_timeout_sec: float
     fan_observer_min_pwm_us: float
     fan_observer_max_pwm_us: float
     controller_factory: str
@@ -78,6 +92,16 @@ class RuntimeConfig:
     authority_prepare_service: str
     authority_cancel_service: str
     authority_reset_inhibit_service: str
+    flight_takeover_enabled: bool
+    motor_flight_prepare_service: str
+    motor_flight_commit_service: str
+    motor_flight_revoke_service: str
+    fan_flight_prepare_service: str
+    fan_flight_commit_service: str
+    fan_flight_revoke_service: str
+    motor_ownership_state_topic: str
+    fan_ownership_state_topic: str
+    flight_command_topic: str
 
 
 POSITIVE_FIELDS = (
@@ -89,6 +113,8 @@ POSITIVE_FIELDS = (
     "flight_control_state_freshness_sec",
     "flight_motor_safety_state_freshness_sec",
     "flight_fan_safety_state_freshness_sec",
+    "flight_owner_state_freshness_sec",
+    "flight_handoff_timeout_sec",
 )
 
 TOPIC_FIELDS = (
@@ -110,6 +136,15 @@ TOPIC_FIELDS = (
     "authority_prepare_service",
     "authority_cancel_service",
     "authority_reset_inhibit_service",
+    "motor_flight_prepare_service",
+    "motor_flight_commit_service",
+    "motor_flight_revoke_service",
+    "fan_flight_prepare_service",
+    "fan_flight_commit_service",
+    "fan_flight_revoke_service",
+    "motor_ownership_state_topic",
+    "fan_ownership_state_topic",
+    "flight_command_topic",
 )
 
 
@@ -134,6 +169,8 @@ def build_runtime_config(values: Mapping[str, object]) -> RuntimeConfig:
     """Validate all timing and interface values before ROS resources exist."""
 
     converted = dict(values)
+    if not isinstance(converted["flight_takeover_enabled"], bool):
+        raise ValueError("flight_takeover_enabled must be a bool")
     for name in POSITIVE_FIELDS:
         value = _finite(name, converted[name])
         if value <= 0.0:

@@ -192,6 +192,7 @@ class StateAggregator:
                 fans=fans,
                 system=SystemState(
                     command_authority=CommandAuthority.NONE,
+                    authority_epoch=0,
                     authority_generation=0,
                     e_stop_active=e_stop_active,
                     motor_control_mode=motor_mode,

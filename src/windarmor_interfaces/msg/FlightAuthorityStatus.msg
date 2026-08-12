@@ -1,6 +1,7 @@
-# Task 3 authority preparation status. This message does not grant ownership.
+# Read-only authority/handoff diagnostics. This message does not grant ownership.
 builtin_interfaces/Time stamp
 uint64 state_sequence
+uint64 authority_epoch
 string authority_state
 string command_authority
 uint64 authority_generation
@@ -16,3 +17,15 @@ bool fan_safety_state_fresh
 string last_preflight_failure_reason
 string last_inhibit_reason
 bool takeover_supported
+bool takeover_enabled
+bool motor_reserved
+bool motor_committed
+bool fan_reserved
+bool fan_committed
+bool owner_tokens_match
+bool atomic_cutoff_present
+uint64 atomic_cutoff_state_sequence
+bool last_command_present
+uint64 last_command_sequence
+float64 last_valid_command_age_sec
+bool actuation_allowed

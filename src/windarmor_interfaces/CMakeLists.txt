@@ -8,11 +8,16 @@ find_package(rosidl_default_generators REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/FanSafetyState.msg"
   "msg/FlightAuthorityStatus.msg"
+  "msg/FlightCommandEnvelope.msg"
   "msg/FlightCommandPreview.msg"
   "msg/FlightRuntimeStatus.msg"
   "msg/MotorFeedback.msg"
   "msg/MotorFeedbackArray.msg"
   "msg/MotorSafetyState.msg"
+  "msg/OwnershipState.msg"
+  "srv/CommitFlightOwnership.srv"
+  "srv/PrepareFlightOwnership.srv"
+  "srv/RevokeFlightOwnership.srv"
   DEPENDENCIES builtin_interfaces
 )
 

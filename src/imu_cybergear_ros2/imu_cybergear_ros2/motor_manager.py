@@ -19,6 +19,7 @@ from .motor_motion import (
     manual_event_increment,
     speed_for_source,
 )
+from .motor_ownership import MotorCommandOwner, MotorOwnershipCore, OwnershipResult
 from .motor_health import MotorHealthReason, MotorSafetyFaultSnapshot
 from .transport_recovery import CyberGearTransportError, TransportEvent
 
@@ -47,6 +48,12 @@ class MotorManager:
         self._init_entered_control_mode_ids: List[int] = []
         self._init_successful_motor_ids: List[int] = []
         self._current_init_stage = "idle"
+        self._ownership = MotorOwnershipCore(
+            command_timeout_sec=float(
+                getattr(node, "_motor_flight_command_timeout_sec", 0.25)
+            )
+        )
+        self._flight_commit_in_progress = False
 
     @property
     def motion_source(self) -> MotionSource:
@@ -55,6 +62,14 @@ class MotorManager:
     @property
     def motion_timer(self):
         return self._motion_timer
+
+    @property
+    def command_owner(self) -> MotorCommandOwner:
+        return self._ownership.owner
+
+    @property
+    def ownership(self) -> MotorOwnershipCore:
+        return self._ownership
 
     @property
     def init_touched_motor_ids(self) -> Tuple[int, ...]:
@@ -263,6 +278,10 @@ class MotorManager:
     def _motion_tick(self, now: Optional[float] = None) -> None:
         """按真实 dt 推进 current_targets；第一帧只初始化时钟。"""
         tick_time = time.monotonic() if now is None else now
+        if self._ownership.timed_out(tick_time):
+            self.halt_motion()
+            self._leave_flight_auto_state()
+            self._notify_ownership_changed()
         if self._last_motion_tick_time is None:
             self._last_motion_tick_time = tick_time
             return
@@ -281,7 +300,13 @@ class MotorManager:
             source = self._motion_source
             if self._ordinary_commands_blocked_locked() or source == MotionSource.IDLE:
                 return
+            if not self._source_owned_locked(source):
+                self._halt_motion_locked()
+                return
             if source == MotionSource.AUTO and not is_auto:
+                self._halt_motion_locked()
+                return
+            if source == MotionSource.FLIGHT and not is_auto:
                 self._halt_motion_locked()
                 return
             if source in (MotionSource.MANUAL, MotionSource.HOME) and not is_manual:
@@ -410,13 +435,18 @@ class MotorManager:
 
     def set_manual_targets(self, targets: Dict[int, float]) -> Dict[int, float]:
         """原子设置 MANUAL 绝对期望目标，不访问硬件。"""
-        if not self._state.is_manual_running():
+        if (
+            not self._state.is_manual_running()
+            or self._ownership.owner is not MotorCommandOwner.MANUAL
+        ):
             raise ValueError("绝对期望目标只允许在 MANUAL 模式设置")
         with self._node._lock:
             if self._ordinary_commands_blocked_locked():
                 raise ValueError("安全或命令故障已锁存，拒绝 MANUAL 目标")
             if not self._state.is_manual_running():
                 raise ValueError("设置目标期间已离开 MANUAL 模式")
+            if self._ownership.owner is not MotorCommandOwner.MANUAL:
+                raise ValueError("当前普通命令 owner 不允许 MANUAL 目标")
             clamped = self._set_desired_targets_locked(targets)
             self._manual_repeat_times.clear()
             self._motion_source = MotionSource.MANUAL
@@ -424,12 +454,17 @@ class MotorManager:
 
     def set_auto_targets(self, targets: Dict[int, float]) -> bool:
         """接受一帧新的 AUTO 姿态目标，不访问硬件。"""
-        if not self._state.is_auto_running():
+        if (
+            not self._state.is_auto_running()
+            or self._ownership.owner is not MotorCommandOwner.LEGACY_AUTO
+        ):
             return False
         with self._node._lock:
             if self._ordinary_commands_blocked_locked():
                 return False
             if not self._state.is_auto_running():
+                return False
+            if self._ownership.owner is not MotorCommandOwner.LEGACY_AUTO:
                 return False
             self._set_desired_targets_locked(targets)
             self._motion_source = MotionSource.AUTO
@@ -443,7 +478,11 @@ class MotorManager:
         self, motor_id: int, direction: float, *, now: Optional[float] = None
     ) -> bool:
         """把一个有限键盘字符转换为期望目标增量。"""
-        if not self._state.is_manual_running() or direction == 0.0:
+        if (
+            not self._state.is_manual_running()
+            or self._ownership.owner is not MotorCommandOwner.MANUAL
+            or direction == 0.0
+        ):
             return False
         event_time = time.monotonic() if now is None else now
         direction = 1.0 if direction > 0.0 else -1.0
@@ -451,6 +490,8 @@ class MotorManager:
             if self._ordinary_commands_blocked_locked():
                 return False
             if not self._state.is_manual_running():
+                return False
+            if self._ownership.owner is not MotorCommandOwner.MANUAL:
                 return False
             if self._motion_source == MotionSource.HOME:
                 self._sync_desired_to_current_locked()
@@ -751,7 +792,10 @@ class MotorManager:
 
     def move_motor_to_90_deg(self, motor_id: int, positive: bool) -> bool:
         """设置选中电机的 +/-90° 期望目标，不直接写位置命令。"""
-        if not self._state.is_manual_running():
+        if (
+            not self._state.is_manual_running()
+            or self._ownership.owner is not MotorCommandOwner.MANUAL
+        ):
             self._node.get_logger().warn("90度快捷目标只允许在 MANUAL 模式使用")
             return False
         with self._node._lock:
@@ -778,6 +822,12 @@ class MotorManager:
         """设置 HOME 目标；AUTO 中会先显式切换为 MANUAL。"""
         if self._ordinary_commands_blocked_unlocked():
             self._node.get_logger().warn("安全或命令故障已锁存，拒绝 HOME")
+            return False
+        if self._ownership.owner not in (
+            MotorCommandOwner.MANUAL,
+            MotorCommandOwner.LEGACY_AUTO,
+        ):
+            self._node.get_logger().warn("当前普通命令 owner 不允许 HOME")
             return False
         if self._state.is_auto_running():
             result = self._state.transition_to(
@@ -818,6 +868,35 @@ class MotorManager:
             self._manual_repeat_times.clear()
             self._sync_desired_to_current_locked()
             self._motion_source = MotionSource.IDLE
+            if new_state in (
+                ControllerState.EMERGENCY_STOP,
+                ControllerState.ERROR,
+                ControllerState.SHUTTING_DOWN,
+            ):
+                self._ownership.release_to_none()
+            elif not self._flight_commit_in_progress:
+                if new_state is ControllerState.MANUAL_RUNNING:
+                    if self._ownership.owner in (
+                        MotorCommandOwner.FLIGHT_RESERVED,
+                        MotorCommandOwner.FLIGHT_CONTROL,
+                    ):
+                        self._ownership.release_to_none()
+                        transition = self._state.last_transition
+                        if (
+                            transition is not None
+                            and transition.reason
+                            in (
+                                TransitionReason.USER_MODE_TOGGLE,
+                                TransitionReason.HOME_REQUEST,
+                                TransitionReason.EXPLICIT_ESTOP_RECOVERY,
+                            )
+                        ):
+                            self._ownership.claim_legacy_for_state(auto=False)
+                    else:
+                        self._ownership.claim_legacy_for_state(auto=False)
+                elif new_state is ControllerState.AUTO_RUNNING:
+                    self._ownership.claim_legacy_for_state(auto=True)
+        self._notify_ownership_changed()
 
     def halt_motion(self) -> None:
         """立即阻止后续普通位置推进，不延迟急停。"""
@@ -832,6 +911,187 @@ class MotorManager:
     def _sync_desired_to_current_locked(self) -> None:
         self._node._desired_targets = dict(self._node._current_targets)
 
+    def _source_owned_locked(self, source: MotionSource) -> bool:
+        expected = {
+            MotionSource.MANUAL: MotorCommandOwner.MANUAL,
+            MotionSource.HOME: MotorCommandOwner.MANUAL,
+            MotionSource.AUTO: MotorCommandOwner.LEGACY_AUTO,
+            MotionSource.FLIGHT: MotorCommandOwner.FLIGHT_CONTROL,
+        }.get(source)
+        return expected is not None and self._ownership.owner is expected
+
+    def _flight_safe(self, *, allow_reserved: bool = False) -> bool:
+        if not self._node._is_active or not self._node._running:
+            return False
+        if self._ordinary_commands_blocked_unlocked():
+            return False
+        if allow_reserved:
+            return self._state.is_manual_running() or self._state.is_auto_running()
+        return self._state.is_manual_running()
+
+    def prepare_flight_ownership(
+        self, authority_epoch: int, generation: int, *, now: float
+    ) -> OwnershipResult:
+        safe = self._flight_safe()
+        result = self._ownership.prepare(
+            authority_epoch, generation, now=now, safe=safe
+        )
+        if result.success:
+            # Quiesce only the request that actually acquired (or already owns)
+            # the reservation; stale requests must not disturb a legacy owner.
+            self.halt_motion()
+        self._notify_ownership_changed()
+        return result
+
+    def commit_flight_ownership(
+        self, authority_epoch: int, generation: int, *, now: float
+    ) -> OwnershipResult:
+        if isinstance(now, bool) or not isinstance(now, (int, float)) or not math.isfinite(now):
+            return OwnershipResult(
+                False, "invalid_monotonic_time", authority_epoch, generation
+            )
+        token_matches = (
+            self._ownership.authority_epoch,
+            self._ownership.generation,
+        ) == (authority_epoch, generation)
+        if (
+            self._ownership.owner is MotorCommandOwner.FLIGHT_CONTROL
+            and token_matches
+        ):
+            return self._ownership.commit(
+                authority_epoch, generation, now=now, safe=True
+            )
+        if not token_matches or self._ownership.owner is not MotorCommandOwner.FLIGHT_RESERVED:
+            return self._ownership.commit(
+                authority_epoch, generation, now=now, safe=False
+            )
+        safe = self._flight_safe()
+        if safe and self._state.is_manual_running():
+            self._flight_commit_in_progress = True
+            try:
+                transition = self._state.transition_to(
+                    ControllerState.AUTO_RUNNING,
+                    reason=TransitionReason.FLIGHT_OWNERSHIP_COMMIT,
+                    source=TransitionSource.SERVICE,
+                )
+            finally:
+                self._flight_commit_in_progress = False
+            safe = transition.outcome in (
+                TransitionOutcome.CHANGED,
+                TransitionOutcome.NO_CHANGE,
+            ) and self._state.is_auto_running()
+        result = self._ownership.commit(
+            authority_epoch, generation, now=now, safe=safe
+        )
+        self._notify_ownership_changed()
+        return result
+
+    def revoke_flight_ownership(
+        self, authority_epoch: int, generation: int
+    ) -> OwnershipResult:
+        token_matches = (
+            self._ownership.authority_epoch,
+            self._ownership.generation,
+        ) == (authority_epoch, generation)
+        if token_matches:
+            self.halt_motion()
+            self._leave_flight_auto_state()
+        result = self._ownership.revoke(authority_epoch, generation)
+        self._notify_ownership_changed()
+        return result
+
+    def fail_closed_flight(self, reason: str) -> None:
+        if self._ownership.owner not in (
+            MotorCommandOwner.FLIGHT_RESERVED,
+            MotorCommandOwner.FLIGHT_CONTROL,
+        ):
+            return
+        self._node.get_logger().error(
+            f"Flight motor ownership fail-closed: {reason}"
+        )
+        self.halt_motion()
+        self._ownership.release_to_none()
+        self._leave_flight_auto_state()
+        self._notify_ownership_changed()
+
+    def _leave_flight_auto_state(self) -> None:
+        if not self._state.is_auto_running():
+            return
+        self._flight_commit_in_progress = True
+        try:
+            self._state.transition_to(
+                ControllerState.MANUAL_RUNNING,
+                reason=TransitionReason.FLIGHT_OWNERSHIP_REVOKE,
+                source=TransitionSource.SERVICE,
+            )
+        finally:
+            self._flight_commit_in_progress = False
+
+    def set_flight_targets(
+        self,
+        authority_epoch: int,
+        generation: int,
+        command_sequence: int,
+        targets_by_name: Dict[str, float],
+        *,
+        now: float,
+    ) -> OwnershipResult:
+        name_to_id = {
+            cfg.name: cfg.motor_id
+            for cfg in getattr(self._node, "_motor_configs", ())
+        }
+        if set(targets_by_name) != set(name_to_id):
+            return OwnershipResult(False, "invalid_motor_frame", authority_epoch, generation)
+        if not all(math.isfinite(float(value)) for value in targets_by_name.values()):
+            return OwnershipResult(False, "invalid_motor_frame", authority_epoch, generation)
+        if (
+            self._ownership.owner is not MotorCommandOwner.FLIGHT_CONTROL
+            or not self._state.is_auto_running()
+            or self._ordinary_commands_blocked_unlocked()
+        ):
+            return OwnershipResult(False, "flight_command_not_allowed", authority_epoch, generation)
+        targets = {
+            name_to_id[name]: float(targets_by_name[name])
+            for name in name_to_id
+        }
+        with self._node._lock:
+            if (
+                not self._state.is_auto_running()
+                or self._ordinary_commands_blocked_locked()
+                or self._ownership.owner is not MotorCommandOwner.FLIGHT_CONTROL
+            ):
+                return OwnershipResult(False, "flight_command_not_allowed", authority_epoch, generation)
+            accepted = self._ownership.accept_command(
+                authority_epoch, generation, command_sequence, now=now
+            )
+            if not accepted.success:
+                return accepted
+            self._set_desired_targets_locked(targets)
+            self._motion_source = MotionSource.FLIGHT
+        self._notify_ownership_changed()
+        return accepted
+
+    def accept_flight_safe_stop(
+        self,
+        authority_epoch: int,
+        generation: int,
+        command_sequence: int,
+        *,
+        now: float,
+    ) -> OwnershipResult:
+        accepted = self._ownership.accept_command(
+            authority_epoch, generation, command_sequence, now=now
+        )
+        if not accepted.success:
+            return accepted
+        self.halt_motion()
+        return self.revoke_flight_ownership(authority_epoch, generation)
+
+    def _notify_ownership_changed(self) -> None:
+        callback = getattr(self._node, "_publish_motor_ownership_state", None)
+        if callable(callback):
+            callback()
+
     def _clear_motor_repeat_locked(self, motor_id: int) -> None:
         for key in list(self._manual_repeat_times):
             if key[0] == motor_id:
@@ -843,6 +1103,14 @@ class MotorManager:
 
     def set_all_motor_zero_reference(self) -> bool:
         """将全部电机当前位置设为机械零点，返回是否全部成功。"""
+        if (
+            not self._state.is_manual_running()
+            or self._ownership.owner is not MotorCommandOwner.MANUAL
+        ):
+            self._node.get_logger().warn(
+                "机械零点只允许显式 MANUAL owner 使用"
+            )
+            return False
         if self._zero_reference_fault_latched():
             return False
         self.halt_motion()

@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional, Tuple
 
+from .fan_ownership import FanCommandOwner, FanOwnershipCore, OwnershipResult
+
 
 ALLOWED_MOTOR_MODES = {
     "MANUAL",
@@ -25,6 +27,8 @@ class FanControlState(str, Enum):
     MANUAL_ACTIVE = "MANUAL_ACTIVE"
     AUTO_WAITING = "AUTO_WAITING"
     AUTO_ACTIVE = "AUTO_ACTIVE"
+    FLIGHT_WAITING = "FLIGHT_WAITING"
+    FLIGHT_ACTIVE = "FLIGHT_ACTIVE"
     DISABLED = "DISABLED"
     EMERGENCY_STOP = "EMERGENCY_STOP"
 
@@ -36,6 +40,7 @@ class FanControlConfig:
     fan_stop_pwm_us: int = 800
     fan_start_pwm_us: int = 1200
     fan_auto_max_pwm_us: int = 1400
+    flight_fan_max_pwm_us: int = 1400
     fan_deadband_on_deg: float = 5.0
     fan_deadband_off_deg: float = 3.0
     fan_full_scale_deg: float = 45.0
@@ -47,6 +52,7 @@ class FanControlConfig:
     motor_mode_timeout_sec: float = 1.0
     fan_enabled_timeout_sec: float = 1.0
     require_motor_mode_for_manual: bool = False
+    fan_flight_command_timeout_sec: float = 0.25
 
     def validate(self) -> None:
         values = (
@@ -55,6 +61,7 @@ class FanControlConfig:
             self.fan_stop_pwm_us,
             self.fan_start_pwm_us,
             self.fan_auto_max_pwm_us,
+            self.flight_fan_max_pwm_us,
             self.fan_deadband_on_deg,
             self.fan_deadband_off_deg,
             self.fan_full_scale_deg,
@@ -64,6 +71,7 @@ class FanControlConfig:
             self.manual_command_timeout_sec,
             self.motor_mode_timeout_sec,
             self.fan_enabled_timeout_sec,
+            self.fan_flight_command_timeout_sec,
         )
         if not all(math.isfinite(value) for value in values):
             raise ValueError("风扇控制数值参数必须为有限值")
@@ -87,6 +95,8 @@ class FanControlConfig:
             <= self.max_pwm_us
         ):
             raise ValueError("风扇 PWM 参数顺序或范围无效")
+        if not self.fan_start_pwm_us <= self.flight_fan_max_pwm_us <= self.fan_auto_max_pwm_us:
+            raise ValueError("flight_fan_max_pwm_us 必须位于 start 与 AUTO max 之间")
         if self.rise_step_pwm_us <= 0 or self.fall_step_pwm_us <= 0:
             raise ValueError("风扇 PWM 上升和下降步长必须大于 0")
         if (
@@ -94,6 +104,7 @@ class FanControlConfig:
             or self.manual_command_timeout_sec <= 0.0
             or self.motor_mode_timeout_sec <= 0.0
             or self.fan_enabled_timeout_sec <= 0.0
+            or self.fan_flight_command_timeout_sec <= 0.0
         ):
             raise ValueError("全部超时参数必须大于 0")
 
@@ -186,6 +197,21 @@ def slew_pwm(current: int, target: int, rise_step: int, fall_step: int) -> int:
     return current + limited
 
 
+def normalized_flight_command_to_pwm(value: float, config: FanControlConfig) -> int:
+    """Map dimensionless Flight intent to the existing bounded PWM domain."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("Flight fan command must be numeric")
+    value = float(value)
+    if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+        raise ValueError("Flight fan command must be within [0.0, 1.0]")
+    if value == 0.0:
+        return config.fan_stop_pwm_us
+    return int(round(
+        config.fan_start_pwm_us
+        + value * (config.flight_fan_max_pwm_us - config.fan_start_pwm_us)
+    ))
+
+
 class FanControlCore:
     """集中维护授权、缓存、急停锁存和唯一安全输出。"""
 
@@ -221,6 +247,10 @@ class FanControlCore:
         self._e_stop_at: Optional[float] = None
         self._safety_reason = "启动后等待显式选择控制路径"
         self._immediate_stop_pending = True
+        self.ownership = FanOwnershipCore(
+            command_timeout_sec=config.fan_flight_command_timeout_sec
+        )
+        self._flight_target_pwm = (stop, stop)
 
     @property
     def safety_reason(self) -> str:
@@ -287,6 +317,7 @@ class FanControlCore:
         reason: str,
         *,
         state: FanControlState = FanControlState.SAFE_STOP,
+        release_flight: bool = True,
     ) -> None:
         """幂等清除全部授权和旧命令，并请求立即发布停止值。"""
         self._clear_all_control()
@@ -294,6 +325,12 @@ class FanControlCore:
         self.state = state
         self._safety_reason = reason
         self._immediate_stop_pending = True
+        self._flight_target_pwm = (
+            self.config.fan_stop_pwm_us,
+            self.config.fan_stop_pwm_us,
+        )
+        if release_flight:
+            self.ownership.release_to_none()
 
     def take_immediate_stop(self) -> bool:
         pending = self._immediate_stop_pending
@@ -426,7 +463,12 @@ class FanControlCore:
     def update_manual_pair(self, left: int, right: int, now: float) -> bool:
         if not self._manual_values_valid((left, right), now):
             return False
-        if not self.manual_armed or self.auto_requested or self.e_stop_latched:
+        if (
+            self.ownership.owner is not FanCommandOwner.LEGACY_MANUAL
+            or not self.manual_armed
+            or self.auto_requested
+            or self.e_stop_latched
+        ):
             return False
         failure = self._manual_precondition_failure(now)
         if failure:
@@ -455,6 +497,7 @@ class FanControlCore:
             return False
         if (
             not self.manual_armed
+            or self.ownership.owner is not FanCommandOwner.LEGACY_MANUAL
             or not self._manual_neutral_received
             or self.auto_requested
             or self.e_stop_latched
@@ -475,11 +518,17 @@ class FanControlCore:
         if not isinstance(enabled, bool) or not math.isfinite(now):
             self.force_safe_stop("手动授权请求无效")
             return False, "手动授权请求或时间无效"
+        if self.ownership.owner in (
+            FanCommandOwner.FLIGHT_RESERVED,
+            FanCommandOwner.FLIGHT_CONTROL,
+        ):
+            return False, "Flight ownership 活动，拒绝 MANUAL"
         if not enabled:
             self.force_safe_stop(
                 "手动控制已取消；等待重新授权",
                 state=FanControlState.MANUAL_DISARMED,
             )
+            self.ownership.release_to_none()
             return True, "风扇 MANUAL 已关闭，旧命令已清除"
 
         failure = self._manual_precondition_failure(now)
@@ -506,12 +555,18 @@ class FanControlCore:
         self._immediate_stop_pending = True
         self._safety_reason = ""
         self.state = FanControlState.MANUAL_WAITING_FOR_NEUTRAL
+        self.ownership.claim_legacy_manual()
         return True, "MANUAL 已授权；等待本次授权后的双路停止基线"
 
     def request_auto(self, enabled: bool, now: float) -> Tuple[bool, str]:
         if not isinstance(enabled, bool) or not math.isfinite(now):
             self.force_safe_stop("AUTO 请求无效")
             return False, "AUTO 请求或时间无效"
+        if self.ownership.owner in (
+            FanCommandOwner.FLIGHT_RESERVED,
+            FanCommandOwner.FLIGHT_CONTROL,
+        ):
+            return False, "Flight ownership 活动，拒绝 legacy AUTO"
         if not enabled:
             self.force_safe_stop(
                 "风扇 AUTO 已关闭；等待重新显式选择控制路径",
@@ -537,6 +592,7 @@ class FanControlCore:
         self._immediate_stop_pending = True
         self._safety_reason = ""
         self.state = FanControlState.AUTO_WAITING
+        self.ownership.claim_legacy_auto()
         return True, "风扇 AUTO 请求已接受，等待启用后的新姿态"
 
     def reset_e_stop(self, now: float) -> Tuple[bool, str]:
@@ -610,6 +666,9 @@ class FanControlCore:
         if not math.isfinite(now):
             self.force_safe_stop("控制单调时间无效")
             return self.output
+        if self.ownership.timed_out(now):
+            self.force_safe_stop("Flight command timeout；等待显式重新授权")
+            return self.output
         if self.e_stop_latched:
             self._stop_immediately()
             self.state = FanControlState.EMERGENCY_STOP
@@ -622,6 +681,31 @@ class FanControlCore:
                 "底层风扇未启用或 enabled 状态已超时",
                 state=FanControlState.DISABLED,
             )
+            return self.output
+
+        if self.ownership.owner is FanCommandOwner.FLIGHT_RESERVED:
+            self._stop_immediately()
+            self.state = FanControlState.FLIGHT_WAITING
+            return self.output
+        if self.ownership.owner is FanCommandOwner.FLIGHT_CONTROL:
+            failure = self._flight_precondition_failure(now)
+            if failure:
+                self.force_safe_stop(failure)
+                return self.output
+            if self.ownership.last_command_sequence is None:
+                self._stop_immediately()
+                self.state = FanControlState.FLIGHT_WAITING
+                return self.output
+            self.command_pwm = tuple(
+                slew_pwm(
+                    self.command_pwm[index],
+                    self._flight_target_pwm[index],
+                    self.config.rise_step_pwm_us,
+                    self.config.fall_step_pwm_us,
+                )
+                for index in (0, 1)
+            )
+            self.state = FanControlState.FLIGHT_ACTIVE
             return self.output
 
         if self.auto_requested:
@@ -715,6 +799,92 @@ class FanControlCore:
         )
         self.state = FanControlState.AUTO_ACTIVE
         return self.output
+
+    def _flight_precondition_failure(self, now: float) -> Optional[str]:
+        if self.e_stop_latched or self._e_stop_active is True:
+            return "系统急停覆盖 Flight ownership"
+        if self._fan_enabled is not True or not self._fresh(
+            self._fan_enabled_at, now, self.config.fan_enabled_timeout_sec
+        ):
+            return "底层风扇未启用或 enabled 状态已超时"
+        if self._motor_mode not in CONTROL_READY_MOTOR_MODES or not self._fresh(
+            self._motor_mode_at, now, self.config.motor_mode_timeout_sec
+        ):
+            return "电机模式不是新鲜的 MANUAL/AUTO"
+        return None
+
+    def prepare_flight_ownership(
+        self, epoch: int, generation: int, *, now: float
+    ) -> OwnershipResult:
+        safe = self._flight_precondition_failure(now) is None
+        result = self.ownership.prepare(epoch, generation, now=now, safe=safe)
+        if result.success:
+            self.force_safe_stop(
+                "Flight ownership reserved；等待 commit",
+                state=FanControlState.FLIGHT_WAITING,
+                release_flight=False,
+            )
+        return result
+
+    def commit_flight_ownership(
+        self, epoch: int, generation: int, *, now: float
+    ) -> OwnershipResult:
+        safe = self._flight_precondition_failure(now) is None
+        result = self.ownership.commit(epoch, generation, now=now, safe=safe)
+        if result.success:
+            self._stop_immediately()
+            self.state = FanControlState.FLIGHT_WAITING
+            self._safety_reason = ""
+        return result
+
+    def revoke_flight_ownership(self, epoch: int, generation: int) -> OwnershipResult:
+        matches = (self.ownership.authority_epoch, self.ownership.generation) == (
+            epoch,
+            generation,
+        )
+        result = self.ownership.revoke(epoch, generation)
+        if result.success and matches:
+            self.force_safe_stop(
+                "Flight ownership revoked；等待显式选择 legacy owner"
+            )
+        return result
+
+    def update_flight_command(
+        self,
+        epoch: int,
+        generation: int,
+        sequence: int,
+        left: float,
+        right: float,
+        *,
+        now: float,
+    ) -> OwnershipResult:
+        try:
+            target = (
+                normalized_flight_command_to_pwm(left, self.config),
+                normalized_flight_command_to_pwm(right, self.config),
+            )
+        except ValueError:
+            return OwnershipResult(False, "invalid_fan_payload", epoch, generation)
+        if self._flight_precondition_failure(now) is not None:
+            return OwnershipResult(False, "flight_command_not_allowed", epoch, generation)
+        result = self.ownership.accept_command(
+            epoch, generation, sequence, now=now
+        )
+        if result.success:
+            self._flight_target_pwm = target
+        return result
+
+    def accept_flight_safe_stop(
+        self, epoch: int, generation: int, sequence: int, *, now: float
+    ) -> OwnershipResult:
+        accepted = self.ownership.accept_command(
+            epoch, generation, sequence, now=now
+        )
+        if not accepted.success:
+            return accepted
+        self.force_safe_stop("Flight safe-stop；等待显式重新授权")
+        return OwnershipResult(True, "revoked", epoch, generation)
 
     @property
     def output(self) -> FanControlOutput:

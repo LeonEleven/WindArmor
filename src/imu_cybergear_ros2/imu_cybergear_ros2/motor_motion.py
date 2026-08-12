@@ -12,6 +12,7 @@ class MotionSource(str, Enum):
     MANUAL = "MANUAL"
     AUTO = "AUTO"
     HOME = "HOME"
+    FLIGHT = "FLIGHT"
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,7 @@ class MotionParameters:
     manual_speed_min: float
     manual_speed_max: float
     manual_speed_step: float
+    flight_motion_speed_rad_s: float = 4.0
 
 
 def validate_auto_attitude_gains(roll_gain: float, pitch_gain: float) -> None:
@@ -94,6 +96,8 @@ def validate_motion_parameters(params: MotionParameters) -> None:
         errors.append("auto_motion_speed_rad_s 必须大于 0")
     if params.home_motion_speed_rad_s <= 0.0:
         errors.append("home_motion_speed_rad_s 必须大于 0")
+    if params.flight_motion_speed_rad_s <= 0.0:
+        errors.append("flight_motion_speed_rad_s 必须大于 0")
     if params.manual_step_rad <= 0.0:
         errors.append("manual_step_deg 必须大于 0")
     if params.manual_repeat_gap_sec <= 0.0:
@@ -124,6 +128,8 @@ def speed_for_source(source: MotionSource, params: MotionParameters) -> float:
         return params.auto_motion_speed_rad_s
     if source == MotionSource.HOME:
         return params.home_motion_speed_rad_s
+    if source == MotionSource.FLIGHT:
+        return params.flight_motion_speed_rad_s
     return 0.0
 
 

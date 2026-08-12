@@ -29,6 +29,8 @@ fan_command_manager:
     fan_stop_pwm_us: 800
     fan_start_pwm_us: 1200
     fan_auto_max_pwm_us: 1400
+    # Flight normalized requests remain bounded by the existing AUTO maximum.
+    flight_fan_max_pwm_us: 1400
 
     auto_enabled_at_start: false
     fan_deadband_on_deg: 5.0
@@ -51,6 +53,14 @@ fan_command_manager:
     # 保留现有 launch 参数兼容；显式 MANUAL 授权始终要求新鲜合法电机模式。
     # 统一 bringup 继续覆盖为 true。
     require_motor_mode_for_manual: false
+
+    fan_flight_command_timeout_sec: 0.25
+    fan_ownership_state_topic: "/fans/ownership_state"
+    fan_flight_prepare_service: "/fans/flight_ownership/prepare"
+    fan_flight_commit_service: "/fans/flight_ownership/commit"
+    fan_flight_revoke_service: "/fans/flight_ownership/revoke"
+    flight_command_topic: "/flight_control/command"
+    flight_motor_names: ["left_lift", "left_pitch", "right_pitch", "right_lift"]
 
 fan_keyboard:
   ros__parameters:

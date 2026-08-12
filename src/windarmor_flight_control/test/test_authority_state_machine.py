@@ -12,7 +12,7 @@ from windarmor_flight_control.core.authority import (
 
 
 def machine(*, takeover=True):
-    result = AuthorityStateMachine(takeover_supported=takeover)
+    result = AuthorityStateMachine(authority_epoch=100, takeover_supported=takeover)
     assert result.state is AuthorityState.DISABLED
     result.enable_dry_run()
     assert result.state is AuthorityState.DRY_RUN
@@ -106,12 +106,14 @@ def test_owner_ack_order_is_diagnostic_and_explicit_commit_sets_cutoff(
 
     assert authority.acknowledge_owner(
         first,
+        authority.authority_epoch,
         generation,
         owner_observed_state_sequence=first_sequence,
     )
     assert authority.state is AuthorityState.READY_TO_TAKEOVER
     assert authority.acknowledge_owner(
         second,
+        authority.authority_epoch,
         generation,
         owner_observed_state_sequence=second_sequence,
     )
@@ -123,6 +125,7 @@ def test_owner_ack_order_is_diagnostic_and_explicit_commit_sets_cutoff(
     } == expected
 
     commit = authority.commit_active(
+        authority_epoch=authority.authority_epoch,
         generation=generation,
         current_runtime_state_sequence=commit_sequence,
     )
@@ -136,6 +139,7 @@ def test_owner_ack_order_is_diagnostic_and_explicit_commit_sets_cutoff(
         commit.arming_cutoff_state_sequence = 121
     with pytest.raises(AuthorityTransitionError):
         authority.commit_active(
+            authority_epoch=authority.authority_epoch,
             generation=generation,
             current_runtime_state_sequence=commit_sequence + 1,
         )
@@ -146,6 +150,7 @@ def test_duplicate_stale_invalid_and_out_of_state_acks_are_rejected():
     generation = authority.prepare()
     assert not authority.acknowledge_owner(
         OwnershipDomain.MOTOR,
+        authority.authority_epoch,
         generation,
         owner_observed_state_sequence=1,
     )
@@ -156,26 +161,31 @@ def test_duplicate_stale_invalid_and_out_of_state_acks_are_rejected():
     )
     assert not authority.acknowledge_owner(
         OwnershipDomain.MOTOR,
+        authority.authority_epoch,
         0,
         owner_observed_state_sequence=3,
     )
     assert not authority.acknowledge_owner(
         OwnershipDomain.MOTOR,
+        authority.authority_epoch,
         generation + 1,
         owner_observed_state_sequence=3,
     )
     assert not authority.acknowledge_owner(
         OwnershipDomain.MOTOR,
+        authority.authority_epoch,
         generation,
         owner_observed_state_sequence=-1,
     )
     assert authority.acknowledge_owner(
         OwnershipDomain.MOTOR,
+        authority.authority_epoch,
         generation,
         owner_observed_state_sequence=3,
     )
     assert not authority.acknowledge_owner(
         OwnershipDomain.MOTOR,
+        authority.authority_epoch,
         generation,
         owner_observed_state_sequence=4,
     )
@@ -184,12 +194,14 @@ def test_duplicate_stale_invalid_and_out_of_state_acks_are_rejected():
     authority.cancel()
     assert not authority.acknowledge_owner(
         OwnershipDomain.FAN,
+        authority.authority_epoch,
         generation,
         owner_observed_state_sequence=4,
     )
     current = make_ready(authority, state_sequence=5)
     assert not authority.acknowledge_owner(
         OwnershipDomain.MOTOR,
+        authority.authority_epoch,
         generation,
         owner_observed_state_sequence=6,
     )
@@ -197,6 +209,7 @@ def test_duplicate_stale_invalid_and_out_of_state_acks_are_rejected():
     authority.inhibit("test")
     assert not authority.acknowledge_owner(
         OwnershipDomain.FAN,
+        authority.authority_epoch,
         current,
         owner_observed_state_sequence=6,
     )
@@ -207,16 +220,19 @@ def test_commit_rejects_missing_ack_old_generation_invalid_and_prebarrier_sequen
     generation = make_ready(authority, state_sequence=50)
     authority.acknowledge_owner(
         OwnershipDomain.MOTOR,
+        authority.authority_epoch,
         generation,
         owner_observed_state_sequence=51,
     )
     with pytest.raises(AuthorityTransitionError):
         authority.commit_active(
+            authority_epoch=authority.authority_epoch,
             generation=generation,
             current_runtime_state_sequence=52,
         )
     authority.acknowledge_owner(
         OwnershipDomain.FAN,
+        authority.authority_epoch,
         generation,
         owner_observed_state_sequence=49,
     )
@@ -227,6 +243,7 @@ def test_commit_rejects_missing_ack_old_generation_invalid_and_prebarrier_sequen
     ]:
         with pytest.raises(AuthorityTransitionError):
             authority.commit_active(
+                authority_epoch=authority.authority_epoch,
                 generation=stale_generation,
                 current_runtime_state_sequence=sequence,
             )
@@ -248,11 +265,13 @@ def test_invalid_ready_sequence_inhibits_and_production_never_commits():
     for owner in OwnershipDomain:
         assert not production.acknowledge_owner(
             owner,
+            production.authority_epoch,
             generation,
             owner_observed_state_sequence=2,
         )
     with pytest.raises(AuthorityTransitionError):
         production.commit_active(
+            authority_epoch=production.authority_epoch,
             generation=generation,
             current_runtime_state_sequence=3,
         )
@@ -268,10 +287,12 @@ def test_active_safe_stop_or_safety_loss_revokes_and_inhibits(event):
     for owner in OwnershipDomain:
         authority.acknowledge_owner(
             owner,
+            authority.authority_epoch,
             generation,
             owner_observed_state_sequence=4,
         )
     authority.commit_active(
+        authority_epoch=authority.authority_epoch,
         generation=generation,
         current_runtime_state_sequence=5,
     )

@@ -12,6 +12,8 @@ flight_control_runtime_node:
     flight_control_state_freshness_sec: 1.0
     flight_motor_safety_state_freshness_sec: 1.0
     flight_fan_safety_state_freshness_sec: 1.0
+    flight_owner_state_freshness_sec: 1.0
+    flight_handoff_timeout_sec: 1.0
 
     # Normalize observed applied PWM only; no command mapping exists here.
     fan_observer_min_pwm_us: 800.0
@@ -37,3 +39,15 @@ flight_control_runtime_node:
     authority_prepare_service: "/flight_control/authority/prepare"
     authority_cancel_service: "/flight_control/authority/cancel"
     authority_reset_inhibit_service: "/flight_control/authority/reset_inhibit"
+
+    # Task 4 is integrated but explicitly disabled until separately authorized.
+    flight_takeover_enabled: false
+    motor_flight_prepare_service: "/motors/flight_ownership/prepare"
+    motor_flight_commit_service: "/motors/flight_ownership/commit"
+    motor_flight_revoke_service: "/motors/flight_ownership/revoke"
+    fan_flight_prepare_service: "/fans/flight_ownership/prepare"
+    fan_flight_commit_service: "/fans/flight_ownership/commit"
+    fan_flight_revoke_service: "/fans/flight_ownership/revoke"
+    motor_ownership_state_topic: "/motors/ownership_state"
+    fan_ownership_state_topic: "/fans/ownership_state"
+    flight_command_topic: "/flight_control/command"
