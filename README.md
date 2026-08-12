@@ -24,6 +24,9 @@ readback、authority/owner handoff、actuator adapter 和 fail-closed lease 已�
 ownership client 或可执行 command publisher，不改变 v0.3.2 的电机、风扇、IMU
 或安全运行语义。Flight takeover 当前只经过 pure/fake/in-memory 软件验证，真实
 方向、机械动态、通信 timing、PWM/ESC 和联合接管均未实机验证。
+分阶段验证协议见
+[v0.4.0 Hardware Verification Plan](docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md)；
+其状态为 `PLANNED / NOT YET EXECUTED`，且不构成任何硬件操作授权。
 
 ### 飞控算法开发
 
@@ -304,8 +307,9 @@ ros2 launch windarmor_bringup windarmor.launch.py
 > 本节是完成单设备方向、零点、软限位、风扇起转值和急停验证后的正常运行
 > 流程，不是首次带电调试流程。当前候选值 `1200 μs` 和 `1400 μs` 尚未实机
 > 标定；标定完成并获得硬件运行授权前，不得直接按本节给全部动力设备通电。
-> 仓库当前尚未建立 v0.4.0 hardware verification checklist；任何带电操作都必须
-> 先满足根目录 [AGENTS.md](AGENTS.md) 的十项授权门槛，不得从本节推断授权。
+> v0.4.0 分阶段验证计划仍为未执行状态；任何带电操作都必须先满足根目录
+> [AGENTS.md](AGENTS.md) 的十项授权门槛，并取得对应 Stage 的单独明确授权，
+> 不得从本节或验证计划推断授权。
 
 仅执行 `windarmor.launch.py` 不会立即进入最终联动：电机初始化后默认处于
 MANUAL，风扇 AUTO 也默认关闭。启动后按以下顺序操作。

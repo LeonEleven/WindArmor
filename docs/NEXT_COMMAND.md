@@ -2,28 +2,24 @@
 
 ## Task
 
-v0.4.0 Task 5 — Repository Cleanup & Algorithm Developer Handoff
+v0.4.0 Task 6 — Hardware Verification Planning Only
 
 ## Objective
 
-在 v0.4.0 Task 4.1 已完成、软件飞控主线具备 Flight API、Structured State、
-authority、owner handoff 和 actuator adapter 之后，进行一次**不改变控制行为**的
-仓库整理与多人协作交接。
+在 v0.4.0 软件主线、仓库清理和算法成员交接已经完成的基础上，设计一份**分阶段、可独立授权、可中途停止**的真实硬件验证方案。
 
-本任务目标：
+本任务只负责：
 
-1. 清理过期、重复或不再适合作为权威来源的文档；
-2. 将 `FIRST_COMMAND.md` 中仍然唯一有价值的硬件/机械/坐标信息迁移到正式长期文档；
-3. 删除已经过期的 `MANUAL_VERIFICATION.md`，但不丢失长期安全规则；
-4. 更新 `AGENTS.md` 的稳定版本、权威来源、五包 CI 和工作流规则；
-5. 精简 README 中与正式 Flight 架构/API 重复的实现细节；
-6. 把 Flight API 整理成另一名算法开发成员可以快速上手的交接入口；
-7. 全仓库审计 stale version、stale TODO/comment、未使用文件/config/code 和重复内容；
-8. 清理源代码、注释和正式文档中不必要的生成工具/实现助手身份措辞；
-9. 不改变 motor / fan / IMU / Flight Runtime 的行为、接口和安全语义；
-10. 完成后重新运行完整无硬件软件 CI。
+1. 设计 v0.4.0 的真实硬件验证 protocol；
+2. 明确每个阶段的前置条件、允许动作、禁止动作、预期状态、观测项、停止条件和回滚方式；
+3. 明确哪些阶段需要用户单独授权；
+4. 明确 owner handoff、Flight command、timeout、Runtime crash、E-STOP/ERROR 等真实验证顺序；
+5. 设计最终 RC 前 legacy regression；
+6. 不执行任何真实硬件操作；
+7. 不修改控制逻辑；
+8. 不进入 v0.4.0 RC / release。
 
-本任务不是 hardware verification，也不是 v0.4.0 RC。
+本任务的核心产物是一份长期可执行的验证计划，而不是一次性聊天或临时命令记录。
 
 ---
 
@@ -32,826 +28,818 @@ authority、owner handoff 和 actuator adapter 之后，进行一次**不改变�
 当前开发基线：
 
 ```text
-a1e4d2c
-加固飞控交接回滚与租约机制
+413dbc1
+整理仓库文档并完善飞控算法交接
 ```
 
-当前软件状态：
+当前状态：
 
-- 稳定发布仍为 `v0.3.2`；
-- 当前开发目标为 `v0.4.0 Flight Control Integration Foundation`；
-- Flight API v1 已建立；
-- Structured State / DRY_RUN Runtime 已建立；
-- authoritative safety readback 已建立；
-- authority / arming / handoff contract 已建立；
-- motor/fan actuator adapter 已完成软件集成；
-- rollback / handoff lease 已完成软件加固；
-- `flight_takeover_enabled=false` 默认保持；
-- 尚未执行真实 Flight takeover 硬件验证；
-- Task 4.1 软件反馈未发现进入 hardware verification planning 前的软件 blocker。
-
-当前已知文档问题：
-
-- `AGENTS.md` 仍写 `v0.3.1` 是当前稳定发布基线；
-- `AGENTS.md` 仍把 `docs/FIRST_COMMAND.md` 列为权威来源；
-- `docs/FIRST_COMMAND.md` 是项目最早期整合任务背景，但仍包含 IMU 安装方向、
-  motor CAN ID 与机械位置等需要保留的信息；
-- `docs/MANUAL_VERIFICATION.md` 声称只保存“最新人工验证”，但内容仍针对
-  v0.3.0 后的统一速度改动，已经不再是当前最新验证文档；
-- README 仍链接 `docs/MANUAL_VERIFICATION.md`；
-- Flight 架构/API 已成为长期正式文档，README 中存在较多重复实现说明。
-
----
-
-## Required Reading
+- v0.3.2 仍为正式稳定发布基线；
+- 当前开发目标为 v0.4.0；
+- Flight API / Structured State / DRY_RUN / authoritative safety readback / authority / owner handoff / actuator adapter / rollback & lease hardening / repository cleanup / algorithm handoff 均已完成软件阶段；
+- `flight_takeover_enabled=false` 仍为默认；
+- `motor_feedback_timeout_sec=0.0` 仍为默认；
+- 尚未执行 v0.4.0 Flight takeover 的真实硬件验证。
 
 执行前必须阅读：
 
 1. `AGENTS.md`
 2. `README.md`
-3. `docs/FLIGHT_CONTROL_ARCHITECTURE.md`
-4. `docs/FLIGHT_CONTROL_API.md`
-5. `docs/FIRST_COMMAND.md`
-6. `docs/MANUAL_VERIFICATION.md`
-7. `docs/RELEASE_NOTES_v0.3.2.md`
-8. `docs/V0.3.2_RC_HARDWARE_CHECKLIST.md`
-9. `docs/LATEST_FEEDBACK.md`
-10. 当前 `docs/NEXT_COMMAND.md`
+3. `docs/HARDWARE_REFERENCE.md`
+4. `docs/FLIGHT_CONTROL_ARCHITECTURE.md`
+5. `docs/FLIGHT_CONTROL_API.md`
+6. `docs/LATEST_FEEDBACK.md`
+7. `docs/V0.3.2_RC_HARDWARE_CHECKLIST.md`
+8. 当前 `docs/NEXT_COMMAND.md`
 
-还必须检查：
+还必须检查当前 motor/fan/Flight config、launch、ROS topics/services、owner handoff services、authority status、Flight command envelope topic 与 E-STOP/ERROR recovery path。
 
-- 全部 `package.xml`
-- `setup.py` / `setup.cfg`
-- `CMakeLists.txt`
-- launch files
-- YAML config
-- `.github/workflows`
-- `scripts/ci_software.sh`
-- `scripts/check_ci_safety.py`
-- ROS entry points
-- tests
-
-如果当前 HEAD、分支或用户已有修改与以上描述不同：
-
-- 不覆盖用户修改；
-- 不 reset / checkout / clean；
-- 先报告差异；
-- 以 `AGENTS.md` 为最高安全与 Git 规则。
+如果仓库状态与以上描述冲突：不覆盖用户修改，不 reset/checkout/clean，先报告差异，以 `AGENTS.md` 为最高安全与 Git 规则。
 
 ---
 
 ## Safety and Git Constraints
 
-本任务默认：
+本任务**绝对不授权任何真实硬件动作**。
 
-- 不执行真实硬件操作；
-- 不启动任何可能访问真实 IMU/CAN/GPIO/PWM 的节点或 launch；
-- 不访问 `/dev/*`；
-- 不配置 SocketCAN；
-- 不使用 `sudo` 做硬件配置；
-- 不改变任何硬件参数；
-- 不授权 commit；
-- 不授权 push；
-- 不授权 tag；
-- 不创建、移动、删除或重建稳定 tag。
+禁止：
 
-不得改变：
+- 给 CyberGear 执行动作验证；
+- 启动真实 motor control；
+- 启动真实 fan PWM；
+- 实际发 Flight takeover；
+- 实际 reserve/commit owner；
+- 实际发送可执行 FlightCommandEnvelope；
+- 实际触发 motor/fan motion；
+- 实际做 Runtime crash 后硬件停止测试；
+- 实际触发 E-STOP/fault；
+- 实际调用 reset E-STOP / ERROR；
+- set-zero / enable；
+- 配置 SocketCAN；
+- 访问 `/dev/*`；
+- `sudo` 硬件操作；
+- commit / push / tag；
+- 创建、移动、删除或重建稳定 tag。
 
-- ERROR 不自动恢复；
-- transport reconnect 只恢复通信；
-- MANUAL / AUTO / HOME 不自动恢复；
-- old target 不重发；
-- E-STOP；
-- watchdog；
-- soft limit；
-- command write consistency；
-- feedback/temperature safety；
-- motor/fan ownership；
-- authority epoch/generation；
-- FlightCommandEnvelope；
-- handoff / active command leases；
-- `motor_feedback_timeout_sec=0.0`；
-- `flight_takeover_enabled=false` 默认；
-- fan normalized command 不是 thrust；
-- torque 不得推导 `current_a`。
+允许：
 
-本任务应以“文档/结构清理”为主。
-若某项 cleanup 需要改变控制逻辑或 public ROS contract，停止并报告，不在本任务执行。
+- 只读代码/文档/config；
+- 仓库搜索；
+- fake/mock/software 验证；
+- 编写 checklist/protocol；
+- 无硬件核对 ROS CLI/interface 名称。
 
 ---
 
-# Deliverable 1 — Create `docs/HARDWARE_REFERENCE.md`
+# Deliverable 1 — Create `docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md`
 
 新增长期文档：
 
 ```text
-docs/HARDWARE_REFERENCE.md
+docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md
 ```
 
-它用于承接 `FIRST_COMMAND.md` 中仍然有效、但不应继续埋在历史启动任务里的硬件背景。
-
-至少整理：
-
-## Platform
-
-- Raspberry Pi 5；
-- Ubuntu 24.04；
-- ROS 2 Jazzy；
-- Waveshare 2-CH CAN HAT+；
-- current CAN interface `can10`；
-- 4 个 CyberGear；
-- Hiwonder IMU；
-- 2 个涵道风扇。
-
-不要把 patch-level OS 版本写成长期硬件契约，除非仓库当前确有依赖。
-
-## Motor physical mapping
-
-从历史项目背景迁移机械映射：
+文档开头必须明确：
 
 ```text
-CAN ID 1 -> 机器人右臂左右/侧向肩部轴
-CAN ID 2 -> 机器人右臂前后肩部轴
-CAN ID 3 -> 机器人左臂前后肩部轴
-CAN ID 4 -> 机器人左臂左右/侧向肩部轴
+Status: PLANNED / NOT YET EXECUTED
 ```
 
-请结合当前 config / README / tests 核对措辞，不要凭历史文档单独推断新的机械命名。
+并注明：
 
-同时记录当前 protected config：
+- 当前 stable release 仍是 v0.3.2；
+- v0.4.0 Flight takeover 尚未经过真实硬件验证；
+- 每个带电阶段必须得到用户单独授权；
+- 某阶段通过不自动授权下一阶段；
+- 任一阶段失败后默认停止，不自动继续。
 
-```text
-motor_ids
-motor_signs
-motor_limits_min
-motor_limits_max
-```
+---
 
-明确区分：
-
-- 物理机械映射；
-- config list ordering；
-- software sign；
-- soft limit。
-
-不得把 CAN ID 当作 Flight algorithm 的公开逻辑 key。
-
-## IMU mounting/frame
-
-迁移：
-
-```text
-X+ -> 机器人正面
-Y+ -> 机器人左侧/左臂方向
-Z+ -> 垂直向上
-```
-
-如果当前代码/README 对 frame 有更精确的定义，以当前代码/正式契约为准。
+# Deliverable 2 — Verification Philosophy
 
 明确：
 
-- 这是硬件安装/坐标契约；
-- `relative_roll/pitch` 的算法语义继续以 Flight API 为准；
-- 不新增未经验证的 yaw reference。
-
-## Fan wiring
-
-记录当前仓库配置：
-
 ```text
-left fan  -> GPIO12 / physical pin 32
-right fan -> GPIO13 / physical pin 33
-GND       -> physical pin 34 or other GND
+physical confirmation
+-> read-only observation
+-> ownership reservation without motion
+-> single-subsystem takeover
+-> bounded actuator command
+-> combined takeover
+-> timeout/fault injection
+-> legacy regression
 ```
 
-必须保留当前事实边界：
+每个阶段都必须有：
 
-- GPIO12 来自原单风扇已验证连接；
-- GPIO13 是当前第二路默认配置；
-- 若仓库当前文档仍标记 GPIO13 需首次带电前物理确认，不得把它改写成“已经实机确认”。
+- prerequisites；
+- allowed operations；
+- forbidden operations；
+- expected ROS state；
+- expected physical behavior；
+- observations；
+- abort conditions；
+- rollback；
+- pass/fail；
+- next-stage gate。
 
-## Measurement limitations
-
-明确：
-
-- 没有经过验证的 `current_a`；
-- 不能从 torque 推导 current；
-- fan 没有真实 RPM readback；
-- normalized fan command 不是 thrust fraction；
-- `flight_takeover_enabled=false` 默认；
-- Task 4/4.1 Flight takeover 尚未完成真实硬件验证。
-
-文档只记录长期硬件事实/边界，不写一次性 Task 流程。
+Stage N 通过 != 自动允许 Stage N+1。
 
 ---
 
-# Deliverable 2 — Remove `docs/FIRST_COMMAND.md`
+# Deliverable 3 — Stage 0: Physical Preflight
 
-只有在 Deliverable 1 完成并逐项确认唯一有价值的信息已经迁移后，
-删除：
+只做断电/不上电状态的物理核对。
+
+至少确认：
+
+- Raspberry Pi 5 / CAN HAT；
+- CAN bus wiring；
+- motor CAN ID ↔ physical joint；
+- motor mechanical direction；
+- IMU X+/Y+/Z+；
+- left fan GPIO12 / pin32；
+- right fan GPIO13 / pin33；
+- GND；
+- fan physical left/right；
+- ESC power wiring；
+- 可物理断电方式；
+- 急停方式；
+- 机械活动范围；
+- current motor soft limits 是否与机构范围一致。
+
+GPIO13 仍按“需首次真实确认”处理，不得写成已验证。
+
+记录表必须支持：
 
 ```text
-docs/FIRST_COMMAND.md
+PASS / FAIL / NOT VERIFIED
 ```
-
-删除前必须用仓库搜索确认没有仍然依赖它的：
-
-- README link；
-- AGENTS authority reference；
-- docs link；
-- test；
-- script；
-- CI；
-- launch/config。
-
-不要为了保留历史聊天/任务背景继续把它当产品文档。
-
-Git history 已经保存历史内容，不需要另建 archive copy。
 
 ---
 
-# Deliverable 3 — Remove `docs/MANUAL_VERIFICATION.md`
+# Deliverable 4 — Stage 1: Read-only State Verification
 
-审计 `docs/MANUAL_VERIFICATION.md` 的长期内容。
+`flight_takeover_enabled=false`，不允许 actuator command。
 
-已知长期有效内容主要包括：
-
-- 带电测试必须先获得明确授权；
-- 测试前记录设备/限制/急停/停止条件；
-- pure/mock test 不等于真实硬件验证。
-
-这些规则应由：
+验证：
 
 ```text
-AGENTS.md
+hardware
+-> existing subsystem feedback
+-> structured ROS state
+-> FlightState
+-> DRY_RUN preview
 ```
 
-作为最高安全来源，而不是继续由一个“最新人工验证”历史任务文件承担。
+至少包括：
 
-在确认没有唯一且仍适用的信息丢失后，删除：
+### IMU
+- `/imu/data_raw`
+- relative roll/pitch
+- zero_generation
+- connected status
+- physical axis match
+- stale/invalid behavior
 
-```text
-docs/MANUAL_VERIFICATION.md
-```
+### Motor
+- `/motors/feedback`
+- 4 logical motors
+- logical name ↔ CAN ID
+- position/velocity/torque/temp
+- no fake `current_a`
+- health/fault/temp
+- safety readback
 
-本任务**不要**创建新的 v0.4.0 hardware verification checklist。
+### Fan
+- `/fans/status_pwm`
+- `/fans/enabled`
+- `/fans/control_state`
+- `/fans/safety_state`
+- no RPM/thrust assumption
 
-真正的 v0.4.0 hardware verification protocol 留给后续 Task 6。
+### Flight Runtime
+- DRY_RUN
+- authority NONE
+- actuation_allowed false
+- preview only
+- no executable actuator path
 
 ---
 
-# Deliverable 4 — Preserve Historical Release Evidence
+# Deliverable 5 — Stage 2: Ownership Reserve / Revoke Without Motion
 
-明确保留：
-
-```text
-docs/RELEASE_NOTES_v0.3.2.md
-docs/V0.3.2_RC_HARDWARE_CHECKLIST.md
-```
-
-这些是 v0.3.2 历史发布记录/验证证据，不属于过期工作流文档。
-
-不得因 Task 5 cleanup 修改其历史结论，
-除非仅修复明显 broken link / typo 且不改变历史含义。
-
-不得修改：
-
-- v0.3.0 tag；
-- v0.3.1 tag；
-- v0.3.2 tag。
-
----
-
-# Deliverable 5 — Preserve Workflow Documents
-
-保留：
+只验证：
 
 ```text
-docs/NEXT_COMMAND.md
-docs/LATEST_FEEDBACK.md
+READY_TO_TAKEOVER
+-> reserve
+-> revoke
 ```
 
-并把其语义正式写入 `AGENTS.md`：
+不进入可执行 normal Flight command。
+
+要求：
+
+- `flight_takeover_enabled=true` 仅在该阶段获得单独授权后开启；
+- 使用明确 safe/test controller；
+- reserve 后 motor/fan 进入 safe hold/stop；
+- legacy MANUAL/AUTO 被 block；
+- 不产生新 motor target；
+- 不产生新 active fan PWM；
+- revoke 后 owner -> NONE；
+- 不自动恢复 legacy owner；
+- operator 显式 reclaim。
+
+验证 token、authority_epoch/generation、owner readback、partial reserve rollback、handoff lease timeout、revoke unavailable 的 fail-closed。
+
+---
+
+# Deliverable 6 — Stage 3: Motor-only Flight Takeover
+
+这是第一次可能允许真实 motor movement，必须单独显式授权。
+
+目标：
+
+- fan 保持 safe stop；
+- 只验证 motor ownership + bounded Flight position command；
+- 先单 motor / 单轴；
+- 再按需要扩展完整 4-motor frame。
+
+前置：
+
+- Stage 0–2 通过；
+- motor temperature normal；
+- no fault；
+- global E-STOP clear；
+- soft limits confirmed；
+- mechanical clearance；
+- physical kill available；
+- explicit motor-motion authorization。
+
+命令幅度必须非常小且靠近 current/last successful position。
+
+**不要凭空发明最大偏移数值。**
+
+如果仓库没有可安全引用的阈值，计划写：
 
 ```text
-docs/NEXT_COMMAND.md
-    只保存当前最新任务
-
-docs/LATEST_FEEDBACK.md
-    只保存当前最新任务反馈
+TO BE SET BEFORE EXECUTION
 ```
 
-本任务执行期间：
-
-- 不修改用户提供的当前 `docs/NEXT_COMMAND.md`；
-- 最后只更新 `docs/LATEST_FEEDBACK.md`。
-
-不要把长期架构重新塞入 NEXT_COMMAND/LATEST_FEEDBACK。
+不得为测试修改 soft limit、speed limit 或 `motor_feedback_timeout_sec`。
 
 ---
 
-# Deliverable 6 — Update `AGENTS.md`
+# Deliverable 7 — Stage 4: Fan-only Flight Takeover
 
-这是本任务最重要的文档修正之一。
+motor 保持不动，只验证 fan ownership + normalized command mapping。
 
-## Stable baseline
+要求：
 
-将过期的：
+- 从 stop / very-low normalized command 开始；
+- 不直接跳 1.0；
+- 不超过 current `flight_fan_max_pwm_us`；
+- 不把 normalized value 当 thrust；
+- 验证 left/right mapping、起转、ramp、timeout、safe-stop、revoke、E-STOP override、Runtime loss safe-stop。
+
+不发明 RPM/thrust 判定标准。
+
+---
+
+# Deliverable 8 — Stage 5: Combined Ownership, Minimal Command
+
+目标验证：
 
 ```text
-v0.3.1 是当前稳定发布基线
+motor reserve/commit
+fan reserve/commit
+atomic Runtime commit
+post-grant new-state barrier
+first valid envelope
 ```
 
-修正为：
+只使用：
+
+- motor 最小安全幅度；
+- fan 最低实际可验证 command；
+- 简单非飞行、非激烈闭环 test controller。
+
+重点是 distributed ownership + atomic commit，不是飞控算法性能。
+
+必须记录：
+
+- authority_epoch；
+- generation；
+- cutoff state_sequence；
+- first command state_sequence；
+- owner tokens；
+- first accepted command sequence。
+
+
+---
+
+# Deliverable 9 — Stage 6: Safe-stop / Timeout / Runtime Loss
+
+至少设计：
+
+## Algorithm safe-stop
+
+ACTIVE 时：
 
 ```text
-v0.3.2 是当前正式稳定发布基线
+FlightCommand.safe_stop()
 ```
 
-同时说明当前开发分支正在推进 v0.4.0，
-但稳定 tag 仍以 v0.3.2 为准。
+预期：
 
-不要把当前未发布 HEAD 称为 stable release。
+- motor halt；
+- fan stop；
+- Runtime INHIBITED；
+- owner NONE；
+- no automatic legacy recovery。
 
-## Authoritative sources
+## Command heartbeat timeout
 
-移除 `FIRST_COMMAND.md`。
+验证 motor/fan Flight command timeout、owner release、Runtime inhibit。
 
-建议权威来源整理为：
+## Handoff lease timeout
 
-1. `AGENTS.md` — 最高硬件安全与 Git/协作规则；
-2. `README.md` — 当前用户安装、运行、公开接口与状态概览；
-3. `docs/HARDWARE_REFERENCE.md` — 硬件布局、机械/坐标/接线契约；
-4. `docs/FLIGHT_CONTROL_ARCHITECTURE.md` — Flight 长期架构 source of truth；
-5. `docs/FLIGHT_CONTROL_API.md` — 算法开发 API source of truth；
-6. `src/` + config/launch/tests — 实际行为最终依据；
-7. release notes/checklist — 仅作为对应历史版本证据。
+reserve/commit 后第一条 command 前故意延迟，确认 owner fail-closed。
 
-并明确 `NEXT_COMMAND/LATEST_FEEDBACK` 是工作流状态，而不是长期产品架构来源。
+## Runtime process stop/crash
 
-## Five-package software CI
+预期：
 
-AGENTS 当前默认 `colcon test --packages-select` 列表如果仍只有三个 package，
-更新为当前五包：
+- no new command；
+- owner local lease timeout；
+- motor halt；
+- fan stop；
+- new Runtime 不恢复 old authority；
+- old epoch message reject。
+
+## Owner process loss
+
+任一 owner 丢失：
+
+- Runtime inhibit；
+- remaining owner best-effort revoke；
+- no auto fallback。
+
+所有 crash/kill 操作在未来执行时都必须单独授权。
+
+---
+
+# Deliverable 10 — Stage 7: E-STOP / ERROR Interaction
+
+这是高风险阶段，必须单独授权。
+
+至少规划：
+
+## E-STOP during Flight
+
+预期：
+
+- lower-level E-STOP 优先；
+- Flight authority失效；
+- motor/fan safe state；
+- Runtime INHIBITED；
+- E-STOP clear 不自动恢复 Flight；
+- existing explicit recovery + new prepare。
+
+## Motor ERROR during Flight
+
+优先使用安全、已有、可控的软件模拟/受控 fault。
+
+若必须真实 hardware fault 才能验证，标记：
 
 ```text
-imu_cybergear_ros2
-windarmor_fan_controller
-windarmor_interfaces
-windarmor_flight_control
-windarmor_bringup
+OPTIONAL / HIGH RISK / NOT REQUIRED FOR NORMAL RC
 ```
 
-优先把：
+不得规划：
+
+- 故意 critical overtemperature；
+- 故意堵转；
+- 人为危险过流；
+- 带电拔插高功率线；
+- destructive fault。
+
+预期：
+
+- ERROR latch；
+- Flight 不能 clear ERROR；
+- reconnect 不恢复 Flight；
+- old target 不重发。
+
+---
+
+# Deliverable 11 — Stage 8: Legacy Regression After Flight
+
+验证：
+
+- motor MANUAL；
+- motor legacy AUTO；
+- HOME；
+- fan MANUAL；
+- fan legacy AUTO；
+- E-STOP；
+- reset flow；
+- normal shutdown；
+- transport reconnect；
+- v0.3.2 normal behavior。
+
+特别确认：
+
+- Flight release 后不会自动 legacy；
+- operator 显式 reclaim 后 legacy 才恢复；
+- old Flight epoch/generation command 不再有效。
+
+---
+
+# Deliverable 12 — Stage 9: Final v0.4.0 RC Regression
+
+最终候选验证摘要，不在 Task 6 执行。
+
+至少包含：
+
+- boot；
+- IMU；
+- motor feedback；
+- fan status；
+- DRY_RUN；
+- explicit Flight takeover；
+- minimal normal command；
+- safe-stop；
+- explicit legacy reclaim；
+- E-STOP；
+- shutdown；
+- restart；
+- no stale authority replay；
+- no old target replay。
+
+避免与 Stage 0–8 逐项重复，作为最终整机正常功能 + 核心安全契约摘要。
+
+---
+
+# Deliverable 13 — Per-stage Template
+
+每个 Stage 统一使用：
 
 ```text
-./scripts/ci_software.sh
+Stage name
+Risk level
+Hardware scope
+Prerequisites
+Required explicit user authorization
+Allowed operations
+Forbidden operations
+Exact launch / ROS commands
+Expected ROS state
+Expected physical behavior
+Observations to record
+Abort / stop conditions
+Rollback / safe-state procedure
+Pass criteria
+Fail criteria
+Next-stage gate
 ```
 
-说明为当前仓库完整无硬件软件 CI 的统一入口。
-
-仍保留：
-
-> 新增/修改测试后必须重新确认不会触碰真实硬件。
-
-## Documentation wording
-
-新增长期规则：
-
-> 源代码注释、README、正式技术文档、测试说明和发布文档应描述工程设计、
-> 行为、约束与验证结果，不记录生成工具、实现助手或模型身份作为实现来源。
-
-该规则不得影响必要的第三方许可证、依赖名称或技术产品名称。
-
----
-
-# Deliverable 7 — README Targeted Cleanup
-
-不要大规模重写 README。
-
-目标是：
-
-- 保留用户真正需要的安装、硬件警告、运行、接口和 v0.3.2 稳定状态；
-- 减少与 `FLIGHT_CONTROL_ARCHITECTURE.md` /
-  `FLIGHT_CONTROL_API.md` 重复的大段 Task 1~4 内部实现叙述；
-- 当前 Flight 状态用较短 summary + 正式文档链接表达；
-- 保留 `flight_takeover_enabled=false` 和“尚未实机验证”的醒目边界；
-- 删除对 `MANUAL_VERIFICATION.md` 的链接；
-- hardware verification 尚未规划完成时，直接指向 `AGENTS.md` 的带电授权门槛，
-  不虚构不存在的新 checklist；
-- 添加 `HARDWARE_REFERENCE.md` 链接；
-- 不删除仍然需要的 v0.3.2 操作说明和安全警告。
-
-如果某段 README 与 architecture/API 内容完全重复，优先让长期详细说明只存在于正式文档，
-README 保留摘要和入口。
-
----
-
-# Deliverable 8 — Algorithm Developer Quick Start
-
-不要再新增一个与 `FLIGHT_CONTROL_API.md` 重复的大型文档。
-
-直接在：
+如果某项仍需执行前确认：
 
 ```text
-docs/FLIGHT_CONTROL_API.md
+TO BE CONFIRMED BEFORE EXECUTION
 ```
 
-顶部或“算法入口”前增加一个简洁的 **Quick Start / Handoff** 小节。
+不要编造不存在的 topic/service/launch 名称。
 
-目标：新算法成员只阅读这一小节即可知道从哪里开始。
-
-至少说明：
-
-1. 主要修改范围是 `windarmor_flight_control` 的 algorithm implementation 区域；
-2. 不修改 hardware driver / runtime / authority / safety package，除非另行协作；
-3. 实现 `FlightController.reset()` / `update(state, dt)`；
-4. 输入只使用 `FlightState`；
-5. 输出只返回 `FlightCommand`；
-6. 不 import ROS/hardware libraries；
-7. 使用 fake state 做普通 Python unit test；
-8. normal command 必须完整，safe-stop 使用 `FlightCommand.safe_stop()`；
-9. algorithm 不 arm、不 reset E-STOP/ERROR、不 set-zero；
-10. 当前 takeover 默认关闭，实机验证不属于算法开发默认流程。
-
-给出**当前仓库真实可运行**的最小离线测试命令，
-执行端必须先检查 package/test 结构后再写，不凭想象编造。
+所有命令必须从当前仓库真实接口核对。
 
 ---
 
-# Deliverable 9 — Root README Algorithm Handoff Entry
+# Deliverable 14 — Authorization Matrix
 
-README 增加一个简洁的“飞控算法开发”入口，内容只需：
+增加表格，至少区分：
 
 ```text
-先读 FLIGHT_CONTROL_API.md
-需要理解系统边界再读 FLIGHT_CONTROL_ARCHITECTURE.md
-硬件映射读 HARDWARE_REFERENCE.md
+Stage 0 physical-only
+Stage 1 powered read-only
+Stage 2 owner handoff, no motion
+Stage 3 motor motion
+Stage 4 fan spin
+Stage 5 combined actuator
+Stage 6 timeout/crash
+Stage 7 E-STOP/fault
+Stage 8 legacy regression
+Stage 9 final RC
 ```
 
-再给出算法目录位置和无硬件 unit-test 入口。
+每阶段写：
 
-不要把整份 Flight API 复制进 README。
+- 是否需要真实硬件；
+- 是否带电；
+- 是否可能运动；
+- 是否需要用户单独授权；
+- 是否可 software-only 替代。
+
+所有会导致真实 actuator movement、owner takeover、E-STOP/fault injection 的阶段必须单独授权。
 
 ---
 
-# Deliverable 10 — Repository Documentation Inventory
+# Deliverable 15 — Hardware Scope Matrix
 
-对 tracked docs 做完整审计，并在最终反馈中分类：
+按域拆分：
 
 ```text
-KEEP
-MIGRATE
-DELETE
-REWRITE
+IMU
+Motor/CAN
+Fan/GPIO/PWM
+Flight Runtime
+Ownership protocol
+E-STOP
+Power/mechanical environment
 ```
 
-至少包含当前 `docs/` 全部文件。
+标明每个 Stage 涉及哪些域。
 
-目标状态预期为：
+---
+
+# Deliverable 16 — Evidence Template
+
+设计统一记录：
 
 ```text
-docs/
-├── FLIGHT_CONTROL_API.md
-├── FLIGHT_CONTROL_ARCHITECTURE.md
-├── HARDWARE_REFERENCE.md
-├── LATEST_FEEDBACK.md
-├── NEXT_COMMAND.md
-├── RELEASE_NOTES_v0.3.2.md
-└── V0.3.2_RC_HARDWARE_CHECKLIST.md
+Date/time
+Git HEAD
+Config snapshot
+Stage
+Hardware powered?
+Takeover enabled?
+Authority epoch
+Generation
+Owner states
+ControllerState
+Global E-STOP
+Motor health
+Fan state
+Command sequence
+Expected
+Observed
+Pass/Fail
+Operator notes
+Stop reason
 ```
 
-如果执行端发现仍有合理原因保留 FIRST_COMMAND 或 MANUAL_VERIFICATION，
-不要强行删除，但必须停止该删除项并在反馈中给出具体唯一信息/依赖证据。
+未来实际执行时填写，不把聊天记录当正式验证证据。
 
 ---
 
-# Deliverable 11 — Stale Version / Status Audit
+# Deliverable 17 — Config Snapshot Requirements
 
-对 tracked source/docs/config/test 做搜索。
+硬件执行前必须记录关键 config。
 
-区分：
+### Motor
+- `motor_ids`
+- `motor_names`
+- `motor_signs`
+- soft limits
+- manual/auto/flight motion speeds
+- `motor_feedback_timeout_sec`
+- handoff/command timeout
 
-## Historical references
+### Fan
+- pins
+- stop/start/max
+- flight max
+- ramp rates
+- handoff/command timeout
 
-例如：
+### Flight
+- control rate
+- freshness
+- `flight_takeover_enabled`
+- handoff timeout
+- controller factory
+
+Task 6 不修改这些值。
+
+---
+
+# Deliverable 18 — Pre-execution Safety Checklist
+
+任何带电 Stage 前统一确认：
+
+- correct Git HEAD；
+- working tree status；
+- correct config；
+- expected launch；
+- physical clearance；
+- no person in motion envelope；
+- kill power available；
+- E-STOP reachable；
+- fan guarded / clear；
+- motor load mechanically safe；
+- terminal/log capture；
+- no stale ROS graph/process；
+- previous Flight authority cleared；
+- no old Runtime process；
+- user explicitly authorized this Stage。
+
+---
+
+# Deliverable 19 — Global Stop Conditions
+
+至少：
+
+- unexpected motor direction；
+- unexpected fan side/direction；
+- command target mismatch；
+- motor fault bit；
+- worsening temperature warning；
+- critical temperature；
+- CAN/transport instability；
+- IMU axis mismatch；
+- unknown/incorrect owner state；
+- E-STOP unknown when clear required；
+- unexpected authority token；
+- command sequence anomaly；
+- unexpected ACTIVE；
+- stale readback；
+- lease timeout；
+- unexpected actuator movement；
+- mechanical interference；
+- unusual sound/vibration/smell/heat；
+- user requests stop。
+
+发生任意条件：
 
 ```text
-v0.3.0 changes
-v0.3.1 release history
-v0.3.2 release notes
+STOP current stage
+do not auto-continue
+record evidence
+return to safe state
 ```
 
-这些不应因为“版本旧”而删除。
+---
 
-## Stale current-state claims
+# Deliverable 20 — Recovery Rules
 
-例如：
+继续遵守：
 
-```text
-v0.3.1 is current stable
-Task 2 currently has no actuator path
-Task 3 production can never...
-```
+- ERROR 不自动恢复；
+- E-STOP clear 不恢复 Flight；
+- transport reconnect 不恢复 Flight；
+- Runtime restart 不恢复 authority；
+- old epoch/generation 不恢复；
+- owner timeout 后不自动 legacy；
+- Flight safe-stop 后不自动 legacy；
+- next attempt 需要 explicit prepare/handoff；
+- legacy reclaim 需要显式 operator action。
 
-如果与当前 HEAD 明显冲突，应修正。
-
-不要机械替换版本字符串。
+不要设计自动恢复以方便测试。
 
 ---
 
-# Deliverable 12 — Stale TODO / Comment Audit
+# Deliverable 21 — No Destructive Testing
 
-审计：
+常规 v0.4.0 验证禁止：
 
-- TODO
-- FIXME
-- XXX
-- obsolete task comments
-- stale docstring
-- comments that refer to old Task-number behavior
-- comments that no longer match current Runtime capability
-
-只修明显已过期的描述。
-
-不要删除仍代表真实未完成工作的 TODO；
-这类内容在反馈中列为 future work。
-
-注释应描述当前工程行为，而不是某次临时任务历史。
+- 故意堵转 motor；
+- 故意超过 soft limit；
+- 故意升温到 critical；
+- 故意过流；
+- 故意破坏 CAN bus；
+- 带电拔插 high-current line；
+- 触碰旋转 fan；
+- 超出 current fan Flight max；
+- 修改 safety threshold 制造故障；
+- 绕过 E-STOP/watchdog；
+- 直接写 CyberGear SDO 代替正式 path。
 
 ---
 
-# Deliverable 13 — Tool/Assistant Identity Wording Audit
+# Deliverable 22 — Software Gate Before Hardware Session
 
-对 tracked source、comments/docstrings、README、docs、tests、package metadata 做文本审计。
-
-如果某段只是记录生成工具/实现助手身份或把工具身份当作代码来源，
-改为工程化措辞或删除 provenance 描述。
-
-不要：
-
-- 修改 Git history；
-- 修改第三方 license；
-- 删除真实依赖/产品名称；
-- 因普通单词中的短字符串造成误报。
-
-最终反馈只需说明：
-
-```text
-found / cleaned / intentionally retained with reason
-```
-
-不要在新正式文档中继续列举具体工具名称作为反例。
-
----
-
-# Deliverable 14 — File / Code / Config Redundancy Audit
-
-这是**审计优先、删除保守**的任务。
-
-对 tracked repository 检查：
-
-- 未引用 Python module；
-- 未使用 script；
-- 未引用 launch；
-- 未引用 YAML/config；
-- package data 中遗留文件；
-- 未使用 ROS entry point；
-- 重复 helper；
-- obsolete compatibility shim；
-- dead test fixture；
-- orphan docs/link。
-
-## Before declaring something dead
-
-必须检查：
-
-- import / dynamic import；
-- `setup.py` entry points；
-- package data；
-- `package.xml` / `CMakeLists.txt`；
-- launch include；
-- YAML path；
-- CI script；
-- shell script；
-- tests；
-- README/docs；
-- ROS plugin/factory string；
-- controller factory dynamic loading；
-- public ROS compatibility contract。
-
-## Allowed deletion
-
-只有同时满足：
-
-1. 确实无 runtime/build/test/docs/dynamic-loader 引用；
-2. 不是 public ROS compatibility interface；
-3. 不是 safety fallback；
-4. 不是 release evidence；
-5. 删除后五包 build + tests + CI 全通过；
-6. 删除理由可在反馈中具体说明。
-
-## Report-only candidates
-
-以下只报告，不删除：
-
-- 可能属于兼容接口；
-- 动态加载难以证明未使用；
-- 与 safety/recovery 有关；
-- 删除会改变 public topic/service/parameter；
-- 删除会减少故障注入覆盖；
-- 需要用户做产品取舍。
-
-不要为了“减少文件数量”做高风险重构。
-
----
-
-# Deliverable 15 — Test Helper Deduplication
-
-允许合并**明显完全重复、且不降低覆盖**的 test helper。
-
-但：
-
-- 不减少 safety scenario 数量；
-- 不删除独立 fault-injection test；
-- 不把 motor/fan/flight package 的测试强行放到同一个顶层 `test` Python package；
-- 如果收益不明显，保持现状并在反馈中说明“不做”。
-
----
-
-# Deliverable 16 — Broken Link / Reference Audit
-
-检查：
-
-- README markdown links；
-- docs 相对链接；
-- 删除 FIRST_COMMAND/MANUAL_VERIFICATION 后的残留引用；
-- AGENTS links/path references；
-- launch/config path examples；
-- package names；
-- current topic/service names。
-
-所有删除文档的引用必须清零。
-
-可以使用 `git grep` / `rg` 和轻量 link check，
-但不要求联网验证外部第三方链接。
-
----
-
-# Deliverable 17 — Package / Version Metadata Audit
-
-检查五个 ROS package 的：
-
-- package name；
-- version；
-- description；
-- dependencies；
-- maintainer metadata；
-- setup entry points。
-
-本任务主要做一致性审计。
-
-不要为了“统一看起来更整齐”擅自把现有 subsystem package version 全部改成 0.4.0。
-
-v0.4.0 RC 前会单独审核版本。
-
-只有明显错误/过期 description 且不影响行为时才允许修正文案。
-
----
-
-# Deliverable 18 — CI / AGENTS Consistency Audit
-
-确认：
-
-```text
-AGENTS.md
-README.md
-scripts/ci_software.sh
-.github/workflows/*
-```
-
-对纯软件 CI 的描述一致。
-
-重点：
-
-- 当前是五个 package；
-- Hosted runner only；
-- no self-hosted hardware CI；
-- no `/dev`；
-- no SocketCAN setup；
-- no GPIO/PWM；
-- no real hardware launch；
-- `scripts/ci_software.sh` 是统一入口。
-
-不得为了 cleanup 放宽 CI safety checker。
-
----
-
-# Deliverable 19 — No Control Logic Changes
-
-本任务原则上不应修改核心控制行为文件。
-
-如果仅为删除明显 stale comment/docstring 可以修改；
-除此之外不得改变逻辑。
-
-若 redundancy audit 在 motor/fan/Flight 核心逻辑中发现候选 dead code，
-默认只在反馈中记录，留给后续独立重构任务。
-
----
-
-# Deliverable 20 — Preserve Flight API Compatibility
-
-Task 5 不得破坏：
-
-```text
-FlightState
-FlightCommand
-FlightController
-CommandAuthority
-authority_epoch/generation
-FlightCommandEnvelope
-owner services
-ownership readback
-```
-
-算法 quick-start 只能解释现有 API，不能为了文档更简单而改 API。
-
----
-
-# Deliverable 21 — Software Verification
-
-本任务仍只允许无硬件验证。
-
-至少执行仓库当前统一入口：
+硬件 session 前执行：
 
 ```bash
 source /opt/ros/jazzy/setup.bash
 ./scripts/ci_software.sh
 ```
 
-并按当前仓库实际需要执行五包 build/test。
+并记录当前 Git HEAD。
 
-不得访问真实：
-
-- `/dev/*`
-- CAN
-- USB-CAN
-- CyberGear
-- IMU serial
-- GPIO
-- PWM
-- ESC
-- fan
+如果 hardware session 使用的 commit 与最近 green CI commit 不同，必须重新判断是否重跑。
 
 ---
 
-# Deliverable 22 — Cleanup Verification
+# Deliverable 23 — Plan Interface Audit
 
-最终反馈中记录用于确认 cleanup 的只读命令，例如：
+本任务完成前以只读/无硬件方式核对计划中的：
 
-```bash
-git status --short --branch
-git diff --check
-git grep ...
-rg ...
-git ls-files ...
+- topic names；
+- service names；
+- launch names；
+- package names；
+- parameter names；
+- status enums；
+- owner states；
+- authority states。
+
+可使用：
+
+```text
+rg
+git grep
+ROS interface introspection from built workspace
 ```
 
-至少证明：
+但不启动真实硬件 node。
 
-- no `FIRST_COMMAND.md` reference；
-- no `MANUAL_VERIFICATION.md` reference；
-- no stale “v0.3.1 current stable” claim；
-- docs links 指向存在的 tracked files；
-- deleted files 不再被 package/build/runtime 引用。
+所有命令示例必须与当前代码一致。
+
+---
+
+# Deliverable 24 — README / AGENTS Minimal Update Only If Needed
+
+原则上本任务只新增 hardware verification plan。
+
+README 可增加一个简洁入口链接。
+
+AGENTS 仅在确有必要时补充：
+
+> 所有带电 Stage 均需逐阶段独立授权。
+
+不要复制完整 checklist 到 README/AGENTS。
+
+---
+
+# Deliverable 25 — Do Not Modify Control Logic
+
+禁止修改：
+
+- motor control；
+- motor ownership；
+- fan control；
+- fan ownership；
+- Flight Runtime；
+- authority；
+- envelope；
+- safety monitor；
+- timeout implementation；
+- launch default behavior；
+- config values。
+
+若制定 plan 时发现新的 software blocker：
+
+- 不在 Task 6 修；
+- 写入 `LATEST_FEEDBACK.md`；
+- 建议新的 Task 6.x；
+- 停止进入 hardware execution。
+
+---
+
+# Deliverable 26 — Software Verification
+
+至少运行：
+
+```bash
+git diff --check
+```
+
+以及：
+
+```bash
+source /opt/ros/jazzy/setup.bash
+./scripts/ci_software.sh
+```
+
+不得访问真实硬件。
 
 ---
 
 # Expected Result
 
-Task 5 完成后：
+Task 6 完成后：
 
-1. `AGENTS.md` 正确声明 v0.3.2 为当前稳定发布；
-2. `AGENTS.md` 权威来源不再依赖 FIRST_COMMAND；
-3. `AGENTS.md` 正确覆盖五包 software CI；
-4. `docs/HARDWARE_REFERENCE.md` 成为硬件布局/坐标长期文档；
-5. `docs/FIRST_COMMAND.md` 删除；
-6. `docs/MANUAL_VERIFICATION.md` 删除；
-7. v0.3.2 Release Notes / RC checklist 保留；
-8. NEXT_COMMAND / LATEST_FEEDBACK 工作流语义明确；
-9. README 不再链接被删除文档；
-10. README Flight 部分减少与 Architecture/API 的重复；
-11. `FLIGHT_CONTROL_API.md` 有清晰算法开发 Quick Start；
-12. 新算法成员能快速定位 algorithm 区域并离线测试；
-13. 正式工程内容不记录无关实现工具/助手身份；
-14. stale current-state wording 被修正；
-15. dead/redundant file/code/config 完成保守审计；
-16. 高风险或不确定 cleanup 只报告、不删除；
-17. Flight API / ROS public interface / safety behavior 不变；
-18. `flight_takeover_enabled=false` 默认不变；
-19. 全软件 CI 通过；
-20. 未执行任何真实硬件操作；
-21. 仓库可以进入 Task 6 — v0.4.0 Hardware Verification Planning。
+1. 存在 `docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md`；
+2. 文档状态明确为未执行；
+3. 验证被拆成 Stage 0–9；
+4. 每个 Stage 有独立授权门槛；
+5. 所有会产生 motion/takeover/fault 的阶段默认禁止；
+6. Stage 0 先确认机械/接线/IMU frame；
+7. Stage 1 先只读状态链；
+8. Stage 2 先 owner reserve/revoke；
+9. motor/fan takeover 分开验证；
+10. combined handoff 在单 subsystem 之后；
+11. timeout/crash/E-STOP 在基础 motion 成功后；
+12. legacy regression 在 Flight 测试后；
+13. final RC regression 单独定义；
+14. 无 destructive testing；
+15. plan 中 interface 与当前仓库一致；
+16. 未执行任何真实硬件操作；
+17. 未改变 control/safety/config semantics；
+18. 下一步只能由用户逐阶段选择并授权 Stage 0/1 或后续阶段。
 
 ---
 
@@ -859,20 +847,19 @@ Task 5 完成后：
 
 明确不做：
 
-- Flight control logic change；
-- algorithm/PID 实现；
-- Flight API breaking change；
-- owner/authority redesign；
-- real hardware test；
-- real Flight takeover；
+- Stage 0–9 的真实执行；
+- CyberGear motion；
+- fan spin；
+- owner takeover；
+- E-STOP/fault injection；
 - hardware timing measurement；
+- config tuning；
+- Flight algorithm tuning；
 - IMU calibration；
-- fan RPM/thrust characterization；
-- current measurement research；
-- `windarmor_bringup` 默认启用 Flight；
-- v0.4.0 hardware checklist；
-- v0.4.0 RC；
-- version tag；
+- thrust/RPM characterization；
+- current measurement；
+- package version bump；
+- v0.4.0 RC tag；
 - release；
 - GitHub Release；
 - commit；
@@ -883,18 +870,18 @@ Task 5 完成后：
 
 # Stop Conditions
 
-遇到以下任一情况必须停止对应 cleanup 项并报告：
+若出现：
 
-- 删除文件需要破坏 public ROS interface；
-- 删除代码可能属于 safety fallback；
-- 无法证明 dynamic import / controller factory 未使用；
-- 删除 config 需要改变 runtime default；
-- 必须修改 motor/fan/Flight 控制逻辑；
-- 必须弱化 AGENTS hardware gate；
-- 必须访问真实硬件验证“是否没用”；
-- FIRST_COMMAND 中发现仍有无法安全迁移但仍是唯一权威的信息；
-- MANUAL_VERIFICATION 中发现 AGENTS/其他长期文档没有覆盖的当前必要安全规则；
-- cleanup 开始扩展到 Task 6 hardware verification。
+- 无法从当前仓库确认 interface 名称；
+- hardware mapping 与 `HARDWARE_REFERENCE.md` 冲突；
+- 发现新的 software safety blocker；
+- 某 Stage 必须绕过 existing safety path；
+- 必须改 config default 才能制定计划；
+- 必须做真实硬件动作才能确认计划；
+- 计划开始包含 destructive testing；
+- 一次授权被解释为后续阶段授权；
+
+必须停止并报告。
 
 ---
 
@@ -909,84 +896,43 @@ docs/LATEST_FEEDBACK.md
 至少包含：
 
 ## Scope
+- 新增/修改 docs；
+- 是否修改 README/AGENTS；
+- source/config/control logic 是否未修改。
 
-- 修改/新增/删除文件；
-- docs 最终 inventory；
-- README/AGENTS/API 变化；
-- 是否修改任何 source/config/package metadata。
+## Verification Plan
+- Stage 0–9 摘要；
+- authorization matrix；
+- hardware scope matrix；
+- global stop conditions；
+- evidence template；
+- config snapshot；
+- recovery rules。
 
-## Documentation Classification
-
-逐项给出：
-
-```text
-KEEP
-MIGRATE
-DELETE
-REWRITE
-```
-
-并说明 FIRST_COMMAND / MANUAL_VERIFICATION 的迁移与删除结果。
-
-## Hardware Reference
-
-说明：
-
-- motor mechanical mapping；
-- IMU frame；
-- fan wiring；
-- 哪些是 current config；
-- 哪些仍需未来实机确认；
-- 没有新增未经验证的物理量。
-
-## Algorithm Handoff
-
-说明：
-
-- Quick Start 位置；
-- algorithm 主要修改目录；
-- offline test command；
-- API 是否变化（预期：否）。
-
-## Redundancy Audit
-
-列出：
-
-- 实际删除的 dead/redundant items；
-- 保留的疑似候选及理由；
-- report-only candidates；
-- public compatibility/safety items 未删除说明。
-
-## Wording Audit
-
-说明：
-
-- stale current-state claims；
-- stale TODO/comment；
-- implementation provenance wording；
-- intentionally retained cases and reason。
+## Interface Audit
+- 核对的 topic/service/parameter/launch；
+- 是否存在计划与实现不一致；
+- 是否存在需要 Task 6.x 修复的软件 blocker。
 
 ## Safety Boundary
-
 明确：
-
-- 无控制逻辑变化；
-- 无 public ROS breaking change；
+- 未执行真实硬件；
+- 未开启 takeover；
+- 未运行 motor/fan；
+- 未调用 E-STOP/ERROR recovery；
+- 未修改 config；
 - `flight_takeover_enabled=false` 不变；
 - `motor_feedback_timeout_sec=0.0` 不变；
-- 未执行真实硬件；
-- 未改变 ERROR/E-STOP/reconnect/ownership/lease semantics。
+- stable tags 不变。
 
 ## Tests
-
-- exact commands；
+- `git diff --check`；
+- `./scripts/ci_software.sh`；
 - pass/fail；
 - warnings/skipped；
-- CI result；
-- 是否存在 Task 6 前 blocker。
+- 是否有进入 Stage 0/1 前 blocker。
 
 ## Git 状态（反馈生成时）
-
 - HEAD；
 - branch；
 - working tree；

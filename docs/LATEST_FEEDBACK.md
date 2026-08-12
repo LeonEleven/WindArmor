@@ -1,4 +1,4 @@
-# 最新反馈：v0.4.0 Task 5 Repository Cleanup & Algorithm Handoff
+# 最新反馈：v0.4.0 Task 6 Hardware Verification Planning
 
 > 本文件只保留当前最新任务反馈。
 >
@@ -6,244 +6,244 @@
 
 ## Scope
 
-Task 5 已完成文档迁移、仓库审计、算法交接入口和完整无硬件软件验证。
+Task 6 已完成 v0.4.0 分阶段真实硬件验证计划与当前仓库接口审计，但没有执行任何
+Stage 或硬件操作。
 
 新增：
 
-- `docs/HARDWARE_REFERENCE.md`。
-
-删除：
-
-- `docs/FIRST_COMMAND.md`；
-- `docs/MANUAL_VERIFICATION.md`。
+- `docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md`：状态为
+  `PLANNED / NOT YET EXECUTED`，包含 Stage 0–9、逐阶段授权、安全 gate、证据模板、
+  config snapshot、authorization/hardware scope matrix、global stop/recovery 规则和
+  当前执行 blocker。
 
 修改：
 
-- `AGENTS.md`：稳定基线、权威来源、工作流文档语义、五包 CI 和工程措辞规则；
-- `README.md`：精简 Flight 内部实现叙述，增加硬件参考与算法交接入口，移除已删除
-  人工验证文档的链接；
-- `docs/FLIGHT_CONTROL_API.md`：增加 Quick Start / Handoff；
-- `.github/workflows/ci.yml`、`scripts/ci_software.sh`：修正五包和 flight/interface
-  测试阶段显示文字，未放宽 CI safety checker；
-- `src/imu_cybergear_ros2/README.md` 及其三个 package docs：修正旧工作区路径、旧
-  快捷目标/速度说明、失效引用，并明确硬件授权门槛；
-- `src/windarmor_flight_control/package.xml`、`setup.py`：同步当前 authority runtime
-  和 actuator adapter 的 description；
-- `src/windarmor_flight_control/config/flight_control.yaml`：仅把一次性 Task 编号注释
-  改为当前工程状态措辞；配置值未改变；
-- 本反馈。
+- `README.md`：新增长期计划入口，并把“尚未建立 v0.4.0 checklist”的过期说明改为
+  “计划仍未执行、每个 Stage 单独授权”；
+- `docs/LATEST_FEEDBACK.md`：更新为本 Task 6 反馈。
 
-未修改 motor/fan/IMU/Flight Runtime 控制逻辑、ROS message/service、launch 行为、
-测试代码或受保护硬件配置。package metadata 只修改了 Flight package description；
-五包版本、依赖、maintainer、entry point 均未改变。
+未修改：
 
-任务开始前用户已有的 `docs/NEXT_COMMAND.md` 修改未编辑。任务开始与本反馈生成前
-SHA-256 均为
-`3505ade3ec29a6afdb7e46fb9270a4c69758036df7531138746e0fc538ad5292`。
+- `AGENTS.md`：现有十项带电授权门槛已经覆盖最高安全要求，无需复制 checklist；
+- motor/fan/IMU/Flight source、config、launch、test 和 ROS interface；
+- motor/fan ownership、Flight Runtime、authority、envelope、safety monitor 或 timeout
+  implementation；
+- 任何 config 值或 launch 默认行为。
 
-最终根 `docs/` inventory：
+任务开始前用户已有的 `docs/NEXT_COMMAND.md` 修改保持未编辑；本任务写入前后核验
+SHA-256 为：
 
 ```text
-docs/
-├── FLIGHT_CONTROL_API.md
-├── FLIGHT_CONTROL_ARCHITECTURE.md
-├── HARDWARE_REFERENCE.md
-├── LATEST_FEEDBACK.md
-├── NEXT_COMMAND.md
-├── RELEASE_NOTES_v0.3.2.md
-└── V0.3.2_RC_HARDWARE_CHECKLIST.md
+5a46a62e735610460c78a004aa985cdd016504dace4073fe3e0036a59f4715f8
 ```
 
-## Documentation Classification
+## Verification Plan
 
-### KEEP
+### Stage 0–9 summary
 
-- `docs/FLIGHT_CONTROL_ARCHITECTURE.md`：Flight 长期架构依据；其中 Task 编号用于
-  区分架构演进阶段，不是 stale current-state claim；
-- `docs/NEXT_COMMAND.md`：当前最新任务，保持用户原文；
-- `docs/RELEASE_NOTES_v0.3.2.md`：v0.3.2 历史发布证据；
-- `docs/V0.3.2_RC_HARDWARE_CHECKLIST.md`：v0.3.2 历史实机回归证据；
-- `docs/HARDWARE_REFERENCE.md`：完成迁移后的长期硬件依据。
+| Stage | Purpose | Authorization / current gate |
+|---|---|---|
+| 0 | 断电物理 preflight：机械、CAN、IMU frame、GPIO/fan/ESC、soft limits | 只可由用户下一步单独选择；本任务未执行 |
+| 1 | powered read-only state chain 与 DRY_RUN | 单独授权；当前被 read-only path blocker 阻止 |
+| 2 | READY 后 ownership reserve/revoke、rollback/lease | 单独 owner 授权；当前被 Runtime 自动 commit blocker 阻止 |
+| 3 | 单 motor/单轴 bounded Flight command，fan stop | 单独 motor-motion 授权；等待 bounded controller |
+| 4 | fan low normalized command，motor hold | 单独 fan-spin 授权；等待 bounded controller |
+| 5 | combined ownership、atomic commit、minimal command | 单独 combined actuator 授权 |
+| 6 | algorithm safe-stop、heartbeat/handoff timeout、Runtime/owner loss | 每个 timeout/crash 场景单独授权 |
+| 7 | E-STOP during Flight、ERROR interaction | 每个 trigger/recovery/fault 单独高风险授权 |
+| 8 | Flight 后 v0.3.2 normal behavior/legacy regression | 单独 legacy motion 授权 |
+| 9 | 最终 v0.4.0 RC 摘要回归 | 独立 RC 授权；不在 Task 6 执行 |
 
-### MIGRATE
-
-- `docs/FIRST_COMMAND.md` 中唯一长期有效的 platform、motor mechanical mapping、
-  IMU mounting/frame、GPIO12 已验证连接背景已迁入 `HARDWARE_REFERENCE.md`；
-- `docs/MANUAL_VERIFICATION.md` 中仍适用的带电授权、设备/限制/急停/停止条件记录、
-  pure/mock 不等于实机验证等规则已由 `AGENTS.md` 的现有最高安全规则覆盖；没有把
-  一次性 v0.3.0 后速度验证流程迁入长期文档。
-
-### DELETE
-
-- `docs/FIRST_COMMAND.md`：历史启动任务背景，迁移后不再作为产品文档；
-- `docs/MANUAL_VERIFICATION.md`：已经不是最新人工验证，不创建替代的 v0.4.0
-  hardware checklist。
-
-### REWRITE
-
-- `AGENTS.md`、根 `README.md`、`docs/FLIGHT_CONTROL_API.md`、本反馈；
-- `src/imu_cybergear_ros2/README.md`；
-- `src/imu_cybergear_ros2/docs/IMU_CyberGear_Guide.md`；
-- `src/imu_cybergear_ros2/docs/环境搭建到调试运行手册.md`；
-- `src/imu_cybergear_ros2/docs/项目总览与功能清单.md`。
-
-## Hardware Reference
-
-- motor mechanical mapping：CAN ID 1 为右臂侧向肩部轴，2 为右臂前后肩部轴，
-  3 为左臂前后肩部轴，4 为左臂侧向肩部轴；
-- current config ordering：`motor_names=[left_lift,left_pitch,right_pitch,right_lift]`
-  对应 `motor_ids=[4,3,2,1]`；software sign 和 soft limit 作为独立概念记录；
-- 受保护的 `motor_ids`、`motor_signs`、`motor_limits_min/max` 原值保留；CAN ID
-  不作为 Flight algorithm key；
-- IMU 安装轴：X+ 向机器人正面、Y+ 向机器人左侧、Z+ 向上；没有新增 yaw reference；
-- fan wiring：左 GPIO12/物理 32，右 GPIO13/物理 33，GND 为物理 34 或其他 GND；
-- GPIO12 来自原单风扇已验证连接；GPIO13 仍只是第二路当前默认配置，首次带电前
-  需要物理确认，没有改写成已经实机确认；
-- 明确保留无 verified `current_a`、torque 不得推导 current、无真实 fan RPM、
-  normalized fan command 不是 thrust fraction、takeover 尚未实机验证等边界。
-
-没有新增未经验证的电流、RPM、推力、yaw reference 或 Flight 性能结论。
-
-## Algorithm Handoff
-
-Quick Start 位于 `docs/FLIGHT_CONTROL_API.md` 顶部。算法主要修改目录为：
+计划固定使用：
 
 ```text
-src/windarmor_flight_control/windarmor_flight_control/algorithms/
+physical confirmation
+-> read-only observation
+-> ownership reservation without motion
+-> single-subsystem takeover
+-> bounded actuator command
+-> combined takeover
+-> timeout/fault injection
+-> legacy regression
 ```
 
-最小离线测试命令：
+每个 Stage 都包含 risk、hardware scope、prerequisites、explicit authorization、allowed/
+forbidden operations、exact command 状态、expected ROS/physical behavior、observations、
+abort/rollback、pass/fail 和 next-stage gate。Stage N PASS 不授权 Stage N+1；FAIL 或
+依赖项 `NOT VERIFIED` 时停止。
 
-```bash
-PYTHONPATH=src/windarmor_flight_control \
-python3 -m pytest -p no:cacheprovider \
-  src/windarmor_flight_control/test/test_example_controller.py -q
+### Authorization matrix and hardware scope matrix
+
+计划按 Stage 0–9 分别记录是否真实硬件、是否带电、是否可能运动、是否需要单独
+授权、software-only 能否部分替代。所有 powered observation、owner takeover、motor
+motion、fan spin、combined actuator、timeout/crash、E-STOP/fault、legacy regression
+和 final RC 都要求单独授权。
+
+hardware scope matrix 覆盖：
+
+```text
+IMU
+Motor/CAN
+Fan/GPIO/PWM
+Flight Runtime
+Ownership protocol
+E-STOP
+Power/mechanical environment
 ```
 
-该入口说明算法只实现 `reset()` / `update(state, dt)`，只消费 `FlightState`、返回
-`FlightCommand`，normal command 必须完整，无法继续时使用
-`FlightCommand.safe_stop()`，且算法不 arm、不清除 ERROR/E-STOP、不 set-zero、
-不 import ROS/hardware library。Flight API 与 public ROS contract 均未改变。
+其中 Stage 3/4 明确记录当前 combined envelope/owner 契约：未产生动作的一侧仍是
+`hold/state` 或 `stop/state`，不能宣称真正获得单 subsystem owner。
 
-## Redundancy Audit
+### Global stop conditions
 
-实际删除的过期/重复项只有 `FIRST_COMMAND.md` 和 `MANUAL_VERIFICATION.md`；没有
-删除 source、config、launch、script、ROS entry point、message/service 或 test fixture。
+计划覆盖 unexpected motor direction、fan side/direction、target/mapping mismatch、
+fault/temperature、transport instability、IMU axis mismatch、unknown/stale owner 或
+E-STOP、token/sequence anomaly、unexpected ACTIVE/movement、lease timeout、机械干涉、
+异常声音/振动/气味/热量、日志不足和用户要求停止。
 
-审计结论：
+任一项发生时：停止当前 Stage、不自动继续、记录 evidence、回到 safe state。
 
-- Python modules 均能由 import、console entry point、controller factory、package
-  public API 或测试覆盖解释；
-- `algorithms/base.py` 在仓库内部没有直接 import，但它明确是 stable controller
-  protocol 的 compatibility import，外部算法可能依赖，列为 report-only，不删除；
-- `flight_control_dry_run.launch.py` 由 setup glob 安装且属于公开 launch；低文本引用
-  数量不能证明未使用，不删除；
-- 三个 YAML、全部 launch、四个 scripts 均由 setup/launch/CI/docs 或公开操作入口引用；
-- 所有 interface msg/srv 均在 `CMakeLists.txt` 注册，并由 runtime、owner 或 contract
-  tests 使用；
-- package 内三个详细手册由 `setup.py` 作为 package data 安装并由 package README
-  导航，因此定向修正而非删除；
-- deprecated motor scalar parameters、USB fallback、owner/safety/recovery path 属于
-  public compatibility 或 safety contract，不删除；
-- `runtime_helpers.py` 和 `fake_motor_driver.py` 分别被多项测试共享；没有可证明完全
-  重复且值得合并的 helper。保持各 ROS package 测试边界，避免顶层 `test` package
-  collection 冲突，也不减少 fault-injection scenario。
+### Evidence, config and recovery
 
-未发现满足安全删除六项条件的其他 dead code/config。高风险和动态/public compatibility
-候选全部仅报告。
+统一 evidence template 记录 date/time、operator、HEAD/working tree、config hash、授权、
+分域供电、takeover、epoch/generation、owner/source sequence、ControllerState、E-STOP、
+motor health、fan state、cutoff/command sequence、expected/observed、PASS/FAIL、stop reason
+和 rollback 结果。
 
-## Wording Audit
+config snapshot 要求展开保存：
 
-- stale current state：把 `AGENTS.md` 的 current stable 从 v0.3.1 修正为 v0.3.2；
-  修正 workflow 三包标签、Flight package no-takeover description、config 的一次性
-  Task 注释、package docs 的旧 workspace、快捷目标、速度和 broken reference；
-- historical references：v0.3.0/v0.3.1 演进、v0.3.2 release/checklist、架构 Task
-  阶段描述均有明确历史或分层语境，故保留；
-- TODO/FIXME/XXX：没有发现真实未完成工作标记。`h-goal@todo.todo` 是既有
-  maintainer placeholder，缺少可验证替代联系人，列为 report-only；`self._node.xxx`
-  是属性示意而非 XXX 标记；
-- implementation provenance wording：未发现把生成工具、实现助手或模型身份当作
-  实现来源的内容，cleaned 为 0；搜索命中的 `AGENTS.md` 文本是本任务要求新增的
-  工程措辞规则，intentionally retained；
-- package metadata：三个稳定 subsystem package 保持 0.3.2，interfaces/Flight
-  development package 保持 0.4.0；名称、依赖、entry point 和版本未发现需修改项。
+- motor ID/name/sign/soft limits、manual/auto/home/flight speed、底层 speed/max step、
+  `motor_feedback_timeout_sec`、handoff/command timeout；
+- fan pins、stop/start/max/Flight max、ramp、底层 watchdog、handoff/command timeout；
+- Flight rate、全部 freshness、takeover、handoff/revoke timeout、controller factory 和
+  interface 参数。
+
+recovery 保持 fail-closed：ERROR、E-STOP clear、transport reconnect、Runtime restart、
+old epoch/generation、owner timeout 和 Flight safe-stop 均不自动恢复 Flight/legacy；新
+attempt 要 explicit reset/prepare/handoff，legacy 要 operator explicit reclaim。
+
+计划禁止堵转、越 soft limit、critical overtemperature、过流、破坏 CAN、带电拔插、
+触碰 fan、超过 Flight max、修改 safety threshold、绕过 E-STOP/watchdog 或直接写 SDO。
+
+## Interface Audit
+
+### Confirmed topics
+
+- IMU：`/imu/data_raw`、`/imu/status`、`/imu/relative_roll_pitch`、
+  `/imu/zero_generation`；
+- motor：`/motors/feedback`、`/motors/control_mode`、`/motors/safety_state`、
+  `/motors/ownership_state`、`/motors/manual_targets`、`/motor/status`；
+- fan：`/fans/status_pwm`、`/fans/enabled`、`/fans/control_state`、
+  `/fans/safety_state`、`/fans/ownership_state`、legacy manual/auto status topics；
+- Flight：`/flight_control/dry_run/status`、`/flight_control/dry_run/command_preview`、
+  `/flight_control/authority/status`、`/flight_control/command`；
+- safety：`/e_stop` Bool topic。Motor 还提供同名 Trigger service，计划明确避免混淆。
+
+### Confirmed services
+
+- authority：`/flight_control/authority/{prepare,cancel,reset_inhibit}`；
+- motor owner：`/motors/flight_ownership/{prepare,commit,revoke}`；
+- fan owner：`/fans/flight_ownership/{prepare,commit,revoke}`；
+- existing control/recovery：`/imu/set_zero`、`/motors/set_zero`、`/enable_motor`、
+  `/fans/enable`、`/fans/stop`、`/fans/manual_enable`、`/fans/auto_enable`、
+  `/fans/reset_e_stop`。
+
+owner services 的 request/response 字段已从当前 `windarmor_interfaces/srv` 核对；计划
+没有发明 token、epoch、generation 或 owner state。Stage 2 的示例使用明确非法的
+`0` 占位防止误执行，真实正值必须由未来批准工具从当次 Runtime capture。
+
+### Confirmed launch/package/parameters and enums
+
+- `imu_cybergear_ros2/imu_cybergear_system.launch.py`；
+- `windarmor_fan_controller/fans.launch.py`；
+- `windarmor_flight_control/flight_control_dry_run.launch.py`；
+- `windarmor_bringup/windarmor.launch.py`；
+- motor、fan 和 Flight 三个 current YAML 的 topic/service、timeout、mapping 和 factory；
+- authority states、command authority、motor ControllerState/public mode、motor/fan owner
+  phases 和 fan control states。
+
+未发现文档中引用不存在的 topic/service/launch/package/enum。发现的差异不是名称
+错误，而是计划目标与当前可执行路径之间的安全能力缺口。
+
+### Task 6.x blockers
+
+1. **Stage 1 read-only path：** motor controller configure 会连接 CAN、写 run mode、
+   speed、target `0.0` 并 enter control；relative attitude/zero generation、structured
+   motor feedback/safety 又依赖该 controller。fan controller 构造会初始化 GPIO/PWM
+   并执行 ESC arm delay。因此当前不能在“零 actuator command”条件下完成完整
+   powered read-only state chain。
+2. **Stage 2 staged handoff：** takeover=true 的 Runtime 在 READY 后自动 reserve 两路，
+   随后自动 commit/atomic commit，没有正式接口停在 reserve 后等待人工 revoke。
+3. **Stage 3+ test controller：** 默认 `NeutralExampleController` 的四个 `0.0` target
+   明确不是实机机械中位；当前没有以 fresh feedback 为基准、限制单轴幅度、保持
+   其余轴并控制 fan stop/low command 的正式 controller。
+4. **Stage 3/4 subsystem semantics：** normal envelope 必须同时携带完整 motor frame
+   和 fan payload，Runtime ACTIVE 需要两路 owner；当前只能做单域“产生动作”，不能
+   做真正单 owner takeover。
+
+建议依次建立：
+
+- Task 6.1：真正 read-only 的 hardware observation/relative-state path；
+- Task 6.2：受测试的 staged reserve/revoke verification mode 或等价正式工具；
+- Task 6.3：bounded hardware test controller 和 session config；
+- Task 6.4：明确接受 combined owner + single-domain actuation，或另行设计兼容的
+  single-subsystem ownership contract。
+
+这些 blocker 未在 Task 6 修复。Stage 1–9 保持 `BLOCKED / NOT AUTHORIZED`；只有
+Stage 0 可由用户下一步单独选择是否执行。
 
 ## Safety Boundary
 
-- 无控制逻辑变化，无 public ROS breaking change；
-- `FlightState`、`FlightCommand`、`FlightController`、`CommandAuthority`、
-  authority epoch/generation、`FlightCommandEnvelope`、owner service/readback 未改变；
-- `flight_takeover_enabled=false` 默认不变；
-- `motor_feedback_timeout_sec=0.0` 默认不变；
-- `motor_ids`、`motor_signs`、`motor_limits_min/max` 未修改；
-- 未改变 ERROR 不自动恢复、transport-only reconnect、MANUAL/AUTO/HOME 不自动恢复、
-  old target 不重发、E-STOP、watchdog、soft limit、command write consistency、
-  feedback/temperature safety、ownership、epoch/generation 或 lease 语义；
-- 未访问 `/dev/*`，未配置 SocketCAN，未启动 ROS node/launch，未访问 CAN、USB-CAN、
-  CyberGear、IMU serial、GPIO12/13、PWM、ESC、电机或风扇；
-- 本任务不是 hardware verification，也没有创建 Task 6 checklist。
+- 未执行 Stage 0–9，未进行真实硬件验证；
+- 未访问 `/dev/*`，未配置 SocketCAN，未启动 ROS node/launch；
+- 未连接或控制 CAN、USB-CAN、CyberGear、IMU serial、GPIO12/13、PWM、ESC、motor
+  或 fan；
+- 未开启 takeover，未实际 reserve/commit/revoke owner，未发布 executable
+  `FlightCommandEnvelope`；
+- 未触发 E-STOP/fault，未调用 E-STOP/ERROR recovery；
+- 未执行 set-zero、enable、Runtime crash/owner loss；
+- 未修改 source、control logic、safety、interface、launch 或 config；
+- `flight_takeover_enabled=false` 不变；
+- `motor_feedback_timeout_sec=0.0` 不变；
+- protected motor mapping/limits 不变；stable tags 不变。
 
 ## Tests
 
-清理与审计命令包括：
+执行：
 
 ```bash
-git status --short --branch
 git diff --check
-git grep -n -E 'FIRST_COMMAND|MANUAL_VERIFICATION' -- \
-  . ':(exclude)docs/NEXT_COMMAND.md'
-rg -n -i --glob '!docs/NEXT_COMMAND.md' \
-  'v0\.3\.1.*(current|当前|stable|稳定)|(current|当前|stable|稳定).*v0\.3\.1' .
-rg -n -i --glob '!docs/NEXT_COMMAND.md' '\b(TODO|FIXME|XXX)\b' .
-find docs -maxdepth 1 -type f -name '*.md' -printf '%f\n' | sort
-git ls-files
-```
-
-另执行只读本地 Markdown link checker，检查 8 个相对链接，全部指向存在文件；删除
-文档在 `NEXT_COMMAND.md` 之外引用为零。`git diff --check` 通过，旧 workspace、
-broken package doc reference、stale 三包/current stable/no-takeover 表述均已清零。
-
-最小算法验证：
-
-```bash
-PYTHONPATH=src/windarmor_flight_control \
-python3 -m pytest -p no:cacheprovider \
-  src/windarmor_flight_control/test/test_example_controller.py -q
-```
-
-结果：`4 passed in 0.11s`。
-
-完整软件 CI：
-
-```bash
 source /opt/ros/jazzy/setup.bash
 ./scripts/ci_software.sh
 ```
 
 结果：
 
-- CI safety、Git whitespace、Python compile：通过；
+- `git diff --check`：PASS；
+- CI safety、Git whitespace、Python compile：PASS；
 - clean build：5 packages finished；
 - motor pytest：385 passed；
 - fan pytest：112 passed；
-- flight + interfaces pytest：216 passed；
+- Flight + interfaces pytest：216 passed；
 - full five-package colcon test：5 packages finished；
 - `colcon test-result --verbose`：739 tests，0 errors，0 failures，0 skipped；
-- 最终无 warnings、failures 或 skipped。
+- warnings/skipped：无；
+- CI exit code：0。
 
-当前未发现进入 Task 6 hardware verification planning 前的软件或文档 blocker。真实
-方向、机械动态、通信 timing、PWM/ESC 和联合 takeover 仍等待后续独立计划与授权，
-不能由本次软件结果替代。
+该结果只证明 software/pure/fake/mock gate green，不是 Stage 0–9 或真实硬件验证。
+进入 Stage 0 前没有软件 blocker，但仍需用户单独授权断电物理检查；进入 Stage 1
+前存在上述 Task 6.1–6.4 blocker。
 
 ## Git 状态（反馈生成时）
 
-- HEAD：`a1e4d2c9108653e4359c1adb95ff52fb4604e425`；
+- HEAD：`413dbc152ddd0ef7f8b949fdfb51c5b0b96ec3de`；
 - branch：`master`，本地显示 `master...origin/master`，无 ahead/behind；
-- working tree：dirty；包含本 Task 5 的 16 个新增/修改/删除路径，以及任务开始前
-  用户已有且保持原 SHA-256 的 `docs/NEXT_COMMAND.md` 修改；
+- working tree：dirty；本 Task 修改 `README.md`、`docs/LATEST_FEEDBACK.md`，新增
+  `docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md`；另有任务开始前用户已有且保持原
+  SHA-256 的 `docs/NEXT_COMMAND.md` 修改；
 - implementation/verification 阶段：未 commit；
 - push：未执行；tag：未创建、移动、删除或重建；
-- remote：仅核验本地配置为
+- remote：仅只读核验本地配置为
   `git@github-windarmor:LeonEleven/WindArmor.git`，未进行网络 fetch/ls-remote，
   因此不声称远端实时状态已核验；
 - 本地 stable tag 保持：v0.3.0 tag object `f7d2a47`（commit `c3b3c39`）、
