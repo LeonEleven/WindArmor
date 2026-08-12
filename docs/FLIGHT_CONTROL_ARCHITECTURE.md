@@ -183,13 +183,19 @@ FLIGHT_CONTROL`，fan owner 为 `LEGACY_MANUAL / LEGACY_AUTO / NONE /
 FLIGHT_RESERVED / FLIGHT_CONTROL`。reserve 先校验 token 与本地安全状态，再冻结或
 safe-stop、丢弃旧目标并阻止 legacy command；两边 reserve 成功后才能 commit。
 commit response 才是 owner acknowledgement，owner readback 还必须确认同一 token。
-任何失败都 best-effort revoke 双方，不能 fallback 到 legacy owner。
+任何失败都先完成 Runtime 本地 fail-closed：invalidate authority/token、关闭 executable
+command gate、清除 pending ack/commit 并锁存 `INHIBITED`；随后才各执行一次
+best-effort revoke，不能 fallback 到 legacy owner。revoke unavailable、exception、
+timeout、rejected 或 malformed response 只改变结构化 cleanup diagnostic，不得重新
+进入 rollback。ARMING、READY 或 ACTIVE shutdown 也使用该非阻塞顺序。
 
 atomic Runtime commit 记录当时最新 state sequence 为 cutoff，controller 只重置
 一次，且 envelope sequencer 只接受新于 cutoff 的状态。normal envelope 携带完整
 motor frame 与 fan payload；safe-stop envelope 不携带任何 actuator payload。motor
-和 fan 独立校验 token、严格递增 command sequence 和 payload，只有合法接收才刷新
-本地 monotonic lease。
+和 fan 独立校验 token、严格递增 command sequence 和 payload。reserve 启动 handoff
+lease，commit 不重置该 deadline；第一条合法 normal envelope 才结束 handoff lease
+并启动 ACTIVE command heartbeat lease，之后也只有合法 normal envelope 才刷新它。
+invalid payload、duplicate、wrong epoch/generation 与 safe-stop 都不构成 heartbeat。
 
 Motor `MotionSource.FLIGHT` 不增加 `ControllerState.FLIGHT_RUNNING`，而是在
 `AUTO_RUNNING + owner=FLIGHT_CONTROL` 下复用唯一 motion timer、软限位、最大步长、
@@ -198,10 +204,13 @@ GPIO controller，继续由 manager 的唯一 command publisher 和既有 rise/f
 输出。`[0,1]` fan command 是无量纲 command intent，不是 RPM 或 thrust；默认上限
 不超过既有 legacy AUTO max。
 
-owner lease timeout、owner readback timeout/process epoch change、Runtime 消失、
+handoff lease timeout、ACTIVE command lease timeout、owner readback timeout/process epoch change、Runtime 消失、
 safe-stop、E-STOP、ERROR、关键 safety stale/unknown、算法或 envelope 异常都会
 stop/hold、清除 token，并使 Runtime 进入 `INHIBITED`。reset-inhibit 后仍需完整的
-新 prepare/reserve/commit；legacy owner 也必须由 operator 显式 reclaim。
+新 prepare/reserve/commit；legacy owner 也必须由 operator 显式 reclaim。默认 Runtime
+transaction timeout 为 `1.0 s`，motor/fan handoff lease 为 `1.5 s`，ACTIVE command
+lease 保持短 `0.25 s`；全部使用本地 monotonic seconds、必须大于零，且默认值尚未经过
+真实硬件 timing validation。
 
 ## 不可妥协的安全契约
 

@@ -313,9 +313,25 @@ owner readback 为 `/motors|fans/ownership_state`，唯一 actuator transport �
 `[fan_start_pwm_us, flight_fan_max_pwm_us]`，`0` 映射 stop，并保留既有 slew。该
 归一化值不是 thrust fraction。
 
-双方 command lease、Runtime owner-readback freshness 与 handoff timeout 都使用
-本地 monotonic 时间。timeout、Runtime/Owner 重启或失联、safe-stop、E-STOP、ERROR、
-safety loss 或非法 command 会 revoke/inhibit，且不会自动恢复 legacy owner。
+双方分别维护 handoff lease 与 ACTIVE command heartbeat lease，Runtime owner-readback
+freshness 与 transaction timeout 也都使用本地 monotonic 时间。reserve 启动 handoff
+deadline，commit 不重置；第一条 token、sequence、post-cutoff 与 payload 均合法的
+normal envelope 才切换到 ACTIVE command lease。后续只有合法 normal command 刷新；
+duplicate、wrong epoch/generation、invalid payload 与 safe-stop 都不刷新。
+
+默认 `flight_handoff_timeout_sec=1.0`，motor/fan
+`*_flight_handoff_timeout_sec=1.5`，motor/fan
+`*_flight_command_timeout_sec=0.25`，`flight_revoke_timeout_sec=0.25`。单位均为
+monotonic seconds，必须是严格大于零的有限值；owner handoff 默认比 Runtime transaction
+多 `0.5 s` 软件调度余量，ACTIVE timeout 没有为掩盖 handoff 延迟而放宽。这些默认值
+均未经过真实硬件 timing validation。
+
+rollback 和 ARMING/READY/ACTIVE shutdown 都先本地 invalidate token、关闭 executable
+command gate、清除 pending handoff 并锁存 `INHIBITED`，再分别执行一次非阻塞
+best-effort revoke。cleanup 内部状态区分 `not_attempted`、`success`、
+`service_unavailable`、`timeout`、`exception`、`rejected`（以及 malformed response）；
+cleanup failure 不会再次触发 rollback。owner 自身 lease 仍是 Runtime crash/失联后的
+独立 fail-closed 后盾，任何释放都不会自动恢复 legacy owner。
 
 ## Fake state 示例
 

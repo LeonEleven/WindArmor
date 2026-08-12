@@ -246,6 +246,7 @@ class ImuMotorControllerNode(LifecycleNode):
         self.declare_parameter("motor_flight_commit_service", "/motors/flight_ownership/commit")
         self.declare_parameter("motor_flight_revoke_service", "/motors/flight_ownership/revoke")
         self.declare_parameter("flight_command_topic", "/flight_control/command")
+        self.declare_parameter("motor_flight_handoff_timeout_sec", 1.5)
         self.declare_parameter("motor_flight_command_timeout_sec", 0.25)
         self.declare_parameter("motor_feedback_publish_rate_hz", 10.0)
         self.declare_parameter("motor_feedback_observer_freshness_sec", 0.5)
@@ -642,6 +643,9 @@ class ImuMotorControllerNode(LifecycleNode):
         self._warning_throttle_sec = config.safety.warning_throttle_sec
         self._motor_flight_command_timeout_sec = (
             config.safety.motor_flight_command_timeout_sec
+        )
+        self._motor_flight_handoff_timeout_sec = (
+            config.safety.motor_flight_handoff_timeout_sec
         )
         self._reconnect_on_disconnect = config.safety.reconnect_on_disconnect
         self._reconnect_policy = config.safety.reconnect_policy

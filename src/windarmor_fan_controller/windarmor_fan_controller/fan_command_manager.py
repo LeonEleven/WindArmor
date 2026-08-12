@@ -89,6 +89,9 @@ class FanCommandManager(Node):
             require_motor_mode_for_manual=bool(
                 self.get_parameter("require_motor_mode_for_manual").value
             ),
+            fan_flight_handoff_timeout_sec=float(
+                self.get_parameter("fan_flight_handoff_timeout_sec").value
+            ),
             fan_flight_command_timeout_sec=float(
                 self.get_parameter("fan_flight_command_timeout_sec").value
             ),
@@ -245,6 +248,7 @@ class FanCommandManager(Node):
         self.declare_parameter("motor_mode_timeout_sec", 1.0)
         self.declare_parameter("fan_enabled_timeout_sec", 1.0)
         self.declare_parameter("require_motor_mode_for_manual", False)
+        self.declare_parameter("fan_flight_handoff_timeout_sec", 1.5)
         self.declare_parameter("fan_flight_command_timeout_sec", 0.25)
         self.declare_parameter("fan_ownership_state_topic", "/fans/ownership_state")
         self.declare_parameter("fan_flight_prepare_service", "/fans/flight_ownership/prepare")

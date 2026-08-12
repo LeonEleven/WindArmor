@@ -126,6 +126,25 @@ class HandoffState(str, Enum):
     FAILED = "FAILED"
 
 
+class CleanupStatus(str, Enum):
+    NOT_ATTEMPTED = "not_attempted"
+    PENDING = "pending"
+    SUCCESS = "success"
+    SERVICE_UNAVAILABLE = "service_unavailable"
+    TIMEOUT = "timeout"
+    EXCEPTION = "exception"
+    REJECTED = "rejected"
+    MALFORMED_RESPONSE = "malformed_response"
+
+
+@dataclass(frozen=True)
+class CleanupResult:
+    status: CleanupStatus
+    reason_code: str = ""
+    started_at_sec: float | None = None
+    completed_at_sec: float | None = None
+
+
 class OwnerHandoffCoordinator:
     def __init__(self) -> None:
         self.reset()

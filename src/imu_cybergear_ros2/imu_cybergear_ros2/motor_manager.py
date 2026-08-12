@@ -49,6 +49,9 @@ class MotorManager:
         self._init_successful_motor_ids: List[int] = []
         self._current_init_stage = "idle"
         self._ownership = MotorOwnershipCore(
+            handoff_timeout_sec=float(
+                getattr(node, "_motor_flight_handoff_timeout_sec", 1.5)
+            ),
             command_timeout_sec=float(
                 getattr(node, "_motor_flight_command_timeout_sec", 0.25)
             )
@@ -1079,7 +1082,7 @@ class MotorManager:
         *,
         now: float,
     ) -> OwnershipResult:
-        accepted = self._ownership.accept_command(
+        accepted = self._ownership.accept_safe_stop(
             authority_epoch, generation, command_sequence, now=now
         )
         if not accepted.success:

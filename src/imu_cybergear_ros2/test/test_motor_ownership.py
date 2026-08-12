@@ -1,6 +1,6 @@
 from imu_cybergear_ros2.controller_state import ControllerState
 from imu_cybergear_ros2.motor_motion import MotionSource
-from imu_cybergear_ros2.motor_ownership import MotorCommandOwner
+from imu_cybergear_ros2.motor_ownership import FlightLeasePhase, MotorCommandOwner
 
 from .test_motor_manager import build_system, position_writes, switch_mode
 
@@ -33,6 +33,21 @@ def test_two_phase_flight_owner_gates_legacy_and_uses_existing_timer():
     # Test node has no configured logical channels, so an incomplete mapping
     # is rejected before touching its fake driver.
     assert not accepted.success
+    assert manager.ownership.lease_phase is FlightLeasePhase.HANDOFF
+    manager._motion_tick(now=2.51)
+    assert manager.command_owner is MotorCommandOwner.NONE
+
+
+def test_commit_keeps_prepare_handoff_deadline_until_first_valid_command():
+    _node, _state, manager = build_system()
+    assert manager.prepare_flight_ownership(100, 1, now=1.0).success
+    assert manager.ownership.lease_phase is FlightLeasePhase.HANDOFF
+    assert manager.commit_flight_ownership(100, 1, now=1.4).success
+    assert manager.ownership.lease_phase is FlightLeasePhase.HANDOFF
+    manager._motion_tick(now=2.49)
+    assert manager.command_owner is MotorCommandOwner.FLIGHT_CONTROL
+    manager._motion_tick(now=2.51)
+    assert manager.command_owner is MotorCommandOwner.NONE
 
 
 def test_flight_target_reuses_soft_limit_step_write_consistency_and_timeout():
@@ -46,6 +61,19 @@ def test_flight_target_reuses_soft_limit_step_write_consistency_and_timeout():
     assert manager.set_flight_targets(
         100, 1, 0, {"a": 2.0, "b": -2.0}, now=1.2
     ).success
+    assert manager.ownership.lease_phase is FlightLeasePhase.ACTIVE_COMMAND
+    assert manager.set_flight_targets(
+        100, 1, 1, {"a": 1.0, "b": -1.0}, now=1.4
+    ).success
+    assert not manager.set_flight_targets(
+        100, 1, 1, {"a": 0.0, "b": 0.0}, now=1.55
+    ).success
+    assert not manager.set_flight_targets(
+        200, 1, 2, {"a": 0.0, "b": 0.0}, now=1.56
+    ).success
+    assert not manager.set_flight_targets(
+        100, 2, 2, {"a": 0.0, "b": 0.0}, now=1.57
+    ).success
     assert manager.motion_source is MotionSource.FLIGHT
     assert node._desired_targets == {1: 1.0, 2: -1.0}
     manager._motion_tick(now=1.21)
@@ -54,11 +82,21 @@ def test_flight_target_reuses_soft_limit_step_write_consistency_and_timeout():
     assert node._current_targets[2] >= -0.4
     assert position_writes(node)
 
-    manager._motion_tick(now=1.5)
+    manager._motion_tick(now=1.66)
     assert manager.command_owner is MotorCommandOwner.NONE
     assert manager.motion_source is MotionSource.IDLE
     assert node._desired_targets == node._current_targets
     assert not manager.set_auto_targets({1: 0.0, 2: 0.0})
+
+
+def test_safe_stop_does_not_become_a_command_lease_heartbeat():
+    _node, _state, manager = build_system()
+    assert manager.prepare_flight_ownership(100, 1, now=1.0).success
+    assert manager.commit_flight_ownership(100, 1, now=1.1).success
+    assert manager.ownership.lease_phase is FlightLeasePhase.HANDOFF
+    assert manager.accept_flight_safe_stop(100, 1, 0, now=1.2).success
+    assert manager.command_owner is MotorCommandOwner.NONE
+    assert manager.ownership.lease_phase is FlightLeasePhase.NONE
 
 
 def test_epoch_replay_and_newer_epoch_cannot_preempt_active_owner():

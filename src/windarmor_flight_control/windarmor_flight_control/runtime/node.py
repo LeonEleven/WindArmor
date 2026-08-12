@@ -1,4 +1,4 @@
-"""Flight Runtime with local preparation and no production actuator takeover."""
+"""Flight Runtime with opt-in, ownership-gated actuator command transport."""
 
 from __future__ import annotations
 
@@ -43,6 +43,8 @@ from .config import PARAMETER_DEFAULTS, RuntimeConfig, build_runtime_config
 from .controller_loader import load_controller
 from .state_aggregator import StateAggregator
 from .ownership import (
+    CleanupResult,
+    CleanupStatus,
     HandoffState,
     OwnerHandoffCoordinator,
     OwnerReply,
@@ -51,7 +53,12 @@ from .ownership import (
 
 
 class FlightControlRuntimeNode(Node):
-    """Build snapshots, prepare authority, and never dispatch actuators."""
+    """Run Flight control with takeover disabled unless explicitly configured.
+
+    When enabled, actuator intent is dispatched only through the ownership
+    protocol and FlightCommandEnvelope; this node never accesses hardware
+    drivers or backends directly.
+    """
 
     def __init__(
         self,
@@ -88,6 +95,14 @@ class FlightControlRuntimeNode(Node):
         self._owner_source_epochs_at_commit: dict[OwnershipDomain, int] = {}
         self._owner_readback_received_at: dict[OwnershipDomain, float] = {}
         self._handoff_started_at: float | None = None
+        self._command_dispatch_enabled = False
+        self._rollback_in_progress = False
+        self._rollback_count = 0
+        self._cleanup_results = {
+            owner: CleanupResult(CleanupStatus.NOT_ATTEMPTED)
+            for owner in OwnershipDomain
+        }
+        self._pending_cleanup: dict[OwnershipDomain, tuple[object, float]] = {}
         self._command_pub = None
         self._motor_prepare_client = None
         self._motor_commit_client = None
@@ -125,7 +140,8 @@ class FlightControlRuntimeNode(Node):
             reliability=ReliabilityPolicy.RELIABLE,
         )
 
-        # These are the only publishers owned by Task 2 Runtime.
+        # Status/preview publishers always exist. The executable envelope
+        # publisher is created below only when takeover is explicitly enabled.
         self._status_pub = self.create_publisher(
             FlightRuntimeStatus,
             self._config.runtime_status_topic,
@@ -434,6 +450,7 @@ class FlightControlRuntimeNode(Node):
     ) -> Trigger.Response:
         try:
             generation = self._authority.prepare()
+            self._reset_cleanup_results()
             self._attempt_inputs_were_fresh = False
             response.success = True
             response.message = (
@@ -453,7 +470,9 @@ class FlightControlRuntimeNode(Node):
             if self._handoff.state is not HandoffState.IDLE:
                 self._rollback_handoff("handoff_cancelled")
                 response.success = True
-                response.message = "handoff cancelled; owners revoked; runtime inhibited"
+                response.message = (
+                    "handoff cancelled; runtime inhibited; owner revoke is best-effort"
+                )
                 self._publish_authority_status()
                 return response
             self._authority.cancel()
@@ -484,6 +503,8 @@ class FlightControlRuntimeNode(Node):
             self._owner_source_epochs_at_commit.clear()
             self._owner_readback_received_at.clear()
             self._handoff_started_at = None
+            self._command_dispatch_enabled = False
+            self._reset_cleanup_results()
             self._last_command_sequence = None
             self._last_valid_command_at = None
             self._controller_inhibited = False
@@ -508,12 +529,14 @@ class FlightControlRuntimeNode(Node):
                 f"DRY_RUN controller inhibited; explicit reset-inhibit is required: {error}"
             )
         self._controller_inhibited = True
+        self._command_dispatch_enabled = False
         self._envelope_sequencer.invalidate()
         if self._authority.state is not AuthorityState.INHIBITED:
             self._authority.inhibit(error)
 
     def _control_tick(self) -> None:
         now = self._now()
+        self._expire_cleanup_attempts(now)
         state_valid = False
         command_available = False
         command_valid = False
@@ -792,10 +815,10 @@ class FlightControlRuntimeNode(Node):
         except Exception as exc:
             self._rollback_handoff(f"handoff_start_failure:{exc}")
             return
-        self._call_owner_service(OwnershipDomain.MOTOR, "prepare")
+        self._call_forward_owner_service(OwnershipDomain.MOTOR, "prepare")
         if self._handoff.state is not HandoffState.RESERVING:
             return
-        self._call_owner_service(OwnershipDomain.FAN, "prepare")
+        self._call_forward_owner_service(OwnershipDomain.FAN, "prepare")
 
     def _owner_client(self, owner: OwnershipDomain, operation: str):
         return {
@@ -814,7 +837,11 @@ class FlightControlRuntimeNode(Node):
         checker = getattr(client, "service_is_ready", None)
         return True if checker is None else bool(checker())
 
-    def _call_owner_service(self, owner: OwnershipDomain, operation: str) -> None:
+    def _call_forward_owner_service(
+        self, owner: OwnershipDomain, operation: str
+    ) -> None:
+        if operation not in {"prepare", "commit"}:
+            raise ValueError("forward owner operation must be prepare or commit")
         client = self._owner_client(owner, operation)
         if not self._service_ready(client):
             self._rollback_handoff(f"{owner.value}_{operation}_service_unavailable")
@@ -822,7 +849,6 @@ class FlightControlRuntimeNode(Node):
         service_type = {
             "prepare": PrepareFlightOwnership,
             "commit": CommitFlightOwnership,
-            "revoke": RevokeFlightOwnership,
         }[operation]
         request = service_type.Request()
         request.authority_epoch = self._handoff.authority_epoch or 0
@@ -830,17 +856,15 @@ class FlightControlRuntimeNode(Node):
         request.runtime_state_sequence = self._last_state_sequence
         try:
             future = client.call_async(request)
-            if operation != "revoke":
-                future.add_done_callback(
-                    lambda completed, domain=owner, action=operation: (
-                        self._on_owner_service_response(domain, action, completed)
-                    )
+            future.add_done_callback(
+                lambda completed, domain=owner, action=operation: (
+                    self._on_owner_service_response(domain, action, completed)
                 )
+            )
         except Exception as exc:
-            if operation != "revoke":
-                self._rollback_handoff(
-                    f"{owner.value}_{operation}_call_failure:{exc}"
-                )
+            self._rollback_handoff(
+                f"{owner.value}_{operation}_call_failure:{exc}"
+            )
 
     def _on_owner_service_response(self, owner, operation, future) -> None:
         expected_state = (
@@ -871,8 +895,8 @@ class FlightControlRuntimeNode(Node):
                 return
             if accepted and self._handoff.reserves_complete:
                 self._handoff.begin_commit()
-                self._call_owner_service(OwnershipDomain.MOTOR, "commit")
-                self._call_owner_service(OwnershipDomain.FAN, "commit")
+                self._call_forward_owner_service(OwnershipDomain.MOTOR, "commit")
+                self._call_forward_owner_service(OwnershipDomain.FAN, "commit")
             return
         accepted = self._handoff.record_commit(owner, reply)
         if self._handoff.state is HandoffState.FAILED:
@@ -942,6 +966,7 @@ class FlightControlRuntimeNode(Node):
             self._last_command_sequence = None
             self._last_valid_command_at = None
             self._last_tick_at = self._now()
+            self._command_dispatch_enabled = True
             return True
         except Exception as exc:
             self._rollback_handoff(f"atomic_runtime_commit_failure:{exc}")
@@ -984,32 +1009,209 @@ class FlightControlRuntimeNode(Node):
             return "motor_not_auto_for_flight"
         return ""
 
+    def _reset_cleanup_results(self) -> None:
+        self._pending_cleanup.clear()
+        self._cleanup_results = {
+            owner: CleanupResult(CleanupStatus.NOT_ATTEMPTED)
+            for owner in OwnershipDomain
+        }
+
+    def _cleanup_token(self) -> tuple[int, int] | None:
+        generation = self._handoff.generation
+        if generation is None:
+            generation = (
+                self._authority.authority_generation
+                if self._authority.state is AuthorityState.ACTIVE
+                else self._authority.attempt_generation
+            )
+        if generation is None or generation <= 0:
+            return None
+        return self._authority.authority_epoch, generation
+
+    def _set_cleanup_result(
+        self,
+        owner: OwnershipDomain,
+        status: CleanupStatus,
+        reason_code: str,
+        *,
+        started_at: float | None,
+        completed_at: float | None,
+    ) -> None:
+        self._cleanup_results[owner] = CleanupResult(
+            status=status,
+            reason_code=reason_code,
+            started_at_sec=started_at,
+            completed_at_sec=completed_at,
+        )
+
+    def _best_effort_revoke(
+        self, owner: OwnershipDomain, token: tuple[int, int] | None
+    ) -> None:
+        """Attempt cleanup exactly once without entering rollback again."""
+
+        if token is None:
+            return
+        now = self._now()
+        client = self._owner_client(owner, "revoke")
+        try:
+            service_ready = self._service_ready(client)
+        except Exception as exc:
+            self._set_cleanup_result(
+                owner,
+                CleanupStatus.EXCEPTION,
+                f"service_check_exception:{exc}",
+                started_at=now,
+                completed_at=now,
+            )
+            return
+        if not service_ready:
+            self._set_cleanup_result(
+                owner,
+                CleanupStatus.SERVICE_UNAVAILABLE,
+                "service_unavailable",
+                started_at=now,
+                completed_at=now,
+            )
+            return
+        request = RevokeFlightOwnership.Request()
+        request.authority_epoch, request.generation = token
+        request.runtime_state_sequence = self._last_state_sequence
+        try:
+            future = client.call_async(request)
+        except Exception as exc:
+            self._set_cleanup_result(
+                owner,
+                CleanupStatus.EXCEPTION,
+                f"call_exception:{exc}",
+                started_at=now,
+                completed_at=now,
+            )
+            return
+        deadline = now + self._config.flight_revoke_timeout_sec
+        self._pending_cleanup[owner] = (future, deadline)
+        self._set_cleanup_result(
+            owner,
+            CleanupStatus.PENDING,
+            "",
+            started_at=now,
+            completed_at=None,
+        )
+        try:
+            future.add_done_callback(
+                lambda completed, domain=owner, expected=token: (
+                    self._on_revoke_response(domain, expected, completed)
+                )
+            )
+        except Exception as exc:
+            self._pending_cleanup.pop(owner, None)
+            self._set_cleanup_result(
+                owner,
+                CleanupStatus.EXCEPTION,
+                f"callback_exception:{exc}",
+                started_at=now,
+                completed_at=self._now(),
+            )
+
+    def _on_revoke_response(self, owner, expected_token, future) -> None:
+        pending = self._pending_cleanup.get(owner)
+        if pending is None or pending[0] is not future:
+            return
+        self._pending_cleanup.pop(owner, None)
+        previous = self._cleanup_results[owner]
+        now = self._now()
+        try:
+            response = future.result()
+        except Exception as exc:
+            self._set_cleanup_result(
+                owner,
+                CleanupStatus.EXCEPTION,
+                f"future_exception:{exc}",
+                started_at=previous.started_at_sec,
+                completed_at=now,
+            )
+            return
+        try:
+            response_token = (
+                int(response.authority_epoch),
+                int(response.generation),
+            )
+            success = bool(response.success)
+            reason = str(response.reason_code)
+            observation_sequence = int(response.owner_observation_sequence)
+            if response_token != expected_token or observation_sequence <= 0:
+                raise ValueError("revoke response token/sequence mismatch")
+        except Exception as exc:
+            self._set_cleanup_result(
+                owner,
+                CleanupStatus.MALFORMED_RESPONSE,
+                str(exc),
+                started_at=previous.started_at_sec,
+                completed_at=now,
+            )
+            return
+        self._set_cleanup_result(
+            owner,
+            CleanupStatus.SUCCESS if success else CleanupStatus.REJECTED,
+            reason,
+            started_at=previous.started_at_sec,
+            completed_at=now,
+        )
+
+    def _expire_cleanup_attempts(self, now: float) -> None:
+        for owner, (future, deadline) in tuple(self._pending_cleanup.items()):
+            if now <= deadline:
+                continue
+            self._pending_cleanup.pop(owner, None)
+            previous = self._cleanup_results[owner]
+            self._set_cleanup_result(
+                owner,
+                CleanupStatus.TIMEOUT,
+                "revoke_future_timeout",
+                started_at=previous.started_at_sec,
+                completed_at=now,
+            )
+
     def _rollback_handoff(self, reason: str) -> None:
         if not reason:
             reason = "flight_handoff_failure"
-        if self._authority.state is AuthorityState.INHIBITED:
+        if (
+            self._authority.state is AuthorityState.INHIBITED
+            or self._rollback_in_progress
+        ):
             return
-        self._handoff.fail(reason)
-        for owner in OwnershipDomain:
-            self._call_owner_service(owner, "revoke")
-        self._owner_source_epochs_at_commit.clear()
-        self._handoff_started_at = None
-        self._last_command_sequence = None
-        self._last_valid_command_at = None
-        self._inhibit(reason)
+        self._rollback_in_progress = True
+        try:
+            token = self._cleanup_token()
+
+            # Local fail-closed is complete before any external cleanup call.
+            self._command_dispatch_enabled = False
+            self._handoff.fail(reason)
+            self._handoff.reserved.clear()
+            self._handoff.committed.clear()
+            self._owner_source_epochs_at_commit.clear()
+            self._handoff_started_at = None
+            self._last_command_sequence = None
+            self._last_valid_command_at = None
+            self._inhibit(reason)
+            self._rollback_count += 1
+
+            for owner in OwnershipDomain:
+                self._best_effort_revoke(owner, token)
+        finally:
+            self._rollback_in_progress = False
 
     def destroy_node(self):
-        if (
-            hasattr(self, "_handoff")
-            and self._handoff.state is not HandoffState.IDLE
-            and getattr(self, "_authority", None) is not None
-            and self._authority.state is not AuthorityState.INHIBITED
+        if hasattr(self, "_authority") and self._authority.state in (
+            AuthorityState.ARMING,
+            AuthorityState.READY_TO_TAKEOVER,
+            AuthorityState.ACTIVE,
         ):
             self._rollback_handoff("runtime_shutdown")
+        self._command_dispatch_enabled = False
         return super().destroy_node()
 
     def _publish_command_envelope(self, envelope) -> None:
-        if self._command_pub is None:
+        if not self._command_dispatch_enabled or self._command_pub is None:
             raise RuntimeError("Flight command publisher is unavailable")
         message = FlightCommandEnvelopeMessage()
         message.stamp = self.get_clock().now().to_msg()
@@ -1141,6 +1343,7 @@ class FlightControlRuntimeNode(Node):
         )
         message.actuation_allowed = (
             self._authority.state is AuthorityState.ACTIVE
+            and self._command_dispatch_enabled
             and snapshot is not None
             and not self._active_gate_reason(snapshot)
         )

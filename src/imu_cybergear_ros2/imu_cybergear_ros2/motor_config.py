@@ -112,6 +112,7 @@ DEFAULT_PARAMETER_VALUES = {
     "motor_flight_commit_service": "/motors/flight_ownership/commit",
     "motor_flight_revoke_service": "/motors/flight_ownership/revoke",
     "flight_command_topic": "/flight_control/command",
+    "motor_flight_handoff_timeout_sec": 1.5,
     "motor_flight_command_timeout_sec": 0.25,
     "motor_feedback_publish_rate_hz": 10.0,
     "motor_feedback_observer_freshness_sec": 0.5,
@@ -186,6 +187,7 @@ class MotorSafetyConfig:
     warning_throttle_sec: float
     reconnect_on_disconnect: bool
     reconnect_policy: ReconnectPolicy
+    motor_flight_handoff_timeout_sec: float
     motor_flight_command_timeout_sec: float
 
 
@@ -530,10 +532,16 @@ def build_motor_node_config(raw: Mapping[str, object]) -> MotorNodeConfig:
     )
     if warning_throttle <= 0.0:
         raise ValueError("warning_throttle_sec 必须大于 0")
+    flight_handoff_timeout = _require_finite_number(
+        "motor_flight_handoff_timeout_sec",
+        raw["motor_flight_handoff_timeout_sec"],
+    )
     flight_command_timeout = _require_finite_number(
         "motor_flight_command_timeout_sec",
         raw["motor_flight_command_timeout_sec"],
     )
+    if flight_handoff_timeout <= 0.0:
+        raise ValueError("motor_flight_handoff_timeout_sec 必须大于 0")
     if flight_command_timeout <= 0.0:
         raise ValueError("motor_flight_command_timeout_sec 必须大于 0")
 
@@ -615,6 +623,7 @@ def build_motor_node_config(raw: Mapping[str, object]) -> MotorNodeConfig:
             warning_throttle_sec=warning_throttle,
             reconnect_on_disconnect=raw["reconnect_on_disconnect"],
             reconnect_policy=reconnect_policy,
+            motor_flight_handoff_timeout_sec=flight_handoff_timeout,
             motor_flight_command_timeout_sec=flight_command_timeout,
         ),
         ros=MotorRosInterfaceConfig(

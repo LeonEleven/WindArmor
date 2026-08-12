@@ -15,6 +15,12 @@ class FanCommandOwner(str, Enum):
     FLIGHT_CONTROL = "FLIGHT_CONTROL"
 
 
+class FlightLeasePhase(str, Enum):
+    NONE = "NONE"
+    HANDOFF = "HANDOFF"
+    ACTIVE_COMMAND = "ACTIVE_COMMAND"
+
+
 @dataclass(frozen=True)
 class OwnershipResult:
     success: bool
@@ -24,16 +30,22 @@ class OwnershipResult:
 
 
 class FanOwnershipCore:
-    def __init__(self, *, command_timeout_sec: float) -> None:
+    def __init__(
+        self, *, handoff_timeout_sec: float, command_timeout_sec: float
+    ) -> None:
+        if not math.isfinite(handoff_timeout_sec) or handoff_timeout_sec <= 0.0:
+            raise ValueError("fan_flight_handoff_timeout_sec must be positive")
         if not math.isfinite(command_timeout_sec) or command_timeout_sec <= 0.0:
             raise ValueError("fan_flight_command_timeout_sec must be positive")
+        self.handoff_timeout_sec = float(handoff_timeout_sec)
         self.command_timeout_sec = float(command_timeout_sec)
         self.owner = FanCommandOwner.NONE
         self.authority_epoch: int | None = None
         self.generation: int | None = None
         self.last_command_sequence: int | None = None
         self.last_valid_command_at: float | None = None
-        self._deadline: float | None = None
+        self._handoff_deadline: float | None = None
+        self._command_deadline: float | None = None
         self._highest_epoch = 0
         self._highest_generation = 0
 
@@ -80,7 +92,8 @@ class FanOwnershipCore:
         self.generation = generation
         self.last_command_sequence = None
         self.last_valid_command_at = None
-        self._deadline = float(now) + self.command_timeout_sec
+        self._handoff_deadline = float(now) + self.handoff_timeout_sec
+        self._command_deadline = None
         return OwnershipResult(True, "reserved", epoch, generation)
 
     def commit(self, epoch: int, generation: int, *, now: float, safe: bool) -> OwnershipResult:
@@ -96,7 +109,6 @@ class FanOwnershipCore:
         if not safe:
             return OwnershipResult(False, "owner_not_safe", epoch, generation)
         self.owner = FanCommandOwner.FLIGHT_CONTROL
-        self._deadline = float(now) + self.command_timeout_sec
         return OwnershipResult(True, "committed", epoch, generation)
 
     def revoke(self, epoch: int, generation: int) -> OwnershipResult:
@@ -116,30 +128,34 @@ class FanOwnershipCore:
     def accept_command(
         self, epoch: int, generation: int, sequence: int, *, now: float
     ) -> OwnershipResult:
-        if not self._valid_token(epoch, generation):
-            return OwnershipResult(False, "invalid_token", 0, 0)
-        if not self._valid_time(now):
-            return OwnershipResult(False, "invalid_monotonic_time", epoch, generation)
-        if self.owner is not FanCommandOwner.FLIGHT_CONTROL:
-            return OwnershipResult(False, "not_flight_control", epoch, generation)
-        if (self.authority_epoch, self.generation) != (epoch, generation):
-            return OwnershipResult(False, "authority_token_mismatch", epoch, generation)
-        if (
-            isinstance(sequence, bool)
-            or not isinstance(sequence, int)
-            or sequence < 0
-            or (self.last_command_sequence is not None and sequence <= self.last_command_sequence)
-        ):
-            return OwnershipResult(False, "stale_command_sequence", epoch, generation)
+        result = self._validate_command(epoch, generation, sequence, now=now)
+        if result is not None:
+            return result
         self.last_command_sequence = sequence
         self.last_valid_command_at = float(now)
-        self._deadline = float(now) + self.command_timeout_sec
+        self._handoff_deadline = None
+        self._command_deadline = float(now) + self.command_timeout_sec
         return OwnershipResult(True, "command_accepted", epoch, generation)
+
+    def accept_safe_stop(
+        self, epoch: int, generation: int, sequence: int, *, now: float
+    ) -> OwnershipResult:
+        """Validate safe-stop ordering without turning it into a heartbeat."""
+
+        result = self._validate_command(epoch, generation, sequence, now=now)
+        if result is not None:
+            return result
+        return OwnershipResult(True, "safe_stop_accepted", epoch, generation)
 
     def timed_out(self, now: float) -> bool:
         if self.owner not in (FanCommandOwner.FLIGHT_RESERVED, FanCommandOwner.FLIGHT_CONTROL):
             return False
-        if not self._valid_time(now) or self._deadline is None or float(now) > self._deadline:
+        deadline = (
+            self._handoff_deadline
+            if self.last_command_sequence is None
+            else self._command_deadline
+        )
+        if not self._valid_time(now) or deadline is None or float(now) > deadline:
             self.release_to_none()
             return True
         return False
@@ -150,7 +166,45 @@ class FanOwnershipCore:
         self.generation = None
         self.last_command_sequence = None
         self.last_valid_command_at = None
-        self._deadline = None
+        self._handoff_deadline = None
+        self._command_deadline = None
+
+    @property
+    def lease_phase(self) -> FlightLeasePhase:
+        if self._handoff_deadline is not None:
+            return FlightLeasePhase.HANDOFF
+        if self._command_deadline is not None:
+            return FlightLeasePhase.ACTIVE_COMMAND
+        return FlightLeasePhase.NONE
+
+    def _validate_command(
+        self, epoch: int, generation: int, sequence: int, *, now: float
+    ) -> OwnershipResult | None:
+        if not self._valid_token(epoch, generation):
+            return OwnershipResult(False, "invalid_token", 0, 0)
+        if not self._valid_time(now):
+            return OwnershipResult(
+                False, "invalid_monotonic_time", epoch, generation
+            )
+        if self.owner is not FanCommandOwner.FLIGHT_CONTROL:
+            return OwnershipResult(False, "not_flight_control", epoch, generation)
+        if (self.authority_epoch, self.generation) != (epoch, generation):
+            return OwnershipResult(
+                False, "authority_token_mismatch", epoch, generation
+            )
+        if (
+            isinstance(sequence, bool)
+            or not isinstance(sequence, int)
+            or sequence < 0
+            or (
+                self.last_command_sequence is not None
+                and sequence <= self.last_command_sequence
+            )
+        ):
+            return OwnershipResult(
+                False, "stale_command_sequence", epoch, generation
+            )
+        return None
 
     def claim_legacy_manual(self) -> bool:
         if self.owner in (FanCommandOwner.FLIGHT_RESERVED, FanCommandOwner.FLIGHT_CONTROL):

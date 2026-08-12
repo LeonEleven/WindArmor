@@ -5,10 +5,10 @@ from types import SimpleNamespace
 import pytest
 import rclpy
 
-from windarmor_flight_control.core.authority import AuthorityState
+from windarmor_flight_control.core.authority import AuthorityState, OwnershipDomain
 from windarmor_flight_control.core.models import FanCommand, FlightCommand
 from windarmor_flight_control.runtime.node import FlightControlRuntimeNode
-from windarmor_flight_control.runtime.ownership import HandoffState
+from windarmor_flight_control.runtime.ownership import CleanupStatus, HandoffState
 
 from .test_runtime_node import (
     CapturingPublisher,
@@ -47,9 +47,20 @@ class FakeClient:
 class DeferredFuture:
     def __init__(self):
         self.callback = None
+        self.value = None
 
     def add_done_callback(self, callback):
         self.callback = callback
+
+    def result(self):
+        if isinstance(self.value, Exception):
+            raise self.value
+        return self.value
+
+    def complete(self, value):
+        self.value = value
+        assert self.callback is not None
+        self.callback(self)
 
 
 class DeferredClient:
@@ -65,6 +76,33 @@ class DeferredClient:
         future = DeferredFuture()
         self.futures.append(future)
         return future
+
+
+class UnavailableClient:
+    def __init__(self):
+        self.ready_checks = 0
+        self.requests = []
+
+    def service_is_ready(self):
+        self.ready_checks += 1
+        return False
+
+    def call_async(self, request):
+        self.requests.append(request)
+        raise AssertionError("unavailable service must not be called")
+
+
+class RaisingClient:
+    def __init__(self, error):
+        self.error = error
+        self.requests = []
+
+    def service_is_ready(self):
+        return True
+
+    def call_async(self, request):
+        self.requests.append(request)
+        raise self.error
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -485,3 +523,300 @@ def test_runtime_restart_requires_full_new_epoch_handoff_and_rejects_a_readback(
         assert runtime_b._authority.authority_generation == 1
     finally:
         runtime_b.destroy_node()
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        (OwnershipDomain.MOTOR,),
+        (OwnershipDomain.FAN,),
+        (OwnershipDomain.MOTOR, OwnershipDomain.FAN),
+    ],
+)
+def test_revoke_unavailable_is_single_attempt_cleanup_without_recursive_rollback(
+    missing,
+):
+    clock = MutableClock()
+    node = make_enabled_node(FakeController(), clock)
+    unavailable = {}
+    from std_srvs.srv import Trigger
+
+    try:
+        assert node._on_prepare(Trigger.Request(), Trigger.Response()).success
+        for owner in missing:
+            client = UnavailableClient()
+            unavailable[owner] = client
+            if owner is OwnershipDomain.MOTOR:
+                node._motor_revoke_client = client
+            else:
+                node._fan_revoke_client = client
+
+        node._rollback_handoff("injected_failure")
+
+        assert node._authority.state is AuthorityState.INHIBITED
+        assert not node._command_dispatch_enabled
+        assert node._rollback_count == 1
+        assert node._command_pub.messages == []
+        for owner in OwnershipDomain:
+            result = node._cleanup_results[owner]
+            if owner in missing:
+                assert result.status is CleanupStatus.SERVICE_UNAVAILABLE
+                assert unavailable[owner].ready_checks == 1
+                assert unavailable[owner].requests == []
+            else:
+                assert result.status is CleanupStatus.SUCCESS
+                assert len(node._owner_client(owner, "revoke").requests) == 1
+    finally:
+        node.destroy_node()
+
+
+@pytest.mark.parametrize("failure_phase", ["reserve", "commit"])
+def test_partial_handoff_failure_stays_local_inhibited_when_cleanup_missing(
+    failure_phase,
+):
+    clock = MutableClock()
+    node = make_enabled_node(FakeController(), clock)
+    if failure_phase == "reserve":
+        node._fan_prepare_client = FakeClient(
+            lambda request: response(
+                request, success=False, reason="fan_reserve_failed", sequence=2
+            )
+        )
+        node._motor_revoke_client = UnavailableClient()
+    else:
+        node._fan_commit_client = FakeClient(
+            lambda request: response(
+                request, success=False, reason="fan_commit_failed", sequence=4
+            )
+        )
+        node._motor_revoke_client = UnavailableClient()
+        node._fan_revoke_client = UnavailableClient()
+    from std_srvs.srv import Trigger
+
+    try:
+        node._aggregator.build_runtime_snapshot = lambda _now: ready_runtime_snapshot()
+        assert node._on_prepare(Trigger.Request(), Trigger.Response()).success
+        clock.value = 10.01
+        node._control_tick()
+        assert node._authority.state is AuthorityState.INHIBITED
+        assert not node._command_dispatch_enabled
+        assert node._rollback_count == 1
+        assert node._command_pub.messages == []
+        assert (
+            node._cleanup_results[OwnershipDomain.MOTOR].status
+            is CleanupStatus.SERVICE_UNAVAILABLE
+        )
+        if failure_phase == "commit":
+            assert (
+                node._cleanup_results[OwnershipDomain.FAN].status
+                is CleanupStatus.SERVICE_UNAVAILABLE
+            )
+    finally:
+        node.destroy_node()
+
+
+def test_atomic_commit_failure_does_not_depend_on_revoke_services(monkeypatch):
+    clock = MutableClock()
+    node = make_enabled_node(FakeController(), clock)
+    node._motor_revoke_client = UnavailableClient()
+    node._fan_revoke_client = UnavailableClient()
+    from std_srvs.srv import Trigger
+
+    try:
+        node._aggregator.build_runtime_snapshot = lambda _now: ready_runtime_snapshot()
+        assert node._on_prepare(Trigger.Request(), Trigger.Response()).success
+        clock.value = 10.01
+        node._control_tick()
+        node._on_motor_ownership(ownership_message("motor", sequence=1))
+        node._on_fan_ownership(ownership_message("fan", sequence=1, source=20))
+        monkeypatch.setattr(
+            node._authority,
+            "commit_active",
+            lambda **_kwargs: (_ for _ in ()).throw(
+                RuntimeError("injected atomic commit failure")
+            ),
+        )
+        node._aggregator.build_runtime_snapshot = lambda _now: active_snapshot(43)
+        clock.value = 10.02
+        node._control_tick()
+        assert node._authority.state is AuthorityState.INHIBITED
+        assert not node._command_dispatch_enabled
+        assert node._rollback_count == 1
+        assert all(
+            result.status is CleanupStatus.SERVICE_UNAVAILABLE
+            for result in node._cleanup_results.values()
+        )
+    finally:
+        node.destroy_node()
+
+
+def test_revoke_call_and_future_exceptions_are_diagnostics_only():
+    clock = MutableClock()
+    node = make_enabled_node(FakeController(), clock)
+    node._motor_revoke_client = RaisingClient(RuntimeError("call failed"))
+    node._fan_revoke_client = FakeClient(lambda _request: RuntimeError("future failed"))
+    from std_srvs.srv import Trigger
+
+    try:
+        assert node._on_prepare(Trigger.Request(), Trigger.Response()).success
+        node._rollback_handoff("injected_failure")
+        assert node._authority.state is AuthorityState.INHIBITED
+        assert node._rollback_count == 1
+        assert all(
+            result.status is CleanupStatus.EXCEPTION
+            for result in node._cleanup_results.values()
+        )
+        assert len(node._motor_revoke_client.requests) == 1
+        assert len(node._fan_revoke_client.requests) == 1
+    finally:
+        node.destroy_node()
+
+
+def test_revoke_rejected_and_malformed_responses_are_distinct():
+    clock = MutableClock()
+    node = make_enabled_node(FakeController(), clock)
+    node._motor_revoke_client = FakeClient(
+        lambda request: response(
+            request, success=False, reason="owner_rejected", sequence=7
+        )
+    )
+    node._fan_revoke_client = FakeClient(
+        lambda _request: SimpleNamespace(success=True)
+    )
+    from std_srvs.srv import Trigger
+
+    try:
+        assert node._on_prepare(Trigger.Request(), Trigger.Response()).success
+        node._rollback_handoff("injected_failure")
+        assert node._cleanup_results[OwnershipDomain.MOTOR].status is CleanupStatus.REJECTED
+        assert (
+            node._cleanup_results[OwnershipDomain.FAN].status
+            is CleanupStatus.MALFORMED_RESPONSE
+        )
+        assert node._authority.state is AuthorityState.INHIBITED
+        assert node._rollback_count == 1
+    finally:
+        node.destroy_node()
+
+
+def test_revoke_future_timeout_is_nonblocking_and_late_completion_is_ignored():
+    clock = MutableClock()
+    node = make_enabled_node(
+        FakeController(), clock, flight_revoke_timeout_sec=0.1
+    )
+    node._motor_revoke_client = DeferredClient()
+    node._fan_revoke_client = DeferredClient()
+    from std_srvs.srv import Trigger
+
+    try:
+        assert node._on_prepare(Trigger.Request(), Trigger.Response()).success
+        node._rollback_handoff("injected_failure")
+        assert all(
+            result.status is CleanupStatus.PENDING
+            for result in node._cleanup_results.values()
+        )
+        clock.value = 10.2
+        node._expire_cleanup_attempts(clock())
+        assert all(
+            result.status is CleanupStatus.TIMEOUT
+            for result in node._cleanup_results.values()
+        )
+        for client in (node._motor_revoke_client, node._fan_revoke_client):
+            client.futures[0].complete(response(client.requests[0], sequence=9))
+        assert all(
+            result.status is CleanupStatus.TIMEOUT
+            for result in node._cleanup_results.values()
+        )
+        assert node._authority.state is AuthorityState.INHIBITED
+        assert node._rollback_count == 1
+    finally:
+        node.destroy_node()
+
+
+def test_delayed_owner_responses_within_runtime_handoff_timeout_can_commit():
+    clock = MutableClock()
+    node = make_enabled_node(FakeController(), clock)
+    node._motor_prepare_client = DeferredClient()
+    node._fan_prepare_client = DeferredClient()
+    from std_srvs.srv import Trigger
+
+    try:
+        node._aggregator.build_runtime_snapshot = lambda _now: ready_runtime_snapshot()
+        assert node._on_prepare(Trigger.Request(), Trigger.Response()).success
+        clock.value = 10.01
+        node._control_tick()
+        assert node._handoff.state is HandoffState.RESERVING
+
+        clock.value = 10.40
+        motor_request = node._motor_prepare_client.requests[0]
+        fan_request = node._fan_prepare_client.requests[0]
+        node._motor_prepare_client.futures[0].complete(
+            response(motor_request, sequence=1)
+        )
+        node._fan_prepare_client.futures[0].complete(
+            response(fan_request, sequence=2)
+        )
+        assert node._handoff.state is HandoffState.OWNERS_COMMITTED
+
+        node._on_motor_ownership(ownership_message("motor", sequence=1))
+        node._on_fan_ownership(ownership_message("fan", sequence=1, source=20))
+        node._aggregator.build_runtime_snapshot = lambda _now: active_snapshot(43)
+        clock.value = 10.80
+        node._control_tick()
+        assert node._authority.state is AuthorityState.ACTIVE
+        assert node._command_dispatch_enabled
+    finally:
+        node.destroy_node()
+
+
+@pytest.mark.parametrize("disappeared", [OwnershipDomain.MOTOR, OwnershipDomain.FAN])
+def test_active_owner_process_disappearance_inhibits_when_peer_revoke_unavailable(
+    disappeared,
+):
+    clock = MutableClock()
+    node = make_enabled_node(FakeController(), clock)
+    try:
+        complete_handoff(node, clock)
+        if disappeared is OwnershipDomain.MOTOR:
+            node._fan_revoke_client = UnavailableClient()
+            node._on_motor_ownership(
+                ownership_message("motor", sequence=2, source=30)
+            )
+            peer = OwnershipDomain.FAN
+        else:
+            node._motor_revoke_client = UnavailableClient()
+            node._on_fan_ownership(
+                ownership_message("fan", sequence=2, source=30)
+            )
+            peer = OwnershipDomain.MOTOR
+        assert node._authority.state is AuthorityState.INHIBITED
+        assert not node._command_dispatch_enabled
+        assert node._rollback_count == 1
+        assert (
+            node._cleanup_results[peer].status
+            is CleanupStatus.SERVICE_UNAVAILABLE
+        )
+    finally:
+        node.destroy_node()
+
+
+def test_active_shutdown_completes_with_both_owner_services_missing():
+    clock = MutableClock()
+    node = make_enabled_node(FakeController(), clock)
+    destroyed = False
+    try:
+        complete_handoff(node, clock)
+        node._motor_revoke_client = UnavailableClient()
+        node._fan_revoke_client = UnavailableClient()
+        node.destroy_node()
+        destroyed = True
+        assert node._authority.state is AuthorityState.INHIBITED
+        assert not node._command_dispatch_enabled
+        assert node._rollback_count == 1
+        assert all(
+            result.status is CleanupStatus.SERVICE_UNAVAILABLE
+            for result in node._cleanup_results.values()
+        )
+    finally:
+        if not destroyed:
+            node.destroy_node()

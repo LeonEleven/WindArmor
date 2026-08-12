@@ -1,4 +1,4 @@
-"""Validated configuration for the observation-only runtime."""
+"""Validated configuration for dry-run and opt-in takeover Runtime modes."""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ PARAMETER_DEFAULTS = {
     "flight_fan_safety_state_freshness_sec": 1.0,
     "flight_owner_state_freshness_sec": 1.0,
     "flight_handoff_timeout_sec": 1.0,
+    "flight_revoke_timeout_sec": 0.25,
     "fan_observer_min_pwm_us": 800.0,
     "fan_observer_max_pwm_us": 2200.0,
     "controller_factory": (
@@ -71,6 +72,7 @@ class RuntimeConfig:
     flight_fan_safety_state_freshness_sec: float
     flight_owner_state_freshness_sec: float
     flight_handoff_timeout_sec: float
+    flight_revoke_timeout_sec: float
     fan_observer_min_pwm_us: float
     fan_observer_max_pwm_us: float
     controller_factory: str
@@ -115,6 +117,7 @@ POSITIVE_FIELDS = (
     "flight_fan_safety_state_freshness_sec",
     "flight_owner_state_freshness_sec",
     "flight_handoff_timeout_sec",
+    "flight_revoke_timeout_sec",
 )
 
 TOPIC_FIELDS = (

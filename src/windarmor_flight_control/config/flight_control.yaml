@@ -13,7 +13,12 @@ flight_control_runtime_node:
     flight_motor_safety_state_freshness_sec: 1.0
     flight_fan_safety_state_freshness_sec: 1.0
     flight_owner_state_freshness_sec: 1.0
+    # Positive monotonic seconds for the complete reserve/commit transaction.
+    # Owner handoff leases default to 1.5 s; this default is not hardware-tuned.
     flight_handoff_timeout_sec: 1.0
+    # Positive monotonic seconds for the best-effort revoke diagnostic deadline.
+    # Shutdown never waits for it; this default is not hardware-tuned.
+    flight_revoke_timeout_sec: 0.25
 
     # Normalize observed applied PWM only; no command mapping exists here.
     fan_observer_min_pwm_us: 800.0

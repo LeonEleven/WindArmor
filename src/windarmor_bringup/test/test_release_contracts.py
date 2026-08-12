@@ -239,6 +239,8 @@ def test_motor_release_defaults_match_code_and_yaml() -> None:
         "motor_temp_critical_degC": 90.0,
         "motor_current_limit_a": 5.0,
         "motor_feedback_timeout_sec": 0.0,
+        "motor_flight_handoff_timeout_sec": 1.5,
+        "motor_flight_command_timeout_sec": 0.25,
         "reconnect_on_disconnect": True,
         "reconnect_max_attempts": 30,
         "reconnect_initial_delay_sec": 0.5,
@@ -268,6 +270,8 @@ def test_fan_release_defaults_match_code_and_yaml() -> None:
         "rise_step_pwm_us": 10,
         "fall_step_pwm_us": 20,
         "fan_response_curve": "smoothstep",
+        "fan_flight_handoff_timeout_sec": 1.5,
+        "fan_flight_command_timeout_sec": 0.25,
     }
     fan_yaml = (
         REPO_ROOT / "src/windarmor_fan_controller/config/fan_params.yaml"
@@ -282,3 +286,18 @@ def test_fan_release_defaults_match_code_and_yaml() -> None:
         / "src/windarmor_fan_controller/windarmor_fan_controller/fan_command_manager.py"
     ).read_text(encoding="utf-8")
     assert 'self.declare_parameter("control_rate_hz", 20.0)' in manager_source
+
+
+def test_owner_handoff_leases_outlast_runtime_transaction_default() -> None:
+    runtime_yaml = REPO_ROOT / "src/windarmor_flight_control/config/flight_control.yaml"
+    motor_yaml = REPO_ROOT / "src/imu_cybergear_ros2/config/imu_cybergear_params.yaml"
+    fan_yaml = REPO_ROOT / "src/windarmor_fan_controller/config/fan_params.yaml"
+    runtime_timeout = _yaml_value(runtime_yaml, "flight_handoff_timeout_sec")
+    motor_handoff = _yaml_value(motor_yaml, "motor_flight_handoff_timeout_sec")
+    fan_handoff = _yaml_value(fan_yaml, "fan_flight_handoff_timeout_sec")
+
+    assert runtime_timeout == 1.0
+    assert motor_handoff == 1.5 and motor_handoff >= runtime_timeout
+    assert fan_handoff == 1.5 and fan_handoff >= runtime_timeout
+    assert _yaml_value(motor_yaml, "motor_flight_command_timeout_sec") == 0.25
+    assert _yaml_value(fan_yaml, "fan_flight_command_timeout_sec") == 0.25

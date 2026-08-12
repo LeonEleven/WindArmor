@@ -54,6 +54,11 @@ fan_command_manager:
     # 统一 bringup 继续覆盖为 true。
     require_motor_mode_for_manual: false
 
+    # Positive monotonic seconds from reserve through the first valid Flight envelope.
+    # Exceeds the default 1.0 s Runtime transaction timeout; not hardware-tuned.
+    fan_flight_handoff_timeout_sec: 1.5
+    # Positive monotonic ACTIVE heartbeat seconds after the first valid normal envelope.
+    # Invalid commands do not refresh it; this default is not hardware-tuned.
     fan_flight_command_timeout_sec: 0.25
     fan_ownership_state_topic: "/fans/ownership_state"
     fan_flight_prepare_service: "/fans/flight_ownership/prepare"

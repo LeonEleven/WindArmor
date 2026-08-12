@@ -52,6 +52,7 @@ class FanControlConfig:
     motor_mode_timeout_sec: float = 1.0
     fan_enabled_timeout_sec: float = 1.0
     require_motor_mode_for_manual: bool = False
+    fan_flight_handoff_timeout_sec: float = 1.5
     fan_flight_command_timeout_sec: float = 0.25
 
     def validate(self) -> None:
@@ -71,6 +72,7 @@ class FanControlConfig:
             self.manual_command_timeout_sec,
             self.motor_mode_timeout_sec,
             self.fan_enabled_timeout_sec,
+            self.fan_flight_handoff_timeout_sec,
             self.fan_flight_command_timeout_sec,
         )
         if not all(math.isfinite(value) for value in values):
@@ -104,6 +106,7 @@ class FanControlConfig:
             or self.manual_command_timeout_sec <= 0.0
             or self.motor_mode_timeout_sec <= 0.0
             or self.fan_enabled_timeout_sec <= 0.0
+            or self.fan_flight_handoff_timeout_sec <= 0.0
             or self.fan_flight_command_timeout_sec <= 0.0
         ):
             raise ValueError("全部超时参数必须大于 0")
@@ -248,6 +251,7 @@ class FanControlCore:
         self._safety_reason = "启动后等待显式选择控制路径"
         self._immediate_stop_pending = True
         self.ownership = FanOwnershipCore(
+            handoff_timeout_sec=config.fan_flight_handoff_timeout_sec,
             command_timeout_sec=config.fan_flight_command_timeout_sec
         )
         self._flight_target_pwm = (stop, stop)
@@ -878,7 +882,7 @@ class FanControlCore:
     def accept_flight_safe_stop(
         self, epoch: int, generation: int, sequence: int, *, now: float
     ) -> OwnershipResult:
-        accepted = self.ownership.accept_command(
+        accepted = self.ownership.accept_safe_stop(
             epoch, generation, sequence, now=now
         )
         if not accepted.success:

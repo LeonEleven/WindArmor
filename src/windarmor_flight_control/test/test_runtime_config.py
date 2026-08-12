@@ -21,6 +21,8 @@ def test_default_runtime_config_is_explicitly_dry_run_observability() -> None:
     assert config.command_preview_topic.endswith("/command_preview")
     assert config.flight_takeover_enabled is False
     assert config.flight_command_topic == "/flight_control/command"
+    assert config.flight_handoff_timeout_sec == 1.0
+    assert config.flight_revoke_timeout_sec == 0.25
 
 
 @pytest.mark.parametrize(
@@ -33,7 +35,10 @@ def test_default_runtime_config_is_explicitly_dry_run_observability() -> None:
         ("flight_fan_state_freshness_sec", 0.0),
         ("flight_control_state_freshness_sec", 0.0),
         ("flight_owner_state_freshness_sec", 0.0),
+        ("flight_handoff_timeout_sec", 0.0),
         ("flight_handoff_timeout_sec", float("inf")),
+        ("flight_revoke_timeout_sec", 0.0),
+        ("flight_revoke_timeout_sec", float("nan")),
         ("fan_observer_min_pwm_us", float("nan")),
         ("controller_factory", ""),
         ("imu_raw_topic", "bad topic"),

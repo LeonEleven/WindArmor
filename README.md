@@ -68,10 +68,19 @@ Motor 的 `MotionSource.FLIGHT` 继续使用唯一 `MotorManager` timer、逻辑
 值只是 `[0,1]` command intent：`0` 映射 stop，正值映射到 start 与
 `flight_fan_max_pwm_us`，不是 thrust fraction。
 
-双方 owner 都以本地 monotonic command lease 独立检查 token 与严格递增 sequence。
-timeout、Runtime/Owner 失联或重启、E-STOP、ERROR、安全观测丢失、非法 envelope、
-算法异常和 safe-stop 都会停止/保持、撤销 token 并使 Runtime 锁存 `INHIBITED`。
-释放后不会自动恢复 MANUAL 或 legacy AUTO；operator 必须显式重新选择普通 owner。
+双方 owner 都使用两段独立的本地 monotonic lease。reserve 启动 `1.5 s` handoff
+lease，commit 不重置它；只有第一条 token、sequence、post-cutoff 与 payload 均合法的
+normal envelope 才切换到短 `0.25 s` ACTIVE command heartbeat lease。后续合法 normal
+command 才刷新 heartbeat；非法、重复、旧 token command 与 safe-stop 均不刷新。
+默认 Runtime handoff transaction timeout 为 `1.0 s`，因此 owner reservation lease
+保留 `0.5 s` 软件调度余量；这些默认值均未经过真实硬件 timing validation。
+
+handoff/ACTIVE 失败时，Runtime 先在本地使 authority/token 失效、关闭可执行 command
+发布门、清除 pending owner 状态并锁存 `INHIBITED`，之后才各尝试一次 best-effort
+owner revoke。revoke service 不可用、异常、拒绝或超时只记录为独立 cleanup diagnostic，
+不会重新进入 rollback，也不会恢复 command 发布。shutdown 采用相同的非阻塞顺序。
+owner 自身 lease 是 Runtime 消失后的独立 fail-closed 后盾；释放后不会自动恢复 MANUAL
+或 legacy AUTO，operator 必须显式重新选择普通 owner。
 
 全局 E-STOP 只有在两路权威 readback 均已观测、新鲜且 latch 都为 false 时才是
 `False`；任一路 latch true 或新的 `/e_stop=True` 立即为 `True`；其他情况为

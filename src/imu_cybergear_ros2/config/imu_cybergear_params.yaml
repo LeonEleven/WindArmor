@@ -289,6 +289,11 @@ imu_motor_controller_node:
     motor_flight_commit_service: "/motors/flight_ownership/commit"
     motor_flight_revoke_service: "/motors/flight_ownership/revoke"
     flight_command_topic: "/flight_control/command"
+    # Positive monotonic seconds from reserve through the first valid Flight envelope.
+    # Exceeds the default 1.0 s Runtime transaction timeout; not hardware-tuned.
+    motor_flight_handoff_timeout_sec: 1.5
+    # Positive monotonic ACTIVE heartbeat seconds after the first valid normal envelope.
+    # Independent of handoff timing; this default is not hardware-tuned.
     motor_flight_command_timeout_sec: 0.25
     motor_feedback_publish_rate_hz: 10.0
     motor_feedback_observer_freshness_sec: 0.5
