@@ -4,6 +4,9 @@
 
 本文档覆盖从开机、网络接口准备、节点启动、键盘调试到常见故障排查的完整流程，适用于当前项目实现版本。
 
+本文中的 CAN、串口、launch 和电机操作会访问真实硬件。执行前必须获得明确
+授权并满足 WindArmor 仓库根目录 `AGENTS.md` 的硬件安全门槛。
+
 ## 2. 系统组成
 
 1. `imu_driver_node`
@@ -49,7 +52,7 @@ sudo ip link set can10 txqueuelen 1000
 ### 3.3 编译（首次或代码变更后）
 
 ```bash
-cd ~/workspace/imu_cybergear_2.0_ros2_ws
+cd ~/workspace/WindArmor
 source /opt/ros/jazzy/setup.bash
 colcon build --symlink-install
 source install/setup.bash
@@ -96,7 +99,7 @@ ros2 launch imu_cybergear_ros2 imu_motor_controller.launch.py \
 2. IMU/控制日志分离
 3. 更易排障
 
-## 5. 键盘控制说明（最终版）
+## 5. 键盘控制说明
 
 ### 5.1 通用键
 
@@ -105,7 +108,7 @@ ros2 launch imu_cybergear_ros2 imu_motor_controller.launch.py \
 - `x`：设置全部电机当前位置为零点
 - `h`：全部电机回目标零位
 - `space`：急停全部电机
-- `r`：重新进入控制模式并保持当前位置
+- `r`：仅从普通急停恢复到 MANUAL 并保持当前位置；不能恢复 ERROR
 - `q`：退出节点
 
 ### 5.2 MANUAL 步进键
@@ -122,12 +125,12 @@ ros2 launch imu_cybergear_ros2 imu_motor_controller.launch.py \
 步骤 2：执行动作
 - `+`（或 `=`）：加速
 - `-`（或 `_`）：减速
-- `[`：转 `+90°`（按一下到位）
-- `]`：转 `-90°`（按一下到位）
+- `[`：设置 `+90°` 期望目标
+- `]`：设置 `-90°` 期望目标
 
 说明：
-- `[`/`]` 直接下发目标位，不做小步进。
-- 目标角度仍受软限位约束。
+- `[`/`]` 更新期望目标，再由统一固定周期推进器渐进发送。
+- 目标角度仍受模式速度、最大步长和软限位约束。
 
 ## 6. 日志说明
 

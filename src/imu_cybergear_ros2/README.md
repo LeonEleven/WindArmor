@@ -3,6 +3,9 @@
 当前 package 稳定发布版本为 `0.3.2`。完整发布变化与验证边界见根目录
 `docs/RELEASE_NOTES_v0.3.2.md`。
 
+> 本文中的节点、launch、CAN、串口和电机命令会访问真实硬件。执行前必须
+> 获得明确授权并满足仓库根目录 `AGENTS.md` 的硬件安全门槛。
+
 本项目支持两种连接方式：
 
 1. CAN-USB（`usb_can_serial`）
@@ -536,4 +539,3 @@ fault bit 或异常恢复的实机故障注入。
 - `docs/项目总览与功能清单.md`
 - `docs/环境搭建到调试运行手册.md`
 - `docs/IMU_CyberGear_Guide.md`
-- `../项目分析报告.md` — 详细分析与改进建议

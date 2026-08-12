@@ -8,13 +8,21 @@
 
 WindArmor 是运行于树莓派 5（Ubuntu 24.04、ROS 2 Jazzy）的飞行机器人
 工作空间，整合 Hiwonder IMU、4 个 CyberGear 微电机和 2 个涵道风扇。
-`v0.3.1` 是当前稳定发布基线；实际工作基线以当前分支、`HEAD` 和任务开始时
+`v0.3.2` 是当前正式稳定发布基线；当前开发分支正在推进 `v0.4.0`，但未发布
+的 `HEAD` 不属于 stable release。实际工作基线以当前分支、`HEAD` 和任务开始时
 已有的工作区修改为准。
 
-- `docs/FIRST_COMMAND.md`：项目目标、硬件背景和前置项目约束。
-- `README.md`：当前安装、配置、接口和操作说明。
-- `src/` 中各 ROS 2 包的源代码、`config/`、`launch/` 和测试：行为的
+- `AGENTS.md`：最高硬件安全与 Git/协作规则。
+- `README.md`：当前用户安装、运行、公开接口与状态概览。
+- `docs/HARDWARE_REFERENCE.md`：硬件布局、机械、坐标与接线契约。
+- `docs/FLIGHT_CONTROL_ARCHITECTURE.md`：Flight 长期架构依据。
+- `docs/FLIGHT_CONTROL_API.md`：算法开发 API 依据。
+- `src/` 中各 ROS 2 包的源代码、`config/`、`launch/` 和测试：实际行为的
   最终依据。
+- release notes 和对应 RC checklist：仅作为相应历史版本的发布与验证证据。
+
+`docs/NEXT_COMMAND.md` 只保存当前最新任务，`docs/LATEST_FEEDBACK.md` 只保存
+当前最新任务反馈；二者记录工作流状态，不是长期产品架构来源。
 
 不要在本文件复制大段操作文档。若文档和代码不一致，停止涉及硬件的工作，
 先报告差异；不得猜测命令、节点、话题、服务或硬件参数。
@@ -81,17 +89,31 @@ WindArmor 是运行于树莓派 5（Ubuntu 24.04、ROS 2 Jazzy）的飞行机器
    验证结果并等待用户明确确认。
 5. 控制代码改变后，同步更新相关测试和 `README.md`。
 
+源代码注释、README、正式技术文档、测试说明和发布文档应描述工程设计、行为、
+约束与验证结果，不记录生成工具、实现助手或模型身份作为实现来源。必要的第三方
+许可证、依赖名称和技术产品名称不受此规则影响。
+
 ## 4. 构建与分级测试
 
 ### 默认：纯软件构建与测试
 
-下列现有测试已确认不实例化硬件节点，不访问 CAN、GPIO 或真实串口：
+仓库完整无硬件软件 CI 的统一入口为：
+
+```bash
+source /opt/ros/jazzy/setup.bash
+./scripts/ci_software.sh
+```
+
+该入口执行安全与 whitespace 检查、Python 编译、五包构建、分包 pure/fake/mock
+测试、五包完整测试和结果汇总。下列对应的手工 colcon 流程也已确认不实例化
+硬件节点，不访问 CAN、GPIO 或真实串口：
 
 ```bash
 source /opt/ros/jazzy/setup.bash
 colcon build --symlink-install
 colcon test --packages-select \
-  imu_cybergear_ros2 windarmor_fan_controller windarmor_bringup
+  imu_cybergear_ros2 windarmor_fan_controller windarmor_interfaces \
+  windarmor_flight_control windarmor_bringup
 colcon test-result --verbose
 ```
 

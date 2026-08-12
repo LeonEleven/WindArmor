@@ -92,7 +92,7 @@ run_stage() {
         src/windarmor_fan_controller/test -q
       ;;
     flight-tests)
-      section "Flight API pure-Python tests"
+      section "Flight and interface software tests"
       source_workspace
       "${WINDARMOR_CI_PYTHON}" -m pytest \
         src/windarmor_flight_control/test \

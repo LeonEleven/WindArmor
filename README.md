@@ -14,90 +14,36 @@ WindArmor 当前把两个已经过实机测试的前置项目整合为一个 ROS
   最终整机正常功能回归。
 
 当前开发目标为 `v0.4.0 Flight Control Integration Foundation`。开发中的
-Flight API 保持纯 Python 算法边界；Task 4 已用软件方式接入 motor/fan 两阶段
-owner handoff、原子 authority commit 和统一 `FlightCommandEnvelope` adapter。
-接管开关 `flight_takeover_enabled` 默认仍为 `false`，因此默认运行行为与 Task 3.1
-相同，不会请求 owner 或发布 actuator command，也不改变 v0.3.2 的电机、风扇、
-IMU 或安全运行语义。本路径尚未进行真实硬件验证。
-架构依据见 [Flight Control Architecture](docs/FLIGHT_CONTROL_ARCHITECTURE.md)，
-算法开发接口见 [Flight Control API](docs/FLIGHT_CONTROL_API.md)。
+Flight API 保持纯 Python 算法边界；Structured State、DRY_RUN Runtime、权威安全
+readback、authority/owner handoff、actuator adapter 和 fail-closed lease 已完成软件
+集成。详细的数据流、安全裁决、ownership 和 rollback 契约以
+[Flight Control Architecture](docs/FLIGHT_CONTROL_ARCHITECTURE.md) 为准，算法接口以
+[Flight Control API](docs/FLIGHT_CONTROL_API.md) 为准。
 
-### v0.4.0 Atomic Owner Handoff（默认关闭）
+接管开关 `flight_takeover_enabled=false` 默认保持关闭：默认 Runtime 不创建
+ownership client 或可执行 command publisher，不改变 v0.3.2 的电机、风扇、IMU
+或安全运行语义。Flight takeover 当前只经过 pure/fake/in-memory 软件验证，真实
+方向、机械动态、通信 timing、PWM/ESC 和联合接管均未实机验证。
 
-电机控制节点提供 `/motors/feedback` 结构化完整 snapshot，同时保留旧
-`/motor/status`；另以 transient-local `/motors/safety_state` 发布 lifecycle、
-`ControllerState`、公开模式、E-STOP/ERROR/feedback safety latch 和最近 transition。
-每条 safety readback 还携带进程实例固定的 monotonic `source_epoch` 与从 `1` 开始、
-严格递增的 `observation_sequence`；Runtime 可接受新进程 epoch 的低 sequence，同时
-永久拒绝旧 epoch 回流、同 epoch 重复或倒退。
-这些 topic 只读取现有合法 feedback cache 与内存安全状态和本地 monotonic 接收
-时间，不触发额外 CAN read，也不改变 feedback safety、ERROR 或 reconnect。
-observer freshness 默认 `0.5 s`，与保持为 `0.0` 的底层
-`motor_feedback_timeout_sec` 完全独立。
+### 飞控算法开发
 
-风扇 command manager 以 transient-local `/fans/safety_state` 直接发布
-`FanControlCore.e_stop_latched`、enabled presence、MANUAL/legacy AUTO ownership、
-safe-stop reason 和 passive takeover predicate；publisher 不推进控制 tick 或 PWM。
+1. 先读 [Flight Control API](docs/FLIGHT_CONTROL_API.md)；
+2. 需要理解系统边界时再读
+   [Flight Control Architecture](docs/FLIGHT_CONTROL_ARCHITECTURE.md)；
+3. 机械、坐标和接线映射见
+   [Hardware Reference](docs/HARDWARE_REFERENCE.md)。
 
-`windarmor_flight_control` 的 runtime 订阅 IMU、电机、风扇、两路权威 safety
-readback、公开控制模式和 E-STOP trigger observation，按本地 monotonic 时间构造
-不可变 `FlightState`，再由
-固定 timer 调用配置的纯 Python controller factory。无论 takeover 开关如何，它都发布：
-
-```text
-/flight_control/dry_run/status
-/flight_control/dry_run/command_preview
-/flight_control/authority/status
-```
-
-本地服务 `/flight_control/authority/prepare`、`cancel` 和 `reset_inhibit` 管理
-Flight authority state machine。每个 Runtime 进程实例生成一次正
-`authority_epoch`，正式 authority identity 为 `(authority_epoch, generation)`；
-Runtime 重启后旧 session 的 ack 和 command 都会被拒绝，不能恢复旧 authority。
-
-仅当 `flight_takeover_enabled=true` 且 Runtime 已到 `READY_TO_TAKEOVER` 时，Runtime
-才依次调用 motor/fan 的 `prepare`（reserve/quiesce）和 `commit` ownership 服务。
-两边 commit response 与 `FLIGHT_CONTROL` readback 都匹配当前 token 后，Runtime
-以最新 `FlightState.sequence` 完成一次 atomic commit、重置 controller 并记录
-cutoff；第一条 command 必须来自 `sequence > cutoff` 的新状态。normal/safe-stop
-意图经 `/flight_control/command` 的 `FlightCommandEnvelope` 同时交给两个 owner。
-
-Motor 的 `MotionSource.FLIGHT` 继续使用唯一 `MotorManager` timer、逻辑名映射、软
-限位、最大步长、速度上限及 write-success-before-state-commit；fan Flight source
-继续使用唯一 `FanCommandManager` 与原有 PWM 发布路径、上下行 slew。归一化 fan
-值只是 `[0,1]` command intent：`0` 映射 stop，正值映射到 start 与
-`flight_fan_max_pwm_us`，不是 thrust fraction。
-
-双方 owner 都使用两段独立的本地 monotonic lease。reserve 启动 `1.5 s` handoff
-lease，commit 不重置它；只有第一条 token、sequence、post-cutoff 与 payload 均合法的
-normal envelope 才切换到短 `0.25 s` ACTIVE command heartbeat lease。后续合法 normal
-command 才刷新 heartbeat；非法、重复、旧 token command 与 safe-stop 均不刷新。
-默认 Runtime handoff transaction timeout 为 `1.0 s`，因此 owner reservation lease
-保留 `0.5 s` 软件调度余量；这些默认值均未经过真实硬件 timing validation。
-
-handoff/ACTIVE 失败时，Runtime 先在本地使 authority/token 失效、关闭可执行 command
-发布门、清除 pending owner 状态并锁存 `INHIBITED`，之后才各尝试一次 best-effort
-owner revoke。revoke service 不可用、异常、拒绝或超时只记录为独立 cleanup diagnostic，
-不会重新进入 rollback，也不会恢复 command 发布。shutdown 采用相同的非阻塞顺序。
-owner 自身 lease 是 Runtime 消失后的独立 fail-closed 后盾；释放后不会自动恢复 MANUAL
-或 legacy AUTO，operator 必须显式重新选择普通 owner。
-
-全局 E-STOP 只有在两路权威 readback 均已观测、新鲜且 latch 都为 false 时才是
-`False`；任一路 latch true 或新的 `/e_stop=True` 立即为 `True`；其他情况为
-`None`。`/e_stop=False`、MANUAL mode 或非 E-STOP fan state 都不能单独证明解除。
-
-默认 `flight_takeover_enabled=false` 时，Runtime 在 `DRY_RUN`、`ARMING` 和
-`READY_TO_TAKEOVER` 始终保持 authority `NONE`、generation `0`、
-`flight_control_active=false` 和 `actuation_allowed=false`，也不会创建 command
-publisher 或 ownership clients。Runtime 永远没有 hardware client，也不会调用
-enable/zero/recovery；统一 bringup 默认路径仍未开启 takeover。独立 launch 为：
+算法主要位于
+`src/windarmor_flight_control/windarmor_flight_control/algorithms/`。最小无硬件
+unit-test 入口为：
 
 ```bash
-ros2 launch windarmor_flight_control flight_control_dry_run.launch.py
+PYTHONPATH=src/windarmor_flight_control \
+python3 -m pytest -p no:cacheprovider \
+  src/windarmor_flight_control/test/test_example_controller.py -q
 ```
 
-该 launch 的默认配置不打开 CAN、串口或 GPIO；它只能观察 ROS graph 中已存在的状态。
-若另行启动现有硬件节点，仍必须遵守本仓库硬件授权与安全门槛。
+该命令只构造内存 fake state，不创建 ROS node 或访问 CAN、串口、GPIO/PWM。
 
 `v0.3.1` 在 `v0.3.0` 的统一相对姿态、电机模式状态和风扇手动/自动仲裁基础上，
 包含统一 MANUAL/AUTO/HOME 电机推进速度、AUTO 姿态增益和三种风扇响应曲线。
@@ -115,6 +61,9 @@ ros2 launch windarmor_flight_control flight_control_dry_run.launch.py
 验证或标定。
 
 ## 硬件默认配置
+
+长期机械、坐标与接线契约见
+[Hardware Reference](docs/HARDWARE_REFERENCE.md)；本节只保留运行配置摘要。
 
 ### 电机与 IMU
 
@@ -355,8 +304,8 @@ ros2 launch windarmor_bringup windarmor.launch.py
 > 本节是完成单设备方向、零点、软限位、风扇起转值和急停验证后的正常运行
 > 流程，不是首次带电调试流程。当前候选值 `1200 μs` 和 `1400 μs` 尚未实机
 > 标定；标定完成并获得硬件运行授权前，不得直接按本节给全部动力设备通电。
-> 完整的分阶段实机验证和十项授权要求见
-> [最新人工验证指南](docs/MANUAL_VERIFICATION.md)。
+> 仓库当前尚未建立 v0.4.0 hardware verification checklist；任何带电操作都必须
+> 先满足根目录 [AGENTS.md](AGENTS.md) 的十项授权门槛，不得从本节推断授权。
 
 仅执行 `windarmor.launch.py` 不会立即进入最终联动：电机初始化后默认处于
 MANUAL，风扇 AUTO 也默认关闭。启动后按以下顺序操作。
@@ -576,7 +525,7 @@ ros2 service call /fans/auto_enable std_srvs/srv/SetBool "{data: true}"
 新增的公开状态包括 `MANUAL_DISARMED`（手动未授权）和
 `MANUAL_WAITING_FOR_NEUTRAL`（已授权但仍等待本次授权后的双路停止基线）。
 原有 `MANUAL_WAITING`、`MANUAL_ACTIVE`、`AUTO_WAITING`、`AUTO_ACTIVE`、
-`SAFE_STOP`、`DISABLED` 和 `EMERGENCY_STOP` 继续保留；Task 4 另增加默认不可达的
+`SAFE_STOP`、`DISABLED` 和 `EMERGENCY_STOP` 继续保留；Flight ownership 路径另有
 `FLIGHT_WAITING` 与 `FLIGHT_ACTIVE`，分别表示已 commit 后等待首条有效命令和正在
 通过既有 manager 输出 Flight 目标。
 

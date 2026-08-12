@@ -45,7 +45,7 @@ flight_control_runtime_node:
     authority_cancel_service: "/flight_control/authority/cancel"
     authority_reset_inhibit_service: "/flight_control/authority/reset_inhibit"
 
-    # Task 4 is integrated but explicitly disabled until separately authorized.
+    # Production takeover remains disabled until separately authorized.
     flight_takeover_enabled: false
     motor_flight_prepare_service: "/motors/flight_ownership/prepare"
     motor_flight_commit_service: "/motors/flight_ownership/commit"

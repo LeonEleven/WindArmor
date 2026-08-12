@@ -4,6 +4,42 @@
 Foundation 的纯算法接口；Task 4 已实现默认关闭的 authority/actuator adapter，
 但没有执行真实硬件验证。adapter 必须保持这里的模型、单位、校验和安全语义兼容。
 
+## Quick Start / Handoff
+
+算法开发的主要修改范围是
+`src/windarmor_flight_control/windarmor_flight_control/algorithms/`。除非与对应维护者
+另行协作，不修改 hardware driver、runtime、authority 或 safety package，也不在
+算法模块中 import ROS、CAN、串口、GPIO/PWM 或其他 hardware library。
+
+实现对象只需满足：
+
+```python
+class FlightController:
+    def reset(self) -> None:
+        ...
+
+    def update(self, state: FlightState, dt: float) -> FlightCommand:
+        ...
+```
+
+- 输入只使用不可变 `FlightState`，输出只返回 `FlightCommand`；
+- `reset()` 只清理算法内部状态；
+- normal command 必须包含全部配置逻辑电机和左右风扇的完整 payload；
+- 无法继续安全计算时返回 `FlightCommand.safe_stop()`，不复用旧 target；
+- algorithm 不 arm、不管理 authority、不 reset E-STOP/ERROR、不 set zero；
+- 普通测试使用内存 fake state，不创建 ROS node 或真实 driver。
+
+在仓库根目录可直接运行最小离线测试：
+
+```bash
+PYTHONPATH=src/windarmor_flight_control \
+python3 -m pytest -p no:cacheprovider \
+  src/windarmor_flight_control/test/test_example_controller.py -q
+```
+
+默认 `flight_takeover_enabled=false`；真实 Flight takeover 与硬件验证不属于算法
+开发的默认流程。
+
 ## 算法入口
 
 算法实现 `FlightController`：

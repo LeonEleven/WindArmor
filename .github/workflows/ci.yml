@@ -62,7 +62,7 @@ jobs:
       - name: Compile Python sources
         run: ./scripts/ci_software.sh py-compile
 
-      - name: Build three ROS packages
+      - name: Build five ROS packages
         run: ./scripts/ci_software.sh build
 
       - name: Run motor package tests
@@ -71,7 +71,7 @@ jobs:
       - name: Run fan safety regression
         run: ./scripts/ci_software.sh fan-tests
 
-      - name: Run flight API pure-software tests
+      - name: Run flight and interface software tests
         run: ./scripts/ci_software.sh flight-tests
 
       - name: Run full workspace tests

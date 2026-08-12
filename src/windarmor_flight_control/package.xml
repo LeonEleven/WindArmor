@@ -2,7 +2,7 @@
 <package format="3">
   <name>windarmor_flight_control</name>
   <version>0.4.0</version>
-  <description>Flight-control API, algorithms, and no-takeover authority preparation runtime for WindArmor.</description>
+  <description>Flight-control API, algorithms, authority runtime, and actuator adapters for WindArmor.</description>
   <maintainer email="h-goal@todo.todo">h-goal</maintainer>
   <license>Apache-2.0</license>
 

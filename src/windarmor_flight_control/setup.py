@@ -23,8 +23,8 @@ setup(
     maintainer="h-goal",
     maintainer_email="h-goal@todo.todo",
     description=(
-        "Flight-control API, algorithms, and no-takeover authority runtime "
-        "for WindArmor."
+        "Flight-control API, algorithms, authority runtime, and actuator "
+        "adapters for WindArmor."
     ),
     license="Apache-2.0",
     tests_require=["pytest"],
