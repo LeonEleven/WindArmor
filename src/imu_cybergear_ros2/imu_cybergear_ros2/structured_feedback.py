@@ -46,7 +46,7 @@ def build_structured_feedback(
     now: float,
     freshness_sec: float,
     critical_temperature_c: float,
-    safety_fault_active: bool,
+    safety_fault_active: bool | None,
 ) -> tuple[StructuredMotorFeedback, ...]:
     """Copy one complete configured snapshot without driver interaction."""
 
@@ -100,7 +100,7 @@ def build_structured_feedback(
                 fresh=fresh,
                 healthy=(
                     fresh
-                    and not safety_fault_active
+                    and safety_fault_active is False
                     and fault_flags == 0
                     and float(status.temperature) < critical_temperature_c
                 ),

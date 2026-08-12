@@ -80,6 +80,18 @@ def test_observer_freshness_and_health_fault_are_independent_of_safety_timeout()
     assert latched.valid and latched.fresh
     assert not latched.healthy
 
+    observer_only = build_structured_feedback(
+        CHANNELS[:1],
+        {4: status()},
+        {4: 2.0},
+        now=2.0,
+        freshness_sec=0.5,
+        critical_temperature_c=90.0,
+        safety_fault_active=None,
+    )[0]
+    assert observer_only.valid and observer_only.fresh
+    assert not observer_only.healthy
+
 
 def test_firmware_fault_is_visible_and_never_reported_healthy() -> None:
     item = build_structured_feedback(

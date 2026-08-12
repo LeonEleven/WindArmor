@@ -46,6 +46,27 @@ def test_fan_state_is_not_part_of_default_required_inputs_fresh() -> None:
     assert state.system.required_inputs_fresh
 
 
+def test_observation_only_feedback_does_not_claim_control_safety_or_authority() -> None:
+    aggregator = StateAggregator(runtime_config(motor_names=list(MOTOR_NAMES)))
+    aggregator.update_zero_generation(0)
+    aggregator.update_imu_raw(imu_message(1), 10.0)
+    aggregator.update_imu_relative(relative_message(1), 10.0)
+    aggregator.update_motors(
+        motor_message(MOTOR_NAMES, healthy=False),
+        10.0,
+    )
+    snapshot = aggregator.build_runtime_snapshot(10.1)
+    state = snapshot.flight_state
+    assert state.system.required_inputs_fresh
+    assert all(not motor.healthy for motor in state.motors.values())
+    assert snapshot.motor_safety is None and not snapshot.motor_safety_fresh
+    assert snapshot.fan_safety is None and not snapshot.fan_safety_fresh
+    assert state.fans.enabled is None and state.fans.control_state is None
+    assert state.system.command_authority is CommandAuthority.NONE
+    assert not state.system.flight_control_active
+    assert not state.system.actuation_allowed
+
+
 def test_motor_mode_stales_to_none_and_fan_control_states_agree() -> None:
     aggregator = populated_aggregator()
     aggregator.update_motor_mode("MANUAL", 10.0)

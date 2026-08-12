@@ -35,6 +35,8 @@ setup(
         "console_scripts": [
             "imu_driver_node = imu_cybergear_ros2.imu_driver_node:main",
             "imu_motor_controller_node = imu_cybergear_ros2.imu_motor_controller_node:main",
+            "imu_relative_observer_node = imu_cybergear_ros2.imu_relative_observer_node:main",
+            "motor_feedback_observer_node = imu_cybergear_ros2.motor_feedback_observer_node:main",
         ],
     },
 )

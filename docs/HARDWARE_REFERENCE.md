@@ -46,6 +46,18 @@ motor_limits_max: [0.0, 1.57, 1.57, 1.57]
 Flight API 使用稳定逻辑名称作为 motor key。算法不得解析、生成或依赖 CAN ID，
 也不得把 CAN ID 当作公开算法逻辑 key。
 
+### CyberGear observation transport boundary
+
+当前驱动的软件协议路径可以在只打开 transport 和 reader 后解析 CyberGear 0x02
+反馈：SocketCAN `connect()` 本身不发送 CAN frame；USB-CAN `connect()` 会向 USB-CAN
+适配器写入 AT transport setup，但不会向 CyberGear 发送 run-mode、target、enable、
+stop 或 set-zero command。仓库没有独立的 GET/status query，也不假设一个伪造的
+电机 measurement。
+
+软件层具备 passive-RX observation path，不等于已证明真实电机在没有任何 host
+control TX 时会主动发送 0x02。该物理行为仍是未来单独授权 Stage 1 要记录的
+`PASS / FAIL / NOT VERIFIED` 项；没有 frame 时必须保持 `has_feedback=false`。
+
 ## IMU mounting and frame
 
 Hiwonder IMU 水平安装在机器人上躯干中央，安装轴向为：

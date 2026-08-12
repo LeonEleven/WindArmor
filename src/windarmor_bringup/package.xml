@@ -10,6 +10,7 @@
 
   <exec_depend>imu_cybergear_ros2</exec_depend>
   <exec_depend>windarmor_fan_controller</exec_depend>
+  <exec_depend>windarmor_flight_control</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
 

@@ -28,6 +28,24 @@ ownership client 或可执行 command publisher，不改变 v0.3.2 的电机、�
 [v0.4.0 Hardware Verification Plan](docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md)；
 其状态为 `PLANNED / NOT YET EXECUTED`，且不构成任何硬件操作授权。
 
+### Stage 1 只读观测入口
+
+仓库提供未来 Stage 1 专用的
+`windarmor_observation_only.launch.py`：它只组合 IMU driver、独立 IMU 相对姿态
+observer、CyberGear passive-RX observer 和 takeover 固定为 `false` 的 Flight Runtime。
+该入口不创建普通电机控制器、MotorManager、fan controller、GPIO/PWM/ESC、owner
+service 或 executable Flight command publisher。风扇与 motor safety/ownership 在
+Runtime 中保持 unknown/fail-closed，不伪造 stop PWM 或健康状态。
+
+```bash
+ros2 launch windarmor_bringup windarmor_observation_only.launch.py
+```
+
+这不是默认软件测试命令：它会访问真实 IMU 串口并打开 CAN receive transport，只有
+未来按硬件验证计划获得 Stage 1 单独明确授权后才能运行。当前只完成 pure/fake/mock
+软件验证，尚未执行真实 Stage 1，也尚未确认实机 CyberGear 在零 command TX 时是否
+主动发送 0x02 feedback。普通 `windarmor.launch.py` 和 v0.3.2 控制行为不变。
+
 ### 飞控算法开发
 
 1. 先读 [Flight Control API](docs/FLIGHT_CONTROL_API.md)；

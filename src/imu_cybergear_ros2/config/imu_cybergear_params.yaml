@@ -297,3 +297,42 @@ imu_motor_controller_node:
     motor_flight_command_timeout_sec: 0.25
     motor_feedback_publish_rate_hz: 10.0
     motor_feedback_observer_freshness_sec: 0.5
+
+# Task 6.1 observation-only adapters. These sections are intentionally separate
+# from imu_motor_controller_node so the observation launch never constructs the
+# controller, MotorManager, keyboard, ownership, homing or set-zero interfaces.
+imu_relative_observer_node:
+  ros__parameters:
+    imu_topic: "/imu/data_raw"
+    relative_attitude_topic: "/imu/relative_roll_pitch"
+    imu_zero_generation_topic: "/imu/zero_generation"
+    roll_axis_sign: 1.0
+    pitch_axis_sign: 1.0
+
+motor_feedback_observer_node:
+  ros__parameters:
+    # connect opens only the receive transport/reader. SocketCAN sends no frame;
+    # USB-CAN may write adapter AT setup commands but no CyberGear CAN command.
+    control_backend: "socketcan_hat"
+    master_id: 253
+    usb_port: "/dev/ttyUSB0"
+    usb_baud: 921600
+    can_channel: "can10"
+    can_bustype: "socketcan"
+
+    # Must remain identical to the controller's protected logical-name/ID map.
+    motor_names: ["left_lift", "left_pitch", "right_pitch", "right_lift"]
+    motor_ids: [4, 3, 2, 1]
+
+    motor_feedback_structured_topic: "/motors/feedback"
+    motor_feedback_observer_status_topic: "/motors/observer_status"
+    motor_feedback_publish_rate_hz: 10.0
+    motor_feedback_observer_freshness_sec: 0.5
+    motor_temp_limit_degC: 80.0
+    motor_temp_critical_degC: 90.0
+    motor_invalid_feedback_limit: 3
+
+    # Initial transport open only. Runtime disconnect is reported and closed;
+    # automatic reconnect is disabled to keep Stage 1 behavior auditable.
+    observer_connect_max_attempts: 1
+    observer_connect_initial_delay_sec: 0.5
