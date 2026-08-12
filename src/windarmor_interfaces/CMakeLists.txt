@@ -6,6 +6,8 @@ find_package(builtin_interfaces REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/FlightCommandPreview.msg"
+  "msg/FlightRuntimeStatus.msg"
   "msg/MotorFeedback.msg"
   "msg/MotorFeedbackArray.msg"
   DEPENDENCIES builtin_interfaces

@@ -21,6 +21,7 @@ ROS2 生命周期状态：
 
 发布话题：
   /motor/status (std_msgs/String) — 电机连接状态及实时反馈
+  /motors/feedback (windarmor_interfaces/MotorFeedbackArray) — 只读结构化快照
 
 订阅话题：
   /imu/data_raw (sensor_msgs/Imu) — IMU 姿态数据
@@ -55,6 +56,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Imu
 from std_msgs.msg import Bool, Float64MultiArray, String, UInt64
 from std_srvs.srv import Trigger, SetBool
+from windarmor_interfaces.msg import MotorFeedback, MotorFeedbackArray
 
 from .controller_state import (
     ControllerState,
@@ -76,6 +78,7 @@ from .motor_config import (
 from .motor_manager import MotorManager, clamp, deg_to_rad
 from .motor_motion import auto_attitude_commands
 from .safety_monitor import SafetyMonitor
+from .structured_feedback import build_structured_feedback
 from .transport_recovery import (
     TransportEvent,
     TransportEventType,
@@ -212,6 +215,11 @@ class ImuMotorControllerNode(LifecycleNode):
         self.declare_parameter("reconnect_max_delay_sec", 10.0)
         self.declare_parameter("reconnect_backoff_multiplier", 1.5)
         self.declare_parameter("motor_status_topic", "/motor/status")
+        self.declare_parameter(
+            "motor_feedback_structured_topic", "/motors/feedback"
+        )
+        self.declare_parameter("motor_feedback_publish_rate_hz", 10.0)
+        self.declare_parameter("motor_feedback_observer_freshness_sec", 0.5)
 
         # ================================================================
         # 初始化实例变量（资源在 on_configure 中创建）
@@ -223,6 +231,8 @@ class ImuMotorControllerNode(LifecycleNode):
         # 驱动与 ROS 资源
         self._driver = None
         self._motor_status_pub = None
+        self._motor_feedback_structured_pub = None
+        self._motor_feedback_structured_timer = None
         self._system_e_stop_pub = None
         self._relative_attitude_pub = None
         self._imu_zero_generation_pub = None
@@ -261,6 +271,8 @@ class ImuMotorControllerNode(LifecycleNode):
         self._current_speeds: Dict[int, float] = {}
         self._selected_motor_id = 1
         self._motor_feedback = {}
+        self._motor_feedback_received_at: Dict[int, float] = {}
+        self._motor_feedback_structured_sequence = 0
         self._motor_protection_flags: Dict[int, bool] = {}
         self._motor_temperature_warning_flags: Dict[int, bool] = {}
         self._motor_safety_fault_active = False
@@ -397,6 +409,15 @@ class ImuMotorControllerNode(LifecycleNode):
             ros_config = config.ros
             self._motor_status_pub = self.create_publisher(
                 String, ros_config.motor_status_topic, 10
+            )
+            self._motor_feedback_structured_pub = self.create_publisher(
+                MotorFeedbackArray,
+                ros_config.motor_feedback_structured_topic,
+                10,
+            )
+            self._motor_feedback_structured_timer = self.create_timer(
+                1.0 / ros_config.motor_feedback_publish_rate_hz,
+                self._publish_structured_motor_feedback,
             )
             self._system_e_stop_pub = self.create_publisher(Bool, "/e_stop", 10)
             state_qos = QoSProfile(
@@ -559,6 +580,8 @@ class ImuMotorControllerNode(LifecycleNode):
         self._current_speeds = {}
         self._selected_motor_id = 1 if 1 in self._motor_ids else self._motor_ids[0]
         self._motor_feedback = {}
+        self._motor_feedback_received_at = {}
+        self._motor_feedback_structured_sequence = 0
         self._motor_protection_flags = {
             motor_id: False for motor_id in self._motor_ids
         }
@@ -734,8 +757,16 @@ class ImuMotorControllerNode(LifecycleNode):
             self._destroy_ros_resource(
                 "_motor_mode_timer", "timer:motor_mode", self.destroy_timer, failures, reason
             )
+            self._destroy_ros_resource(
+                "_motor_feedback_structured_timer",
+                "timer:motor_feedback_structured",
+                self.destroy_timer,
+                failures,
+                reason,
+            )
             for attr in (
                 "_motor_status_pub",
+                "_motor_feedback_structured_pub",
                 "_system_e_stop_pub",
                 "_relative_attitude_pub",
                 "_imu_zero_generation_pub",
@@ -778,6 +809,7 @@ class ImuMotorControllerNode(LifecycleNode):
             self._limits = {}
             self._key_to_motor = {}
             self._motor_feedback = {}
+            self._motor_feedback_received_at = {}
             self._motor_protection_flags = {}
             self._motor_temperature_warning_flags = {}
             self._state_mgr = None
@@ -870,6 +902,64 @@ class ImuMotorControllerNode(LifecycleNode):
             active=self._is_active,
         )
         self._motor_mode_pub.publish(msg)
+
+    def _publish_structured_motor_feedback(self) -> None:
+        """Publish a complete observer snapshot without any driver operation."""
+
+        publisher = self._motor_feedback_structured_pub
+        config = self._config
+        if publisher is None or config is None:
+            return
+        try:
+            now = time.monotonic()
+            with self._lock:
+                snapshot = build_structured_feedback(
+                    tuple(self._motor_configs),
+                    dict(self._motor_feedback),
+                    dict(self._motor_feedback_received_at),
+                    now=now,
+                    freshness_sec=(
+                        config.ros.motor_feedback_observer_freshness_sec
+                    ),
+                    critical_temperature_c=(
+                        config.safety.motor_temp_critical_deg_c
+                    ),
+                    safety_fault_active=self._motor_safety_fault_active,
+                )
+                sequence = self._motor_feedback_structured_sequence
+                self._motor_feedback_structured_sequence += 1
+
+            message = MotorFeedbackArray()
+            message.stamp = self.get_clock().now().to_msg()
+            message.sequence = sequence
+            for item in snapshot:
+                motor = MotorFeedback()
+                motor.logical_name = item.logical_name
+                motor.can_id = item.can_id
+                motor.has_feedback = item.has_feedback
+                if item.has_feedback:
+                    motor.position_valid = True
+                    motor.position_rad = item.position_rad
+                    motor.velocity_valid = True
+                    motor.velocity_rad_s = item.velocity_rad_s
+                    motor.torque_valid = True
+                    motor.torque_nm = item.torque_nm
+                    motor.temperature_valid = True
+                    motor.temperature_c = item.temperature_c
+                    motor.device_mode_valid = True
+                    motor.device_mode = item.device_mode
+                    motor.fault_flags_valid = True
+                    motor.fault_flags = item.fault_flags
+                    motor.feedback_age_sec = item.feedback_age_sec
+                motor.valid = item.valid
+                motor.fresh = item.fresh
+                motor.healthy = item.healthy
+                message.motors.append(motor)
+            publisher.publish(message)
+        except Exception as exc:
+            self.get_logger().error(
+                f"发布结构化电机反馈失败（安全监控继续运行）: {exc}"
+            )
 
     def _on_driver_feedback_error(self, exc: Exception) -> None:
         """Keep reader threads alive while making callback failures diagnosable."""

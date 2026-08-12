@@ -3,9 +3,8 @@ import sys
 from pathlib import Path
 
 
-PACKAGE_ROOT = (
-    Path(__file__).resolve().parents[1] / "windarmor_flight_control"
-)
+PACKAGE_ROOT = Path(__file__).resolve().parents[1] / "windarmor_flight_control"
+PURE_ROOTS = (PACKAGE_ROOT / "core", PACKAGE_ROOT / "algorithms")
 FORBIDDEN_ROOTS = {
     "can",
     "geometry_msgs",
@@ -20,18 +19,20 @@ FORBIDDEN_ROOTS = {
 
 def test_pure_package_sources_do_not_import_ros_or_hardware_libraries() -> None:
     violations: list[str] = []
-    for path in sorted(PACKAGE_ROOT.rglob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                roots = {alias.name.split(".", 1)[0] for alias in node.names}
-            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-                roots = {node.module.split(".", 1)[0]}
-            else:
-                continue
-            blocked = sorted(roots & FORBIDDEN_ROOTS)
-            if blocked:
-                violations.append(f"{path}: {', '.join(blocked)}")
+    for pure_root in PURE_ROOTS:
+        paths = sorted(pure_root.rglob("*.py"))
+        for path in paths:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    roots = {alias.name.split(".", 1)[0] for alias in node.names}
+                elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                    roots = {node.module.split(".", 1)[0]}
+                else:
+                    continue
+                blocked = sorted(roots & FORBIDDEN_ROOTS)
+                if blocked:
+                    violations.append(f"{path}: {', '.join(blocked)}")
     assert not violations
 
 

@@ -23,6 +23,8 @@ from .fake_motor_driver import FakeMotorDriver
 
 RESOURCE_ATTRS = (
     "_motor_status_pub",
+    "_motor_feedback_structured_pub",
+    "_motor_feedback_structured_timer",
     "_system_e_stop_pub",
     "_relative_attitude_pub",
     "_imu_zero_generation_pub",
@@ -401,9 +403,9 @@ def test_ros_resource_destroy_failure_does_not_block_remaining_cleanup():
 
         node.destroy_publisher = flaky_destroy
         assert node.on_cleanup(None) == TransitionCallbackReturn.FAILURE
-        assert len(destroy_calls) == 5
+        assert len(destroy_calls) == 6
         assert_fully_released(node, driver)
         assert node.on_cleanup(None) == TransitionCallbackReturn.SUCCESS
-        assert len(destroy_calls) == 5
+        assert len(destroy_calls) == 6
     finally:
         node.destroy_node()

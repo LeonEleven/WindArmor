@@ -33,6 +33,9 @@ def test_default_config_preserves_current_motor_mapping_and_control_values() -> 
     assert config.safety.motor_feedback_timeout_sec == 0.0
     assert config.safety.motor_feedback_startup_grace_sec == 3.0
     assert config.safety.motor_feedback_check_rate_hz == 10.0
+    assert config.ros.motor_feedback_structured_topic == "/motors/feedback"
+    assert config.ros.motor_feedback_publish_rate_hz == 10.0
+    assert config.ros.motor_feedback_observer_freshness_sec == 0.5
     assert config.safety.reconnect_on_disconnect
     assert config.safety.reconnect_policy.max_attempts == 30
     assert config.safety.reconnect_policy.initial_delay_sec == 0.5
@@ -133,6 +136,16 @@ def set_all_motor_lists(raw, value):
         (lambda raw: raw.update(imu_topic=" "), "imu_topic"),
         (lambda raw: raw.update(motor_mode_topic="bad topic"), "motor_mode_topic"),
         (lambda raw: raw.update(motor_mode_publish_rate_hz=0.0), "必须大于 0"),
+        (
+            lambda raw: raw.update(motor_feedback_publish_rate_hz=0.0),
+            "必须大于 0",
+        ),
+        (
+            lambda raw: raw.update(
+                motor_feedback_observer_freshness_sec=float("nan")
+            ),
+            "有限值",
+        ),
         (lambda raw: raw.update(imu_zero_timeout_sec=float("nan")), "有限值"),
         (lambda raw: raw.update(manual_loop_hz=0.0), "必须大于 0"),
         (lambda raw: raw.update(roll_axis_sign=0.0), "严格为"),

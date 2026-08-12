@@ -64,9 +64,11 @@ run_stage() {
         src/windarmor_flight_control/windarmor_flight_control/*.py \
         src/windarmor_flight_control/windarmor_flight_control/core/*.py \
         src/windarmor_flight_control/windarmor_flight_control/algorithms/*.py \
+        src/windarmor_flight_control/windarmor_flight_control/runtime/*.py \
         src/imu_cybergear_ros2/launch/*.py \
         src/windarmor_fan_controller/launch/*.py \
         src/windarmor_bringup/launch/*.py \
+        src/windarmor_flight_control/launch/*.py \
         scripts/check_ci_safety.py \
         scripts/check_git_whitespace.py
       ;;

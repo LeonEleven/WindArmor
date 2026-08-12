@@ -18,6 +18,7 @@
 | **急停接口** | 三重通道：键盘[空格]、话题 `/e_stop`、服务 `/e_stop` |
 | **远程启停** | `/enable_motor` 服务（std_srvs/SetBool） |
 | **电机反馈** | 实时读取电机位置/速度/力矩/温度/模式/故障 |
+| **结构化观测** | `/motors/feedback` 周期发布全部配置电机的只读 presence-aware snapshot |
 | **故障保护** | 任一电机固件故障位或临界温度锁存后停止全部电机并进入 ERROR |
 | **反馈健康** | 配置 ID/数值/量程校验、连续无效帧保护和可配置的新鲜度框架 |
 | **连接与恢复** | 初始连接重试与运行期 transport-only 受控重连相互独立 |
@@ -48,6 +49,7 @@
                     │                              │              │
              CyberGearDriver                键盘交互          状态发布
                     │                      (raw终端)    /motor/status
+                    │                                  /motors/feedback
           ┌─────────┴─────────┐
           │                   │
   UsbCanSerialBackend  SocketCanHatBackend
@@ -414,13 +416,21 @@ critical` 只限频告警且不降速；`temperature >= critical` 单帧即锁�
 之后缺少首帧或任一电机年龄超过 timeout 都锁存 `ERROR`；deactivate、cleanup
 和 shutdown 会幂等销毁 timer，重新 configure 不继承旧时间。
 
+`/motors/feedback` 以默认 `10 Hz` 从上述合法 feedback cache 周期构造完整数组，
+按 `motor_names`/`motor_ids` 暴露稳定逻辑名称与 CAN ID。尚无合法反馈的配置电机
+仍有 entry，但 `has_feedback=false`、全部 presence flag 为 false，ROS 数值默认
+零不得解释成真实物理反馈。`feedback_age_sec` 来自同一 monotonic 接收时间；默认
+observer freshness 为 `0.5 s`。该 observer threshold 只影响消息中的
+`fresh/healthy`，不会读取 driver、发送命令、改变 ERROR，也不会修改默认仍为
+`0.0` 的 `motor_feedback_timeout_sec`。
+
 数值电流能力边界必须明确区分：固件的过流 bit 已是立即保护；
 `motor_current_limit_a` 只是保留参数，当前没有实际 `current_a` 可供比较。代码
 不会用 `torque_nm`、`raw_torque` 或速度推导安培值。两个接收后端中的 feedback
 callback 异常会报告给诊断回调，同时继续读取线程和后续 callback；cleanup 会
 先清空反馈及错误 callback，避免继续引用已销毁节点。
 
-Codex 在可靠性以及配置/状态契约加固中只使用 fake driver 完成纯软件故障注入、
+本项目在可靠性以及配置/状态契约加固中只使用 fake driver 完成纯软件故障注入、
 并发边界和 lifecycle 测试，没有访问真实 IMU、CAN 或电机。软件完成后，用户
 自行启动整个系统并完成 MANUAL/AUTO 功能实机测试；此前也已报告统一 launch
 下的电机和风扇基本功能正常。上述正常功能测试不等于本任务设计的 SDO、配置、
@@ -485,6 +495,9 @@ ros2 param set /imu_motor_controller_node motor_feedback_timeout_sec 1.0
 ```bash
 # 订阅电机反馈话题
 ros2 topic echo /motor/status
+
+# 结构化完整 snapshot（只读 observer）
+ros2 topic echo /motors/feedback
 
 # 输出格式: motor_id,pos_rad,speed_rad_s,torque_nm,temp_C,mode,fault_hex
 # 示例: "1,0.5234,-0.1000,1.200,35.0,运行,0x00"

@@ -1,8 +1,9 @@
 # WindArmor Flight Control API
 
 本文档面向飞控算法开发。v1 API 是 v0.4.0 Flight Control Integration
-Foundation 的纯软件接口；当前版本不能控制真实 actuator。后续接入 runtime 时
-优先保持这里的模型、单位、校验和安全语义兼容。
+Foundation 的纯算法接口；Task 2 已提供 observation-only DRY_RUN Runtime，但
+当前版本仍不能控制真实 actuator。后续 authority/actuator 接入必须保持这里的
+模型、单位、校验和安全语义兼容。
 
 ## 算法入口
 
@@ -23,8 +24,8 @@ class MyController:
 controller: FlightController = MyController()
 ```
 
-`dt` 是当前算法 tick 与上一 tick 之间的单调时间差，单位为秒。未来 runtime
-负责拒绝或抑制非法 tick；算法不得自行读取 ROS clock 或硬件时钟。`reset()`
+`dt` 是当前算法 tick 与上一 tick 之间的单调时间差，单位为秒。DRY_RUN Runtime
+负责拒绝并锁存抑制非法 tick；算法不得自行读取 ROS clock 或硬件时钟。`reset()`
 只能修改算法实例内部状态。
 
 纯 core 与 algorithms 可在普通 Python 环境使用，不需要 ROS graph、Raspberry
@@ -87,13 +88,15 @@ API 不定义 `relative_yaw_rad`。需要该能力时必须先建立来源、零
 且 `valid/fresh/healthy` 必须为 false。API 不包含 `current_a`：现有 0x02 状态
 帧没有经过验证的真实安培字段，不能从 `torque_nm` 推导。API 也不虚构 RPM。
 
-`windarmor_interfaces/MotorFeedback.msg` 是未来 ROS adapter 的传输契约。ROS
+`windarmor_interfaces/MotorFeedback.msg` 是 ROS adapter 的传输契约。ROS
 message 不能表达 Python `None`，因此 position、velocity、torque、temperature、
 device mode 和 fault flags 都有对应的 `*_valid` presence flag；消费者在 flag 为
 false 时必须忽略该数值字段。`has_feedback` 表示整条消息是否携带反馈，不能因
 ROS 数值字段默认是零就推断真实反馈为零。`MotorFeedbackArray.msg` 用 stamp、
-sequence 和完整 motor 数组表达同一 snapshot。本任务只生成消息类型，尚无真实
-节点发布该消息。
+sequence 和完整 motor 数组表达同一 snapshot。电机节点现在周期发布
+`/motors/feedback`：只复制现有合法 feedback cache 和本地 monotonic 接收年龄，
+不触发额外 driver I/O。没有反馈的配置电机仍有 entry，且 `has_feedback` 和全部
+presence flag 为 false。
 
 ### FanSystemState
 
@@ -130,7 +133,7 @@ startup 时 authority 可明确为 `NONE`，其余裁决可明确为 false。
 `e_stop_active=None` 绝不等于 `False`。State validation 只允许在
 `e_stop_active is False`、fan enabled 明确为 true、电机/风扇模式均已观测、
 所需输入新鲜且 Flight authority 活动时声明 `actuation_allowed=True`。Task 2
-Runtime 必须等这些关键状态可判断后才能进入真实 actuator arming。
+DRY_RUN 不进入 arming，所以即使观测齐全也始终保持 `actuation_allowed=False`。
 
 ## None、valid、fresh 与 healthy
 
@@ -180,13 +183,14 @@ FlightCommand(
 ```
 
 safe-stop 只表示算法主动放弃继续提供普通 actuator command。它不携带可执行
-target，future runtime 不得缓存、复制或重发上一帧 command，也不得把 `None`
+target，runtime 不得缓存、复制或重发上一帧 command，也不得把 `None`
 替换成伪造的零目标。人为构造 safe-stop flag 与任一 actuator payload 的混合
 命令会被 validation 拒绝。
 
-safe-stop 后续由 runtime 解释为撤销或 inhibit Flight authority 的请求。它本身
-不发布消息、不操作硬件、不等于 hardware E-STOP、不清除 ERROR，也不恢复
-MANUAL、AUTO、HOME 或任何旧控制状态。
+Task 2 DRY_RUN 只把 safe-stop 发布为无 payload preview。后续 authority runtime
+才能把它解释为撤销或 inhibit Flight authority 的请求。它本身不操作硬件、
+不等于 hardware E-STOP、不清除 ERROR，也不恢复 MANUAL、AUTO、HOME 或任何旧
+控制状态。
 
 ## Validation
 
@@ -210,6 +214,41 @@ validate_flight_command(command, required_motors)
 可执行的值。safe-stop 只校验 flag 与 payload 互斥，不运行 normal actuator
 payload 或 required motor-key 校验，因此 stale/invalid state、尚未建立 actuator
 key 集合都不会妨碍算法放弃控制。
+
+## DRY_RUN Runtime 与 controller factory
+
+独立 observer launch 为 `flight_control_dry_run.launch.py`，只启动 Flight Runtime
+本身；它不会启动 IMU、电机、风扇或 bringup，也没有 actuator publisher/client。
+Runtime 从 `flight_control.yaml` 读取逻辑电机键、observer PWM 范围、各输入
+freshness 和 factory contract：
+
+```yaml
+controller_factory: "windarmor_flight_control.algorithms.flight_controller:create_controller"
+```
+
+factory 必须提供：
+
+```python
+def create_controller(required_motor_names: tuple[str, ...]) -> FlightController:
+    ...
+```
+
+factory 和算法模块不得 import ROS。默认示例以每个逻辑 key 的测试值 `0.0` 构造
+`NeutralExampleController`，不声明这些值是真实机械中位。由于 DRY_RUN state 的
+`actuation_allowed` 始终为 false，默认示例在线返回 payload-free safe-stop；normal
+command 可继续用 fake state 离线测试，或用明确的 test controller 验证 preview。
+
+每个 control timer tick 使用一次 monotonic snapshot 和真实 monotonic `dt`。loader、
+`reset()`、state validation、`update()` 或 command validation 失败都会锁存本地
+inhibited，停止继续调用故障 controller，且不会因 sensor 恢复自动解除。合法
+output 只发布到：
+
+```text
+/flight_control/dry_run/status
+/flight_control/dry_run/command_preview
+```
+
+这两个 topic 是只读观察契约，不是 actuator command。
 
 ## Fake state 示例
 
@@ -271,7 +310,7 @@ driver。
 
 ## 禁止能力与当前边界
 
-算法与当前 package 没有以下能力：
+算法与当前 DRY_RUN Runtime 没有以下能力：
 
 - 直接访问 CyberGear、CAN、串口、GPIO、PWM 或电调；
 - 发布 actuator topic 或调用硬件 service；
@@ -281,6 +320,7 @@ driver。
 - 绕过现有电机/风扇状态机、软限位、看门狗或安全退出；
 - 在 transport 恢复后自动恢复 MANUAL/AUTO/HOME 或重发旧目标。
 
-v0.4.0 foundation 不包含真实 Flight Runtime、状态 adapter、authority service、
-generation 执行校验、PWM 映射或 actuator dispatch。这些能力只有在后续任务中
-接入既有安全路径后才能存在。
+v0.4.0 Task 2 已包含 ROS state adapters、immutable aggregation、controller loading
+和 DRY_RUN preview，但不包含 authority service、generation 执行校验、PWM 映射、
+actuator adapter 或 actuator dispatch。这些能力只有在后续任务中接入既有安全
+路径后才能存在。

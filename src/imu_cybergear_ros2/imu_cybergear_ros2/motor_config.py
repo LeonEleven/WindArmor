@@ -104,6 +104,9 @@ DEFAULT_PARAMETER_VALUES = {
     "reconnect_max_delay_sec": 10.0,
     "reconnect_backoff_multiplier": 1.5,
     "motor_status_topic": "/motor/status",
+    "motor_feedback_structured_topic": "/motors/feedback",
+    "motor_feedback_publish_rate_hz": 10.0,
+    "motor_feedback_observer_freshness_sec": 0.5,
 }
 
 DEPRECATED_PARAMETER_REPLACEMENTS = {
@@ -184,7 +187,10 @@ class MotorRosInterfaceConfig:
     imu_zero_generation_topic: str
     motor_mode_topic: str
     motor_status_topic: str
+    motor_feedback_structured_topic: str
     motor_mode_publish_rate_hz: float
+    motor_feedback_publish_rate_hz: float
+    motor_feedback_observer_freshness_sec: float
     imu_zero_timeout_sec: float
 
 
@@ -510,12 +516,21 @@ def build_motor_node_config(raw: Mapping[str, object]) -> MotorNodeConfig:
     rate = _require_finite_number(
         "motor_mode_publish_rate_hz", raw["motor_mode_publish_rate_hz"]
     )
+    feedback_publish_rate = _require_finite_number(
+        "motor_feedback_publish_rate_hz", raw["motor_feedback_publish_rate_hz"]
+    )
+    feedback_observer_freshness = _require_finite_number(
+        "motor_feedback_observer_freshness_sec",
+        raw["motor_feedback_observer_freshness_sec"],
+    )
     zero_timeout = _require_finite_number(
         "imu_zero_timeout_sec", raw["imu_zero_timeout_sec"]
     )
     manual_loop_hz = _require_finite_number("manual_loop_hz", raw["manual_loop_hz"])
     for name, value in (
         ("motor_mode_publish_rate_hz", rate),
+        ("motor_feedback_publish_rate_hz", feedback_publish_rate),
+        ("motor_feedback_observer_freshness_sec", feedback_observer_freshness),
         ("imu_zero_timeout_sec", zero_timeout),
         ("manual_loop_hz", manual_loop_hz),
     ):
@@ -591,7 +606,13 @@ def build_motor_node_config(raw: Mapping[str, object]) -> MotorNodeConfig:
             motor_status_topic=_validate_topic_name(
                 "motor_status_topic", raw["motor_status_topic"]
             ),
+            motor_feedback_structured_topic=_validate_topic_name(
+                "motor_feedback_structured_topic",
+                raw["motor_feedback_structured_topic"],
+            ),
             motor_mode_publish_rate_hz=rate,
+            motor_feedback_publish_rate_hz=feedback_publish_rate,
+            motor_feedback_observer_freshness_sec=feedback_observer_freshness,
             imu_zero_timeout_sec=zero_timeout,
         ),
         keyboard=MotorKeyboardConfig(

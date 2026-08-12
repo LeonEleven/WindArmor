@@ -2,11 +2,19 @@
 <package format="3">
   <name>windarmor_flight_control</name>
   <version>0.4.0</version>
-  <description>Hardware-independent flight-control API and algorithms for WindArmor.</description>
+  <description>Flight-control API, algorithms, and observation-only DRY_RUN runtime for WindArmor.</description>
   <maintainer email="h-goal@todo.todo">h-goal</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>geometry_msgs</depend>
+  <depend>launch</depend>
+  <depend>launch_ros</depend>
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>windarmor_interfaces</depend>
 
   <test_depend>python3-pytest</test_depend>
 

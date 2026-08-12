@@ -278,3 +278,9 @@ imu_motor_controller_node:
     # 格式："motor_id,pos_rad,speed_rad_s,torque_nm,temp_C,mode_name,fault_hex"
     # 示例："1,0.5234,-0.1000,1.200,35.0,运行,0x00"
     motor_status_topic: "/motor/status"
+
+    # Flight/diagnostic observer-only structured snapshot. These settings never
+    # change motor safety decisions or motor_feedback_timeout_sec.
+    motor_feedback_structured_topic: "/motors/feedback"
+    motor_feedback_publish_rate_hz: 10.0
+    motor_feedback_observer_freshness_sec: 0.5

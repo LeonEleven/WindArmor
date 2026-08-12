@@ -50,3 +50,30 @@ def test_feedback_array_is_a_timestamped_complete_snapshot() -> None:
         ("uint64", "sequence"),
         ("MotorFeedback[]", "motors"),
     ]
+
+
+def test_runtime_status_is_structured_and_explicitly_reports_dry_run_state() -> None:
+    assert message_fields("FlightRuntimeStatus.msg") == [
+        ("builtin_interfaces/Time", "stamp"),
+        ("uint64", "state_sequence"),
+        ("string", "mode"),
+        ("bool", "state_valid"),
+        ("bool", "controller_inhibited"),
+        ("bool", "command_available"),
+        ("bool", "command_valid"),
+        ("bool", "latest_command_safe_stop"),
+        ("string", "last_error"),
+    ]
+
+
+def test_command_preview_has_presence_for_payload_free_safe_stop() -> None:
+    assert message_fields("FlightCommandPreview.msg") == [
+        ("builtin_interfaces/Time", "stamp"),
+        ("uint64", "state_sequence"),
+        ("bool", "request_safe_stop"),
+        ("string[]", "motor_names"),
+        ("float64[]", "motor_positions_rad"),
+        ("bool", "fan_commands_present"),
+        ("float64", "fan_left"),
+        ("float64", "fan_right"),
+    ]

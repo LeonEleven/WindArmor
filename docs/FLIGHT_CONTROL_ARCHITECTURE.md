@@ -51,13 +51,19 @@ Hardware
   看门狗和安全停止；
 - `windarmor_interfaces` 保存 ROS package 之间的结构化消息契约；
 - `windarmor_flight_control` 保存纯 Python Flight Core、算法接口和算法实现，
-  后续可以在该 package 的非 core 区域加入 runtime/adapters；
+  ROS-dependent runtime/adapters 位于该 package 的 `runtime/`，不反向污染 core；
 - `windarmor_bringup` 后续负责选择是否启动 Flight Runtime，不把选择逻辑放进
   算法层。
 
 v0.4.0 Task 1 只建立接口和纯算法基础，不实现 runtime node、真实状态订阅或
 actuator takeover。现有三个 v0.3.2 package 的运行路径不依赖新 package，默认
 行为不变。
+
+v0.4.0 Task 2 建立只读 ROS state adapters、monotonic `StateAggregator` 和只能
+DRY_RUN 的 Flight Runtime。sensor callback 只转换并更新 observation cache；固定
+control timer 每 tick 构造一次不可变 snapshot，再调用算法与校验 command。Runtime
+只发布带 `dry_run`/`preview` 语义的结构化观察消息，不拥有 authority，没有
+actuator publisher、service client 或 dispatch。现有 bringup 默认路径不启动它。
 
 `windarmor_flight_control/core` 与 `algorithms` 禁止依赖 `rclpy`、ROS message
 class、CAN/serial library、GPIO/PWM backend、CyberGear driver、SocketCAN，
@@ -88,15 +94,18 @@ class FlightController:
 
 safe-stop command 与 normal command 是互斥语义。`FlightCommand.safe_stop()`
 不携带 motor 或 fan target，只表示算法主动撤销继续控制的意图；runtime 不得
-把它解释为可执行 actuator frame，不得复制、缓存或重发上一帧目标。未来 runtime
-应将其解释为撤销或 inhibit Flight authority 的请求，再通过既有安全层进入安全
-状态。safe-stop 不是 hardware E-STOP，也不能清除 ERROR 或恢复控制模式。
+把它解释为可执行 actuator frame，不得复制、缓存或重发上一帧目标。Task 2
+DRY_RUN 只观察该意图；后续 authority runtime 才能将其解释为撤销或 inhibit
+Flight authority 的请求，再通过既有安全层进入安全状态。safe-stop 不是 hardware
+E-STOP，也不能清除 ERROR 或恢复控制模式。
 
 外部观测状态在 startup 可能尚未收到。adapter 必须用 `None` 显式表达 unknown，
 不能用 `False`、空字符串或数值零伪装已知安全状态。runtime 只有在 E-STOP、
 motor mode、fan enabled/control state 等关键状态均已观测且明确满足安全条件后，
-才可声明 actuation allowed 或进入真实 actuator arming。Task 1.1 只冻结该契约，
-不实现 runtime、arming 或 actuator path。
+才可声明 actuation allowed 或进入真实 actuator arming。Task 2 已实现 startup
+unknown 观测，但因为只允许 DRY_RUN，始终如实保持 authority `NONE`、generation
+`0`、`flight_control_active=False` 和 `actuation_allowed=False`；arming 与 actuator
+path 仍不存在。
 
 `reset()` 只重置算法内部状态。它没有硬件对象，因此不能重置硬件、清除 ERROR、
 清除 E-STOP、设置电机零点或重新使能设备。
@@ -121,7 +130,7 @@ FLIGHT_CONTROL
 的命令，旧 generation 命令永久拒绝；sequence 用于同 generation 内识别旧帧或
 乱序帧。Task 1 只定义纯数据模型，不把 generation 接入真实执行路径。
 
-Flight failure 后不得自动把 authority 赋予 MANUAL。未来 runtime 的
+Flight failure 后不得自动把 authority 赋予 MANUAL。后续 authority runtime 的
 `INHIBITED` 不得因输入重新新鲜或 transport 恢复而自动回到 `ACTIVE`；重新进入
 控制必须经过明确的新授权流程。E-STOP 和 ERROR 的裁决优先级永远高于任何
 command authority。
@@ -138,8 +147,8 @@ command authority。
 - runtime 校验与 authority 不能绕过电机/风扇状态机、看门狗、软限位、停用或
   安全退出；
 - `request_safe_stop` 只表示算法主动放弃继续控制，且不得携带 actuator payload。
-  runtime 必须将其导向既有安全停止路径；它不等同于硬件 E-STOP，也不是
-  ERROR recovery；
+  Task 2 只观察它；后续 authority runtime 必须将其导向既有安全停止路径。它不
+  等同于硬件 E-STOP，也不是 ERROR recovery；
 - 不从 torque 推导 `current_a`，不创建未经验证的 RPM 或 thrust；
 - 没有真实反馈时必须使用 presence/validity 与 `None` 表示 unknown，不能用
   `0.0` 冒充位置、速度、力矩、温度或风扇实际输出。
@@ -150,5 +159,18 @@ command authority。
 单位、改变 presence 语义或放宽命令校验属于破坏性变更，应提供迁移说明。
 runtime 接入阶段优先保持 v0.4.0 Flight API 兼容；adapter 可以演进，但不能把
 ROS 或硬件类型泄漏进 core。
+
+## Task 2 状态观测边界
+
+`/motors/feedback` 是从现有已验证 feedback cache 和本地 monotonic 接收时间周期
+生成的完整只读 snapshot。它不会触发 CAN read；publisher observer freshness 与
+底层 `motor_feedback_timeout_sec` 是独立策略。Runtime 再以
+`publisher_reported_age + local_elapsed_since_receipt` 独立判定 Flight freshness。
+
+IMU raw 与 relative roll/pitch 只按相同 source stamp 配对；control timestamp、
+`dt` 和所有 freshness 都使用 runtime 本地 monotonic 时间。fan PWM 只作为实际
+应用输出观察并归一化，不代表 RPM 或 thrust。fan 与 motor mode 过期后回到
+`None`/unknown。现有 `/e_stop` 是触发通道而非权威解除回读，因此 Runtime 启动为
+`None`，只锁存收到的 `True`，不会把 `False` 或 silence 推断为已解除。
 
 > Initial architecture baseline introduced for v0.4.0.

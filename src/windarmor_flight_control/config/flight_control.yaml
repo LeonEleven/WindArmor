@@ -1,0 +1,31 @@
+flight_control_runtime_node:
+  ros__parameters:
+    # DRY_RUN observer rate. These values are not flight-tuning validation.
+    control_rate_hz: 50.0
+    motor_names: ["left_lift", "left_pitch", "right_pitch", "right_lift"]
+
+    # Flight input usability only; these do not modify lower-level watchdogs.
+    flight_imu_freshness_sec: 0.2
+    flight_motor_freshness_sec: 0.5
+    flight_fan_output_freshness_sec: 1.0
+    flight_fan_state_freshness_sec: 1.0
+    flight_control_state_freshness_sec: 1.0
+
+    # Normalize observed applied PWM only; no command mapping exists here.
+    fan_observer_min_pwm_us: 800.0
+    fan_observer_max_pwm_us: 2200.0
+
+    controller_factory: "windarmor_flight_control.algorithms.flight_controller:create_controller"
+
+    imu_raw_topic: "/imu/data_raw"
+    imu_status_topic: "/imu/status"
+    imu_relative_topic: "/imu/relative_roll_pitch"
+    imu_zero_generation_topic: "/imu/zero_generation"
+    motor_feedback_topic: "/motors/feedback"
+    motor_control_mode_topic: "/motors/control_mode"
+    fan_status_pwm_topic: "/fans/status_pwm"
+    fan_enabled_topic: "/fans/enabled"
+    fan_control_state_topic: "/fans/control_state"
+    e_stop_topic: "/e_stop"
+    runtime_status_topic: "/flight_control/dry_run/status"
+    command_preview_topic: "/flight_control/dry_run/command_preview"

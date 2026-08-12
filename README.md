@@ -14,10 +14,40 @@ WindArmor 当前把两个已经过实机测试的前置项目整合为一个 ROS
   最终整机正常功能回归。
 
 当前开发目标为 `v0.4.0 Flight Control Integration Foundation`。开发中的
-Flight API 只建立纯 Python 算法边界和 ROS 结构化消息骨架，尚未接入真实
-actuator command path，也不改变 v0.3.2 的电机、风扇、IMU 或安全运行语义。
+Flight API 保持纯 Python 算法边界；Task 2 已接入结构化只读 ROS state 和只能
+DRY_RUN 的 observer runtime，但仍没有真实 actuator command path，也不改变
+v0.3.2 的电机、风扇、IMU 或安全运行语义。
 架构依据见 [Flight Control Architecture](docs/FLIGHT_CONTROL_ARCHITECTURE.md)，
 算法开发接口见 [Flight Control API](docs/FLIGHT_CONTROL_API.md)。
+
+### v0.4.0 DRY_RUN Flight Runtime
+
+电机控制节点新增 `/motors/feedback` 结构化完整 snapshot，同时保留旧
+`/motor/status`。新 topic 只读取现有合法 feedback cache 和本地 monotonic 接收
+时间，不触发额外 CAN read，也不改变 feedback safety、ERROR 或 reconnect。
+observer freshness 默认 `0.5 s`，与保持为 `0.0` 的底层
+`motor_feedback_timeout_sec` 完全独立。
+
+`windarmor_flight_control` 的 runtime 订阅 IMU、电机、风扇、公开控制模式和
+E-STOP trigger observation，按本地 monotonic 时间构造不可变 `FlightState`，再由
+固定 timer 调用配置的纯 Python controller factory。它只发布：
+
+```text
+/flight_control/dry_run/status
+/flight_control/dry_run/command_preview
+```
+
+Runtime 始终保持 authority `NONE`、generation `0`、
+`flight_control_active=false` 和 `actuation_allowed=false`。它没有 actuator
+publisher、service client、enable/zero/recovery 调用或实际 command dispatch；
+也没有加入统一 bringup 默认路径。独立 launch 只启动 observer runtime：
+
+```bash
+ros2 launch windarmor_flight_control flight_control_dry_run.launch.py
+```
+
+该 launch 本身不打开 CAN、串口或 GPIO；它只能观察 ROS graph 中已存在的状态。
+若另行启动现有硬件节点，仍必须遵守本仓库硬件授权与安全门槛。
 
 `v0.3.1` 在 `v0.3.0` 的统一相对姿态、电机模式状态和风扇手动/自动仲裁基础上，
 包含统一 MANUAL/AUTO/HOME 电机推进速度、AUTO 姿态增益和三种风扇响应曲线。
@@ -600,11 +630,11 @@ ros2 launch windarmor_fan_controller fans.launch.py
 它不是正常公共控制方式；正式操作应使用 `fans.launch.py` 或
 `windarmor.launch.py`。
 
-Codex 在电机可靠性以及配置/状态契约开发中都只执行纯软件验证，没有运行硬件
-节点或 launch，也没有访问 IMU、CAN、GPIO 或串口。软件完成后，用户自行启动
-整个系统并完成 MANUAL/AUTO 功能实机测试；此前也已报告统一 launch 下的电机
-和风扇基本功能正常。上述用户测试不等于真实故障注入、极限测试或标定，也不
-授权 Codex 执行后续硬件操作。
+电机可靠性以及配置/状态契约开发只执行了纯软件验证，没有运行硬件节点或
+launch，也没有访问 IMU、CAN、GPIO 或串口。软件完成后，用户自行启动整个系统
+并完成 MANUAL/AUTO 功能实机测试；此前也已报告统一 launch 下的电机和风扇基本
+功能正常。上述用户测试不等于真实故障注入、极限测试或标定，也不构成后续
+硬件操作授权。
 
 本轮反馈健康、故障位和温度保护的开发验证只使用 pure logic、fake feedback、
 fake clock 和 fake driver。用户随后自行启动整机，在设置机械零点和手动控制时

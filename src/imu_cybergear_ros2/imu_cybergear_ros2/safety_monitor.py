@@ -184,6 +184,13 @@ class SafetyMonitor:
             # Only a complete valid frame may replace the most recent feedback.
             with self._node._lock:
                 self._node._motor_feedback[mid] = status
+                received_times = getattr(
+                    self._node, "_motor_feedback_received_at", None
+                )
+                if received_times is None:
+                    received_times = {}
+                    self._node._motor_feedback_received_at = received_times
+                received_times[mid] = received_at
                 warning_flags = getattr(
                     self._node, "_motor_temperature_warning_flags", None
                 )
