@@ -118,6 +118,7 @@ class ImuMotorControllerNode(LifecycleNode):
         driver_factory: Callable[..., object] = CyberGearDriver,
         sleep_fn: Callable[[float], None] = time.sleep,
         source_epoch_fn: Callable[[], int] = time.monotonic_ns,
+        monotonic_fn: Callable[[], float] = time.monotonic,
     ):
         source_epoch = source_epoch_fn()
         if (
@@ -130,6 +131,7 @@ class ImuMotorControllerNode(LifecycleNode):
         # 测试可注入完全内存化 fake；生产入口仍使用 CyberGearDriver。
         self._driver_factory = driver_factory
         self._sleep = sleep_fn
+        self._monotonic = monotonic_fn
         self._motor_safety_source_epoch = source_epoch
 
         # ================================================================
@@ -229,6 +231,7 @@ class ImuMotorControllerNode(LifecycleNode):
         self.declare_parameter("motor_feedback_timeout_sec", 0.0)
         self.declare_parameter("motor_feedback_startup_grace_sec", 3.0)
         self.declare_parameter("motor_feedback_check_rate_hz", 10.0)
+        self.declare_parameter("motor_feedback_acquisition_rate_hz", 10.0)
         self.declare_parameter("position_error_threshold_rad", 0.3)
         self.declare_parameter("warning_throttle_sec", 2.0)
         self.declare_parameter("reconnect_on_disconnect", True)
@@ -326,6 +329,7 @@ class ImuMotorControllerNode(LifecycleNode):
         self._transport_fault_snapshot: Optional[TransportEvent] = None
         self._reconnect_on_disconnect = True
         self._reconnect_policy = None
+        self._motor_feedback_acquisition_rate_hz = 10.0
 
         # IMU 运行时状态
         self._imu_zero_roll = 0.0
@@ -419,7 +423,12 @@ class ImuMotorControllerNode(LifecycleNode):
             if start_result.outcome is not TransitionOutcome.CHANGED:
                 raise RuntimeError("无法进入 INITIALIZING，拒绝继续配置")
             self._motor_mgr = MotorManager(self, self._state_mgr)
-            self._safety = SafetyMonitor(self, self._state_mgr, self._motor_mgr)
+            self._safety = SafetyMonitor(
+                self,
+                self._state_mgr,
+                self._motor_mgr,
+                monotonic_fn=self._monotonic,
+            )
             self._keyboard = KeyboardHandler(
                 self, self._state_mgr, self._motor_mgr, self._safety
             )
@@ -637,6 +646,9 @@ class ImuMotorControllerNode(LifecycleNode):
         self._motor_feedback_check_rate_hz = (
             config.safety.motor_feedback_check_rate_hz
         )
+        self._motor_feedback_acquisition_rate_hz = (
+            config.safety.motor_feedback_acquisition_rate_hz
+        )
         self._position_error_threshold = (
             config.safety.position_error_threshold_rad
         )
@@ -699,6 +711,7 @@ class ImuMotorControllerNode(LifecycleNode):
         self._publish_control_mode()
         self._publish_imu_zero_generation()
         self._motor_mgr.start_motion_timer()
+        self._motor_mgr.start_feedback_acquisition()
 
         if self._config.keyboard.enabled:
             self._keyboard.start()
@@ -721,6 +734,7 @@ class ImuMotorControllerNode(LifecycleNode):
             if not recovery_cancelled:
                 self.get_logger().error("停用时 transport recovery worker 未及时退出")
         self._publish_control_mode()
+        self._motor_mgr.stop_feedback_acquisition()
         self._motor_mgr.stop_motion_timer()
         self._safety.stop_feedback_monitor()
         self._keyboard.stop()
@@ -781,6 +795,10 @@ class ImuMotorControllerNode(LifecycleNode):
                 )
 
             if motor_mgr is not None:
+                attempt(
+                    "stop_feedback_acquisition",
+                    motor_mgr.stop_feedback_acquisition,
+                )
                 attempt("stop_motion_timer", motor_mgr.stop_motion_timer)
             if keyboard is not None:
                 attempt("stop_keyboard", keyboard.stop)
@@ -1071,7 +1089,7 @@ class ImuMotorControllerNode(LifecycleNode):
         if publisher is None or config is None:
             return
         try:
-            now = time.monotonic()
+            now = self._monotonic()
             with self._lock:
                 snapshot = build_structured_feedback(
                     tuple(self._motor_configs),

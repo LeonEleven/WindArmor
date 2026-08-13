@@ -107,6 +107,40 @@ def test_unknown_and_invalid_feedback_do_not_replace_last_valid_feedback():
     assert state.last_transition.reason is TransitionReason.MOTOR_INVALID_FEEDBACK
 
 
+def test_inactive_configured_node_still_ingests_valid_measured_feedback():
+    node, state, _manager, monitor = system_with_monitor(motor_ids=(4, 3))
+    node._is_active = False
+    measured = feedback(4, position_rad=0.37, speed_rad_s=-0.2, torque_nm=0.6)
+    monitor.on_motor_feedback(measured)
+    assert state.state is ControllerState.MANUAL_RUNNING
+    assert node._motor_feedback[4] is measured
+    assert node._motor_feedback_received_at[4] == pytest.approx(10.0)
+
+
+def test_initializing_fault_frame_is_cached_then_trips_fail_closed():
+    node, state, _manager, monitor = system_with_monitor(motor_ids=(4, 3))
+    node._is_active = False
+    state._state = ControllerState.INITIALIZING
+    fault = feedback(4, position_rad=0.42, fault_flags=0x02)
+    monitor.on_motor_feedback(fault)
+    assert node._motor_feedback[4] is fault
+    assert node._motor_safety_fault_active
+    assert state.state is ControllerState.ERROR
+    assert [call[1] for call in calls(node._driver, "stop_motor")] == [4, 3]
+
+
+def test_initializing_invalid_feedback_never_populates_cache_and_still_trips():
+    node, state, _manager, monitor = system_with_monitor(motor_ids=(4,))
+    node._is_active = False
+    state._state = ControllerState.INITIALIZING
+    invalid = feedback(4, position_rad=math.nan)
+    for _ in range(3):
+        monitor.on_motor_feedback(invalid)
+    assert node._motor_feedback == {}
+    assert node._motor_safety_fault_active
+    assert state.state is ControllerState.ERROR
+
+
 def test_valid_frame_clears_invalid_count_only_before_latch():
     node, state, _manager, monitor = system_with_monitor(motor_ids=(4,))
     bad = feedback(position_rad=math.nan)

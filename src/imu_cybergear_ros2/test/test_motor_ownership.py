@@ -160,3 +160,37 @@ def test_explicit_operator_mode_toggle_reclaims_legacy_after_release():
     switch_mode(state, ControllerState.AUTO_RUNNING)
     switch_mode(state, ControllerState.MANUAL_RUNNING)
     assert manager.command_owner is MotorCommandOwner.MANUAL
+
+
+def test_feedback_probe_never_replays_uncommanded_or_revoked_flight_generation():
+    node, _state, manager = build_system()
+    node._init_complete = True
+    node._motor_configs = [
+        type("Channel", (), {"name": "a", "motor_id": 1})(),
+        type("Channel", (), {"name": "b", "motor_id": 2})(),
+    ]
+    assert manager.prepare_flight_ownership(100, 1, now=1.0).success
+    assert manager.commit_flight_ownership(100, 1, now=1.1).success
+
+    manager._feedback_acquisition_tick()
+    assert position_writes(node) == []
+
+    assert manager.set_flight_targets(
+        100, 1, 0, {"a": 0.5, "b": -0.5}, now=1.2
+    ).success
+    current = dict(node._current_targets)
+    manager._feedback_acquisition_tick()
+    assert position_writes(node) == [
+        (1, 0x7016, current[1]),
+        (2, 0x7016, current[2]),
+    ]
+
+    node._driver.writes.clear()
+    assert manager.revoke_flight_ownership(100, 1).success
+    manager._feedback_acquisition_tick()
+    assert position_writes(node) == []
+    assert not manager.set_flight_targets(
+        100, 1, 1, {"a": 0.9, "b": -0.9}, now=1.3
+    ).success
+    manager._feedback_acquisition_tick()
+    assert position_writes(node) == []

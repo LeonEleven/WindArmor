@@ -240,8 +240,10 @@ ROS 或硬件类型泄漏进 core。
 ## Task 2 状态观测边界
 
 `/motors/feedback` 是从现有已验证 feedback cache 和本地 monotonic 接收时间周期
-生成的完整只读 snapshot。它不会触发 CAN read；publisher observer freshness 与
-底层 `motor_feedback_timeout_sec` 是独立策略。Runtime 再以
+生成的完整只读 snapshot。publisher 本身不执行 driver I/O；normal motor controller
+另由 owner/lifecycle gated acquisition timer 重发严格相等的当前 authoritative
+`loc_ref`，利用其 type-2 应答更新 cache。publisher observer freshness 与底层
+`motor_feedback_timeout_sec` 是独立策略。Runtime 再以
 `publisher_reported_age + local_elapsed_since_receipt` 独立判定 Flight freshness。
 
 IMU raw 与 relative roll/pitch 只按相同 source stamp 配对；control timestamp、

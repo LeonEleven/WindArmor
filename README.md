@@ -47,10 +47,10 @@ Runtime 中保持 unknown/fail-closed，不伪造 stop PWM 或健康状态。
 ros2 launch windarmor_bringup windarmor_observation_only.launch.py
 ```
 
-这不是默认软件测试命令：它会访问真实 IMU 串口并打开 CAN receive transport，只有
-未来按硬件验证计划获得 Gate A2 单独明确授权后才能运行。当前只完成 pure/fake/mock
-软件验证，尚未执行真实 Gate A2，也尚未确认实机 CyberGear 在零 command TX 时是否
-主动发送 0x02 feedback。普通 `windarmor.launch.py` 和 v0.3.2 控制行为不变。
+这不是默认软件测试命令：它会访问真实 IMU 串口并打开 CAN receive transport，任何
+再次运行都必须按硬件验证计划单独获得授权。既有实机观测已经确认：transport 可连接，
+但四台 CyberGear 在零 host command TX 下没有持续主动发送 0x02 feedback。该 passive
+能力不再是 release requirement；普通 `windarmor.launch.py` 和既有控制行为不变。
 
 ### 飞控算法开发
 
@@ -216,11 +216,22 @@ MANUAL/AUTO/HOME 均不能恢复，必须排除原因后重新配置或重启。
 字节序还原为 `0x0167/0x0161/0x015A`，即 `35.9/35.3/34.6 °C`。position、
 speed、torque 与 temperature 共用这一端序修正；SDO 发送字段不在本次改动范围。
 
-反馈新鲜度使用回调本地记录的单调接收时间，不信任反馈对象的 timestamp。
-两个后端都只是被动接收 0x02 帧，当前代码没有主动状态查询，也无法证明电机
-空闲且没有新目标命令时仍持续周期上报。因此默认
-`motor_feedback_timeout_sec: 0.0`，仅记录反馈年龄而不因固定时长无反馈进入
-`ERROR`；用户明确配置正值后，启动宽限和逐电机超时保护才会启用。
+反馈新鲜度使用回调本地记录的单调接收时间，不信任反馈对象的 timestamp。合法反馈
+在 configure/初始化阶段也会进入 measured feedback cache；fault bit、临界温度和连续
+无效反馈仍按原安全路径 fail-closed，不能因 lifecycle 尚未 active 而被描述为 healthy。
+
+实机已经确认电机 idle/hold 时不会持续主动广播 0x02。正常控制节点 active 后以
+`motor_feedback_acquisition_rate_hz: 10.0` 周期重发每台电机当前会话中最近成功提交、
+当前 owner 仍授权的同值 `loc_ref`；CyberGear 通信类型 18 的应答是完整通信类型 2，
+因此 position、velocity、torque、temperature、mode 和 fault flags 仍来自真实反馈。
+该采集不提交或修改 `current_targets`/`desired_targets`，不切换 run mode，不 enable、
+recover 或 set-zero。Flight 新 generation 在首条合法 normal command 前、owner revoke、
+E-STOP、ERROR、transport fault、deactivate、cleanup 和 shutdown 后均不发送 probe；写入
+失败复用既有位置命令 fail-closed ERROR 路径。
+
+`motor_feedback_timeout_sec: 0.0` 保持不变，只表示 legacy safety 不因固定时长无反馈
+进入 ERROR；它与 `/motors/feedback`/Flight 的 observer freshness 仍是两个不同概念。
+用户显式配置正值后，既有启动宽限和逐电机超时保护才会启用。
 
 0x02 状态帧提供位置、速度、力矩和温度，没有经过协议验证的安培电流字段。
 `motor_current_limit_a: 5.0` 仍是保留参数，不参与数值比较；实际过流保护来自

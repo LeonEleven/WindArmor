@@ -133,8 +133,10 @@ device mode 和 fault flags 都有对应的 `*_valid` presence flag；消费者�
 false 时必须忽略该数值字段。`has_feedback` 表示整条消息是否携带反馈，不能因
 ROS 数值字段默认是零就推断真实反馈为零。`MotorFeedbackArray.msg` 用 stamp、
 sequence 和完整 motor 数组表达同一 snapshot。电机节点现在周期发布
-`/motors/feedback`：只复制现有合法 feedback cache 和本地 monotonic 接收年龄，
-不触发额外 driver I/O。没有反馈的配置电机仍有 entry，且 `has_feedback` 和全部
+`/motors/feedback`：publisher 只复制现有合法 feedback cache 和本地 monotonic 接收
+年龄，不执行 driver I/O。normal controller 的独立 acquisition timer 在当前合法 owner
+与 lifecycle 下重发同值 authoritative `loc_ref` 以取得完整 type-2；它不把 software
+target 当成 measurement。没有反馈的配置电机仍有 entry，且 `has_feedback` 和全部
 presence flag 为 false。
 
 ### Authoritative Safety Readback 顺序

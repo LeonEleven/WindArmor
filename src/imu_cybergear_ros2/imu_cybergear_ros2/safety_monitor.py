@@ -161,8 +161,6 @@ class SafetyMonitor:
         参数：
             status: 单台电机的实时反馈状态。
         """
-        if not self._node._is_active:
-            return
         try:
             received_at = self._monotonic()
             decision = self._health.evaluate(status, received_at=received_at)
@@ -178,7 +176,11 @@ class SafetyMonitor:
                 self._warn_throttled(
                     f"feedback:invalid:{mid}", decision.diagnostic_message
                 )
-                self._trip_motor_safety(decision)
+                if (
+                    decision.action is MotorHealthAction.TRIP
+                    and self._feedback_safety_actions_allowed()
+                ):
+                    self._trip_motor_safety(decision)
                 return
 
             # Only a complete valid frame may replace the most recent feedback.
@@ -210,7 +212,10 @@ class SafetyMonitor:
                 self._warn_throttled(
                     f"temperature:{mid}", decision.diagnostic_message
                 )
-            elif decision.action is MotorHealthAction.TRIP:
+            elif (
+                decision.action is MotorHealthAction.TRIP
+                and self._feedback_safety_actions_allowed()
+            ):
                 self._trip_motor_safety(decision)
 
             # 发布格式化的电机状态字符串
@@ -256,7 +261,18 @@ class SafetyMonitor:
         except Exception as exc:
             self._node.get_logger().error(f"处理电机反馈时发生异常: {exc}")
 
+    def _feedback_safety_actions_allowed(self) -> bool:
+        """Keep ingestion independent while preserving lifecycle safety actions."""
+        if self._motor_mgr is None or self._state is None:
+            return False
+        return self._state.state not in (
+            ControllerState.UNINITIALIZED,
+            ControllerState.SHUTTING_DOWN,
+        )
+
     def _trip_motor_safety(self, decision) -> None:
+        if not self._feedback_safety_actions_allowed():
+            return
         snapshot = MotorSafetyFaultSnapshot(
             motor_id=decision.motor_id,
             reason=decision.reason,

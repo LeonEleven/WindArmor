@@ -42,6 +42,7 @@ class MotorManager:
         self._state = state_mgr
         self._motion_source = MotionSource.IDLE
         self._motion_timer = None
+        self._feedback_acquisition_timer = None
         self._last_motion_tick_time: Optional[float] = None
         self._manual_repeat_times: Dict[Tuple[int, float], float] = {}
         self._init_touched_motor_ids: List[int] = []
@@ -65,6 +66,10 @@ class MotorManager:
     @property
     def motion_timer(self):
         return self._motion_timer
+
+    @property
+    def feedback_acquisition_timer(self):
+        return self._feedback_acquisition_timer
 
     @property
     def command_owner(self) -> MotorCommandOwner:
@@ -130,26 +135,26 @@ class MotorManager:
             self._current_init_stage = "failed:connect"
             return False
 
-        if self._initialization_transport_fault_latched():
+        if self._initialization_fault_latched():
             return False
 
         self._node.get_logger().info("电机连接成功，正在初始化运控模式...")
         max_init_retry = 3
         for mid in self._node._motor_ids:
             for attempt in range(max_init_retry):
-                if self._initialization_transport_fault_latched():
+                if self._initialization_fault_latched():
                     return False
                 try:
                     self._mark_init_touched(mid)
                     self._current_init_stage = f"ID{mid}:run_mode"
-                    if self._initialization_transport_fault_latched():
+                    if self._initialization_fault_latched():
                         return False
                     with self._node._driver_io_lock:
                         self._node._driver.write_sdo_int(mid, SDO_RUN_MODE, 1)
                     self._node._sleep(0.08)
 
                     self._current_init_stage = f"ID{mid}:target_speed"
-                    if self._initialization_transport_fault_latched():
+                    if self._initialization_fault_latched():
                         return False
                     with self._node._driver_io_lock:
                         self._node._driver.write_sdo_float(
@@ -160,7 +165,7 @@ class MotorManager:
                     self._node._sleep(0.08)
 
                     self._current_init_stage = f"ID{mid}:target_position"
-                    if self._initialization_transport_fault_latched():
+                    if self._initialization_fault_latched():
                         return False
                     with self._node._driver_io_lock:
                         self._node._driver.write_sdo_float(mid, SDO_TARGET_POS, 0.0)
@@ -172,7 +177,7 @@ class MotorManager:
                     self._node._sleep(0.08)
 
                     self._current_init_stage = f"ID{mid}:enter_control_mode"
-                    if self._initialization_transport_fault_latched():
+                    if self._initialization_fault_latched():
                         return False
                     with self._node._driver_io_lock:
                         self._node._driver.enter_control_mode(mid)
@@ -206,7 +211,7 @@ class MotorManager:
                         self._current_init_stage = f"failed:{self._current_init_stage}"
                         return False
 
-        if self._initialization_transport_fault_latched():
+        if self._initialization_fault_latched():
             return False
         result = self._state.transition_to(
             ControllerState.MANUAL_RUNNING,
@@ -225,14 +230,20 @@ class MotorManager:
         self._current_init_stage = "complete"
         return True
 
-    def _initialization_transport_fault_latched(self) -> bool:
-        if not getattr(self._node, "_transport_fault_active", False):
-            return False
-        self._current_init_stage = "failed:transport"
-        self._node.get_logger().error(
-            "电机初始化因 transport 故障中止；不会继续发送初始化命令"
-        )
-        return True
+    def _initialization_fault_latched(self) -> bool:
+        if getattr(self._node, "_transport_fault_active", False):
+            self._current_init_stage = "failed:transport"
+            self._node.get_logger().error(
+                "电机初始化因 transport 故障中止；不会继续发送初始化命令"
+            )
+            return True
+        if getattr(self._node, "_motor_safety_fault_active", False):
+            self._current_init_stage = "failed:motor_feedback_safety"
+            self._node.get_logger().error(
+                "电机初始化因反馈安全故障中止；不会继续发送初始化命令"
+            )
+            return True
+        return False
 
     def _mark_init_touched(self, motor_id: int) -> None:
         if motor_id not in self._init_touched_motor_ids:
@@ -259,6 +270,88 @@ class MotorManager:
     # ------------------------------------------------------------------
     # 固定周期统一推进器
     # ------------------------------------------------------------------
+
+    def start_feedback_acquisition(self) -> None:
+        """Periodically request type-2 feedback without changing hold targets."""
+        if self._feedback_acquisition_timer is not None:
+            return
+        self._feedback_acquisition_timer = self._node.create_timer(
+            1.0 / self._node._motor_feedback_acquisition_rate_hz,
+            self._feedback_acquisition_tick,
+        )
+
+    def stop_feedback_acquisition(self) -> None:
+        """Stop feedback probes before lifecycle teardown or transport close."""
+        timer = self._feedback_acquisition_timer
+        self._feedback_acquisition_timer = None
+        if timer is not None:
+            self._node.destroy_timer(timer)
+
+    def _feedback_probe_snapshot(self):
+        """Return the current safe owner and exact committed hold targets."""
+        with self._node._lock:
+            if (
+                not self._node._is_active
+                or not self._node._running
+                or not self._node._init_complete
+                or self._ordinary_commands_blocked_locked()
+            ):
+                return None
+            owner = self._ownership.owner
+            if owner is MotorCommandOwner.MANUAL:
+                if not self._state.is_manual_running():
+                    return None
+            elif owner is MotorCommandOwner.LEGACY_AUTO:
+                if not self._state.is_auto_running():
+                    return None
+            elif owner is MotorCommandOwner.FLIGHT_CONTROL:
+                # A newly committed Flight generation has no authoritative
+                # target until its first normal envelope is accepted.
+                if (
+                    not self._state.is_auto_running()
+                    or self._ownership.last_command_sequence is None
+                ):
+                    return None
+            else:
+                return None
+            if set(self._node._current_targets) != set(self._node._motor_ids):
+                return None
+            return owner, tuple(
+                (mid, self._node._current_targets[mid])
+                for mid in self._node._motor_ids
+            )
+
+    def _feedback_acquisition_tick(self) -> None:
+        """Re-send each exact authoritative loc_ref to obtain its type-2 reply.
+
+        CyberGear communication type 18 replies with a complete type-2 status
+        frame.  This path never commits a target, changes a mode, enables a
+        motor, sets zero, or restores an ownership session.
+        """
+        snapshot = self._feedback_probe_snapshot()
+        if snapshot is None:
+            return
+        owner, targets = snapshot
+        for motor_id, target in targets:
+            try:
+                with self._node._driver_io_lock:
+                    current = self._feedback_probe_snapshot()
+                    if current is None or current[0] is not owner:
+                        return
+                    current_targets = dict(current[1])
+                    if current_targets.get(motor_id) != target:
+                        return
+                    if self._node._driver is None:
+                        raise RuntimeError("电机驱动不可用")
+                    self._node._driver.write_sdo_float(
+                        motor_id, SDO_TARGET_POS, target
+                    )
+            except Exception as exc:
+                self._node.get_logger().error(
+                    f"采集电机 ID{motor_id} type-2 反馈时发生异常: {exc}"
+                )
+                self._handle_command_failure(motor_id, "feedback_probe", exc)
+                return
 
     def start_motion_timer(self) -> None:
         """创建唯一的固定周期目标推进定时器。"""

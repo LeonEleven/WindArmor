@@ -97,6 +97,7 @@ DEFAULT_PARAMETER_VALUES = {
     "motor_feedback_timeout_sec": 0.0,
     "motor_feedback_startup_grace_sec": 3.0,
     "motor_feedback_check_rate_hz": 10.0,
+    "motor_feedback_acquisition_rate_hz": 10.0,
     "position_error_threshold_rad": 0.3,
     "warning_throttle_sec": 2.0,
     "reconnect_on_disconnect": True,
@@ -183,6 +184,7 @@ class MotorSafetyConfig:
     motor_feedback_timeout_sec: float
     motor_feedback_startup_grace_sec: float
     motor_feedback_check_rate_hz: float
+    motor_feedback_acquisition_rate_hz: float
     position_error_threshold_rad: float
     warning_throttle_sec: float
     reconnect_on_disconnect: bool
@@ -522,6 +524,12 @@ def build_motor_node_config(raw: Mapping[str, object]) -> MotorNodeConfig:
     )
     if feedback_check_rate <= 0.0:
         raise ValueError("motor_feedback_check_rate_hz 必须大于 0")
+    feedback_acquisition_rate = _require_finite_number(
+        "motor_feedback_acquisition_rate_hz",
+        raw["motor_feedback_acquisition_rate_hz"],
+    )
+    if feedback_acquisition_rate <= 0.0:
+        raise ValueError("motor_feedback_acquisition_rate_hz 必须大于 0")
     position_error = _require_finite_number(
         "position_error_threshold_rad", raw["position_error_threshold_rad"]
     )
@@ -619,6 +627,7 @@ def build_motor_node_config(raw: Mapping[str, object]) -> MotorNodeConfig:
             motor_feedback_timeout_sec=feedback_timeout,
             motor_feedback_startup_grace_sec=feedback_startup_grace,
             motor_feedback_check_rate_hz=feedback_check_rate,
+            motor_feedback_acquisition_rate_hz=feedback_acquisition_rate,
             position_error_threshold_rad=position_error,
             warning_throttle_sec=warning_throttle,
             reconnect_on_disconnect=raw["reconnect_on_disconnect"],

@@ -48,15 +48,29 @@ Flight API 使用稳定逻辑名称作为 motor key。算法不得解析、生�
 
 ### CyberGear observation transport boundary
 
-当前驱动的软件协议路径可以在只打开 transport 和 reader 后解析 CyberGear 0x02
+CyberGear CAN 总线使用 1 Mbps。当前驱动的软件协议路径可以在只打开 transport 和
+reader 后解析 CyberGear 通信类型 2（0x02）
 反馈：SocketCAN `connect()` 本身不发送 CAN frame；USB-CAN `connect()` 会向 USB-CAN
 适配器写入 AT transport setup，但不会向 CyberGear 发送 run-mode、target、enable、
-stop 或 set-zero command。仓库没有独立的 GET/status query，也不假设一个伪造的
-电机 measurement。
+stop 或 set-zero command，也不假设一个伪造的电机 measurement。
 
-软件层具备 passive-RX observation path，不等于已证明真实电机在没有任何 host
-control TX 时会主动发送 0x02。该物理行为仍是未来单独授权 Stage 1 要记录的
-`PASS / FAIL / NOT VERIFIED` 项；没有 frame 时必须保持 `has_feedback=false`。
+既有实机 passive observation 已确认：transport connected 时，四台电机在零 host
+command TX 下均持续 `has_feedback=false`，没有观测到 spontaneous 0x02。零 TX 完整
+motor feedback 因而标为 `NOT SUPPORTED BY OBSERVED HARDWARE BEHAVIOR`，不是 v0.4.0
+release requirement；passive observer 没有 frame 时继续如实保持 unknown/invalid。
+
+CyberGear 手册 4.1.9 规定通信类型 18 单参数写入应答为通信类型 2；位置模式的
+`0x7016 loc_ref` 是当前既有正常控制路径。normal controller active 时以默认 10 Hz
+重发每台电机当前 owner、当前会话中最近成功提交的同值 hold target，以取得包含位置、
+速度、力矩、温度、device mode 和 fault bits 的完整 0x02。软件 fake regression 已证明
+该 probe 不修改 target、不切换模式、不 enable/recover/set-zero，也不会在 revoked
+Flight generation、E-STOP、ERROR、transport fault 或 inactive lifecycle 下发送；真实
+持续反馈效果等待独立 Gate B baseline retry，尚不能写作 hardware PASS。
+
+手册 4.1.8 另定义通信类型 17 单参数读取，4.1.12 列出 `0x7019 mechPos`、
+`0x701A iqf`、`0x701B mechVel`、`0x701C VBUS`，但注明 `0x7019–0x7020` 只在
+1.2.1.5 固件可读。本任务未查询真实固件，且 type-17 单独不能提供完整 temperature、
+fault flags、device mode 和 torque contract，因此不作为 Flight 完整反馈来源。
 
 ## IMU mounting and frame
 

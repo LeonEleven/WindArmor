@@ -33,6 +33,7 @@ def test_default_config_preserves_current_motor_mapping_and_control_values() -> 
     assert config.safety.motor_feedback_timeout_sec == 0.0
     assert config.safety.motor_feedback_startup_grace_sec == 3.0
     assert config.safety.motor_feedback_check_rate_hz == 10.0
+    assert config.safety.motor_feedback_acquisition_rate_hz == 10.0
     assert config.safety.motor_flight_handoff_timeout_sec == 1.5
     assert config.ros.motor_feedback_structured_topic == "/motors/feedback"
     assert config.ros.motor_safety_state_topic == "/motors/safety_state"
@@ -168,6 +169,10 @@ def set_all_motor_lists(raw, value):
         (lambda raw: raw.update(motor_feedback_timeout_sec=float("nan")), "有限值"),
         (lambda raw: raw.update(motor_feedback_startup_grace_sec=0.0), "必须大于 0"),
         (lambda raw: raw.update(motor_feedback_check_rate_hz=float("inf")), "有限值"),
+        (
+            lambda raw: raw.update(motor_feedback_acquisition_rate_hz=0.0),
+            "必须大于 0",
+        ),
         (lambda raw: raw.update(motor_flight_handoff_timeout_sec=0.0), "必须大于 0"),
         (
             lambda raw: raw.update(motor_flight_handoff_timeout_sec=float("nan")),

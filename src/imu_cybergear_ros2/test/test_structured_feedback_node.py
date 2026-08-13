@@ -5,7 +5,7 @@ import pytest
 import rclpy
 from rclpy.lifecycle import TransitionCallbackReturn
 
-from imu_cybergear_ros2.cybergear_driver import MotorStatus
+from imu_cybergear_ros2.cybergear_driver import MotorStatus, SDO_TARGET_POS
 from imu_cybergear_ros2.imu_motor_controller_node import ImuMotorControllerNode
 
 from .fake_motor_driver import FakeMotorDriver
@@ -45,6 +45,126 @@ def valid_status(motor_id=4, **overrides):
     )
     values.update(overrides)
     return MotorStatus(**values)
+
+
+class ConfigureFeedbackDriver(FakeMotorDriver):
+    """Emit the documented type-2 response while configure writes loc_ref."""
+
+    def write_sdo_float(self, motor_id, index, value):
+        super().write_sdo_float(motor_id, index, value)
+        if index == SDO_TARGET_POS:
+            self.emit_feedback(valid_status(motor_id=motor_id, position_rad=value))
+
+
+class FakeClock:
+    def __init__(self, now=10.0):
+        self.now = now
+
+    def __call__(self):
+        return self.now
+
+
+def test_configure_feedback_response_populates_observation_cache() -> None:
+    driver = ConfigureFeedbackDriver()
+    node = ImuMotorControllerNode(
+        driver_factory=lambda **_kwargs: driver,
+        sleep_fn=lambda _seconds: None,
+    )
+    try:
+        assert node.on_configure(None) == TransitionCallbackReturn.SUCCESS
+        assert set(node._motor_feedback) == {4, 3, 2, 1}
+        assert set(node._motor_feedback_received_at) == {4, 3, 2, 1}
+    finally:
+        node.on_cleanup(None)
+        node.destroy_node()
+
+
+def test_idle_acquisition_keeps_all_four_feedback_entries_truthful_and_fresh() -> None:
+    clock = FakeClock()
+    driver = ConfigureFeedbackDriver()
+    node = ImuMotorControllerNode(
+        driver_factory=lambda **_kwargs: driver,
+        sleep_fn=lambda _seconds: None,
+        monotonic_fn=clock,
+    )
+    original = None
+    try:
+        assert node.on_configure(None) == TransitionCallbackReturn.SUCCESS
+        cached_after_configure = dict(node._motor_feedback)
+        assert set(cached_after_configure) == {4, 3, 2, 1}
+        assert node.on_activate(None) == TransitionCallbackReturn.SUCCESS
+        assert node._motor_feedback == cached_after_configure
+        assert node._motor_mgr.feedback_acquisition_timer is not None
+
+        current_before = dict(node._current_targets)
+        desired_before = dict(node._desired_targets)
+        speeds_before = dict(node._current_speeds)
+        call_index = len(driver.calls)
+        node._motor_mgr._feedback_acquisition_tick()
+        probe_calls = driver.calls[call_index:]
+        assert probe_calls == [
+            ("write_sdo_float", motor_id, SDO_TARGET_POS, current_before[motor_id])
+            for motor_id in (4, 3, 2, 1)
+        ]
+        assert node._current_targets == current_before
+        assert node._desired_targets == desired_before
+        assert node._current_speeds == speeds_before
+
+        original = node._motor_feedback_structured_pub
+        capture = CapturePublisher()
+        node._motor_feedback_structured_pub = capture
+        node._publish_structured_motor_feedback()
+        first = capture.messages[-1]
+        assert [motor.logical_name for motor in first.motors] == [
+            "left_lift",
+            "left_pitch",
+            "right_pitch",
+            "right_lift",
+        ]
+        assert all(motor.has_feedback for motor in first.motors)
+        assert all(motor.position_valid for motor in first.motors)
+        assert all(motor.velocity_valid for motor in first.motors)
+        assert all(motor.torque_valid for motor in first.motors)
+        assert all(motor.temperature_valid for motor in first.motors)
+        assert all(motor.device_mode_valid for motor in first.motors)
+        assert all(motor.fault_flags_valid for motor in first.motors)
+        assert all(motor.valid and motor.fresh and motor.healthy for motor in first.motors)
+        assert all(motor.feedback_age_sec == pytest.approx(0.0) for motor in first.motors)
+
+        clock.now += 0.25
+        node._publish_structured_motor_feedback()
+        assert all(
+            motor.feedback_age_sec == pytest.approx(0.25)
+            for motor in capture.messages[-1].motors
+        )
+
+        target_writes_before_deactivate = len(
+            [
+                call
+                for call in driver.calls
+                if call[0] == "write_sdo_float" and call[2] == SDO_TARGET_POS
+            ]
+        )
+        assert node.on_deactivate(None) == TransitionCallbackReturn.SUCCESS
+        assert node._motor_mgr.feedback_acquisition_timer is None
+        node._motor_mgr._feedback_acquisition_tick()
+        target_writes_after_deactivate = len(
+            [
+                call
+                for call in driver.calls
+                if call[0] == "write_sdo_float" and call[2] == SDO_TARGET_POS
+            ]
+        )
+        assert target_writes_after_deactivate == target_writes_before_deactivate
+
+        clock.now += 0.30
+        node._publish_structured_motor_feedback()
+        assert all(not motor.fresh and not motor.healthy for motor in capture.messages[-1].motors)
+    finally:
+        if original is not None:
+            node._motor_feedback_structured_pub = original
+        node.on_cleanup(None)
+        node.destroy_node()
 
 
 def test_structured_publisher_is_complete_and_adds_no_driver_io() -> None:

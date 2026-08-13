@@ -139,18 +139,100 @@ def position_writes(node):
     return [write for write in node._driver.writes if write[1] == SDO_TARGET_POS]
 
 
+def enable_feedback_probe(node):
+    node._init_complete = True
+    node._motor_feedback_acquisition_rate_hz = 10.0
+
+
 def test_manual_press_only_updates_desired_then_timer_advances(system) -> None:
     node, _state, manager = system
     assert manager.manual_step(1, 1.0, now=1.0)
     assert node._desired_targets[1] == pytest.approx(math.radians(3.0))
     assert node._current_targets[1] == 0.0
     assert position_writes(node) == []
-
     manager._motion_tick(now=10.0)
     assert position_writes(node) == []
     manager._motion_tick(now=10.02)
     assert node._current_targets[1] == pytest.approx(math.radians(3.0))
     assert len(position_writes(node)) == 1
+
+
+def test_feedback_probe_reuses_exact_committed_target_in_manual_and_legacy_auto():
+    node, state, manager = build_system()
+    enable_feedback_probe(node)
+    node._current_targets = {1: 0.35, 2: -0.45}
+    node._desired_targets = {1: 0.8, 2: -0.9}
+    before_current = dict(node._current_targets)
+    before_desired = dict(node._desired_targets)
+
+    manager._feedback_acquisition_tick()
+    assert position_writes(node) == [
+        (1, SDO_TARGET_POS, 0.35),
+        (2, SDO_TARGET_POS, -0.45),
+    ]
+    assert node._current_targets == before_current
+    assert node._desired_targets == before_desired
+
+    node._driver.writes.clear()
+    switch_mode(state, ControllerState.AUTO_RUNNING)
+    manager._feedback_acquisition_tick()
+    assert position_writes(node) == [
+        (1, SDO_TARGET_POS, 0.35),
+        (2, SDO_TARGET_POS, -0.45),
+    ]
+
+
+@pytest.mark.parametrize(
+    "state_value",
+    [
+        ControllerState.EMERGENCY_STOP,
+        ControllerState.ERROR,
+        ControllerState.SHUTTING_DOWN,
+    ],
+)
+def test_feedback_probe_sends_nothing_in_terminal_or_safety_states(state_value):
+    node, state, manager = build_system()
+    enable_feedback_probe(node)
+    state._state = state_value
+    manager._feedback_acquisition_tick()
+    assert position_writes(node) == []
+
+
+@pytest.mark.parametrize("latch", ["_transport_fault_active", "_motor_safety_fault_active"])
+def test_feedback_probe_sends_nothing_when_runtime_fault_is_latched(latch):
+    node, _state, manager = build_system()
+    enable_feedback_probe(node)
+    setattr(node, latch, True)
+    manager._feedback_acquisition_tick()
+    assert position_writes(node) == []
+
+
+def test_feedback_probe_timer_stops_without_late_write():
+    node, _state, manager = build_system()
+    enable_feedback_probe(node)
+    manager.start_feedback_acquisition()
+    timer = manager.feedback_acquisition_timer
+    assert timer.period == pytest.approx(0.1)
+    manager.stop_feedback_acquisition()
+    assert manager.feedback_acquisition_timer is None
+    assert node.destroyed_timers == [timer]
+    node._is_active = False
+    timer.callback()
+    assert position_writes(node) == []
+
+
+def test_feedback_probe_write_failure_uses_existing_fail_closed_error_path():
+    node, state, manager = build_system()
+    enable_feedback_probe(node)
+
+    def fail(*_args):
+        raise RuntimeError("injected feedback probe failure")
+
+    node._driver.write_sdo_float = fail
+    manager._feedback_acquisition_tick()
+    assert state.state is ControllerState.ERROR
+    assert node._driver.stopped == [1, 2]
+    assert node._command_fault_active
 
 
 def test_manual_repeat_uses_event_time_and_direction_reset(system) -> None:

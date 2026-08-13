@@ -243,6 +243,10 @@ imu_motor_controller_node:
 
     # 启用强制反馈超时后的检查频率（Hz），必须为正有限值。
     motor_feedback_check_rate_hz: 10.0
+    # Normal active controller re-sends each current authoritative hold target
+    # unchanged at this rate. CyberGear communication type 18 responds with a
+    # complete type-2 status frame; this is not a new command authority.
+    motor_feedback_acquisition_rate_hz: 10.0
 
     # ==========================================================================
     # 位置误差监控
