@@ -58,6 +58,7 @@ def generate_launch_description() -> LaunchDescription:
         package="imu_cybergear_ros2",
         executable="imu_driver_node",
         name="imu_driver_node",
+        namespace="",
         parameters=[observation_params],
         output="screen",
     )
@@ -65,6 +66,7 @@ def generate_launch_description() -> LaunchDescription:
         package="imu_cybergear_ros2",
         executable="imu_relative_observer_node",
         name="imu_relative_observer_node",
+        namespace="",
         parameters=[observation_params],
         output="screen",
     )
@@ -72,6 +74,7 @@ def generate_launch_description() -> LaunchDescription:
         package="imu_cybergear_ros2",
         executable="motor_feedback_observer_node",
         name="motor_feedback_observer_node",
+        namespace="",
         parameters=[
             observation_params,
             {

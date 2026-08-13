@@ -1,212 +1,176 @@
-# 最新反馈：v0.4.0 Task 6.2 Bounded Hardware Verification Controller
+# 最新反馈：v0.4.0 Task 6.2.1 修复 Jazzy Observation-only Launch
 
 > 本文件只保留当前最新任务反馈。
 >
 > 日期：2026-08-13
 
-## Scope
+## Root Cause
 
-Task 6.2 已完成专用 bounded hardware verification controller 和最终实机测试前的
-软件准备，没有执行任何真实硬件验证。
-
-新增：
-
-- `windarmor_flight_control/algorithms/bounded_verification_controller.py`；
-- `test_bounded_verification_controller.py`，27 项纯算法测试。
-
-修改：
-
-- Flight Runtime config/loader/node：把独立 verification 参数传给 controller factory，
-  并在 ROS resource 创建前严格校验；既有单参数 factory 保持兼容；
-- `flight_control.yaml`：增加默认禁用的 verification section；
-- controller loader、Runtime config、Runtime node/handoff 和 import boundary tests；
-- algorithms public export 和默认 example factory 的兼容签名；
-- `README.md`、`docs/FLIGHT_CONTROL_API.md`；
-- `docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md`：执行入口收敛为 Gate A–D。
-
-未修改：Flight API models/validation、AuthorityStateMachine、ownership protocol、epoch/
-generation、FlightCommandEnvelope、MotorManager、FanCommandManager、command lease、
-rollback、observation-only launch、motor/fan lower-level config 和受保护 motor mapping。
-
-## Verification Controller
-
-实现与 factory：
+Gate A0、A1 已由用户执行并报告 PASS。首次 Gate A2 尝试没有进入实际 observation，
+`windarmor_observation_only.launch.py` 在生成 launch description 时抛出：
 
 ```text
-windarmor_flight_control.algorithms.bounded_verification_controller:create_controller
+TypeError: LifecycleNode.__init__() missing 1 required keyword-only argument: 'namespace'
 ```
 
-- `reset()` 清除全部 captured baseline 和 authority session identity；
-- normal command 前要求 authority 为 `FLIGHT_CONTROL`、Flight active、actuation allowed、
-  required inputs fresh、E-STOP 明确 false、IMU valid/fresh；
-- 每个 required logical motor 必须存在且 name 匹配，并有 finite position、feedback、
-  valid、fresh、healthy；缺一项即 `FlightCommand.safe_stop()`；
-- 在当前 ACTIVE `(authority_epoch, authority_generation)` 首个合法 snapshot 中一次性
-  捕获全部 `MotorState.position_rad`；Runtime 在 atomic commit 时已调用 controller
-  `reset()`，因此首帧使用当前 session 新反馈，不使用前次 takeover 数据；
-- selected motor 始终为 `captured baseline + configured offset`；其他 motor 每 tick
-  明确发送 captured baseline hold，frame 始终包含全部 required logical names；
-- baseline 不随 live feedback 或前一 target 递增，不存在 cumulative drift；
-- authority epoch/generation 意外变化时先清除 baseline并返回 safe-stop；旧 baseline
-  永不进入新 session。任何暂时输入失效也清除 baseline；
-- fan 默认 `left=0.0, right=0.0`；可选配置只接受有限 `[0.0,1.0]` 值，不 silent clamp，
-  normalized value 不解释为 thrust；
-- `verification_controller_enabled=false` 默认 gate；即使误选专用 factory也只返回
-  safe-stop；
-- enabled 时必须同时选择专用 factory、有效 logical `test_motor_name` 和显式
-  `motor_test_offset_configured=true`；仓库的 `motor_test_offset_rad: 0.0` 只是禁用状态
-  下的类型占位，不是获准实机 offset；
-- NaN、Inf、非法 logical name、越界 fan command、缺失 offset、非法 bool 和目标加法
-  溢出均 fail-closed；
-- normal 输出是通过现有 validation 的 immutable `FlightCommand`；controller 不 import
-  ROS、interfaces、socket/CAN、serial、GPIO/PWM 或 actuator implementation。
+受影响的是三个 observer lifecycle action：
 
-控制器只保持 `baseline_positions` 与 session token 两类最小内部状态；没有 verification
-authority/state machine、自动 motor cycling、定时序列或 return trajectory。combined
-motor+fan atomic ownership 保持不变：B1 为 motor bounded + fan stop，B2 为 motor
-feedback-relative hold + single fan bounded command。
+- `imu_driver_node`；
+- `imu_relative_observer_node`；
+- `motor_feedback_observer_node`。
 
-## Hardware Readiness
+ROS 2 Jazzy 的 `launch_ros.actions.LifecycleNode` 要求显式传入 keyword-only
+`namespace`。observation-only launch 的三个构造调用均遗漏该参数。既有 normal launch
+`src/imu_cybergear_ros2/launch/imu_cybergear_system.launch.py` 没有该问题，因为其
+`imu_driver_node` 和 `imu_motor_controller_node` 已显式使用 `namespace=""`。
 
-```text
-Gate A — Physical + Powered Read-only:
-READY FOR SEPARATE AUTHORIZATION / NOT EXECUTED
+异常发生在第一个 `LifecycleNode` 构造阶段，`generate_launch_description()` 尚未返回，
+LaunchService 也没有机会执行 action，因此失败的 Gate A2 尝试没有启动 IMU driver、
+motor observer 或其他 node/process。Gate A2 仍为 `NOT EXECUTED`，不得记为 PASS。
 
-Gate B — Bounded Actuator Verification:
-SOFTWARE READY / PARAMETERS TO BE SET / NOT AUTHORIZED / NOT EXECUTED
+## Fix
 
-Gate C — Fail-closed Verification:
-PLANNED / NOT AUTHORIZED / NOT EXECUTED
+修改文件：
 
-Gate D — Legacy + Final RC Regression:
-PLANNED / NOT AUTHORIZED / NOT EXECUTED
+- `src/windarmor_bringup/launch/windarmor_observation_only.launch.py`；
+- `src/windarmor_bringup/test/test_launch_syntax.py`；
+- `docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md`；
+- `docs/LATEST_FEEDBACK.md`。
+
+三个 `LifecycleNode` 均增加显式 root namespace：
+
+```python
+namespace=""
 ```
 
-- Gate A0 全断电；A1 只给 Raspberry Pi/IMU 必要逻辑供电；A2 明确需要 CyberGear
-  motor bus 通电，fan/ESC 仍断电；A3 保留 fan 无真实 readback 的 unknown 边界；
-- Gate B1 需要 motor bus 通电，fan manager/controller 逻辑运行但 fan/ESC 动力保持
-  断开；B2 需要 motor bus 和获准 fan/ESC 通电，授权不从 B1 延续；
-- Gate C 按 safe-stop、command timeout、Runtime stop/restart、owner loss、E-STOP
-  子场景分别授权和声明动力；
-- Gate D 需要 motor 与 fan/ESC 分步上电，覆盖 MANUAL、LEGACY_AUTO、HOME、E-STOP、
-  shutdown/restart 和 explicit legacy reclaim，全部 PASS 后才可进入 RC；
-- 仍需用户在执行前决定：唯一 test motor、motor offset/方向/初始位置/持续时间、
-  fan channel/normalized command/持续时间、各 Gate C 初始 bounded command；
-- 所有 `ros2 launch/topic/service/lifecycle/run`、package、executable、topic/service type、
-  parameter 和 controller factory 已按当前 source/config/launch/interface 核对；未决定
-  的实机值使用明确占位符，含占位符的命令禁止执行；
-- 不再设计 staged reserve pause、reservation keepalive 或新的 production verification
-  framework。现有 reserve/commit/atomic ownership 在 Gate B/C 正式路径一起验证。
+没有改变 node name、package、executable、parameter、topic、lifecycle autostart handler
+或 action 顺序。没有修改普通 motor/fan launch、Flight Runtime、authority、ownership、
+verification controller 或 config defaults。
+
+新增回归测试会在真实 ROS 2 Jazzy Python 环境中：
+
+1. 通过 `importlib` 导入真实 `windarmor_observation_only.launch.py`；
+2. 直接调用 `generate_launch_description()`；
+3. 确认返回真实 `LaunchDescription`；
+4. 确认存在三个 root-namespace `LifecycleNode`；
+5. 确认四个 executable 为 `imu_driver_node`、`imu_relative_observer_node`、
+   `motor_feedback_observer_node`、`flight_control_runtime_node`；
+6. 确认没有 `imu_motor_controller_node` 或 `fan_controller`。
+
+测试只构造 launch action 对象，不创建或运行 `LaunchService`，不 execute action，不启动
+任何 node。
 
 ## Safety Boundary
 
-- 本任务未给 CyberGear 通电；
-- 本任务未给 fan/ESC 通电；
-- 未访问 `/dev/*`、真实 SocketCAN、can10、IMU serial、GPIO12/13、PWM 或 ESC；
-- 未启动任何 ROS hardware node/launch；
-- 未执行 motor initialization/movement、fan output/spin 或真实 Flight takeover；
-- 未执行 owner prepare/reserve/commit/revoke；
-- 未发送真实 `FlightCommandEnvelope`，未触发 E-STOP/fault 或 recovery；
-- authority/ownership architecture、ERROR/E-STOP/reconnect 行为未改；
+- Gate A2 的硬件 observation 没有成功执行，仍为 paused / NOT EXECUTED；
+- 报告中的失败发生在首个 lifecycle action 构造阶段，没有 motor observer process
+  启动；
+- 失败的 launch 没有发送 actuator command；
+- 本修复及全部测试未执行 `ros2 launch`，未启动 hardware node/process；
+- 未访问 `/dev/*`、IMU serial、SocketCAN、can10、CyberGear、GPIO12/13、PWM 或 ESC；
+- 未给 motor 或 fan/ESC 通电，未产生 motor movement 或 fan spin；
+- 未执行 owner prepare/reserve/commit/revoke 或 Flight takeover；
 - `flight_takeover_enabled=false` 默认未改；
 - `motor_feedback_timeout_sec=0.0` 未改；
-- `motor_ids/signs/limits` 仍为 `[4,3,2,1]`、`[-1,1,-1,1]`、
-  `[-1.57,-1.57,-1.57,0]`、`[0,1.57,1.57,1.57]`；
-- fake/mock/software 结果没有表述为实机验证。
+- motor/fan control、安全、authority/ownership、timeout、ERROR/E-STOP/reconnect 行为
+  均未修改。
 
 ## Tests
 
-新增测试在运行前经 source/fixture 审计：只使用 immutable fake `FlightState`、fake motor
-state、pure config/factory 与 AST/source import guard；不创建 hardware node/backend，
-不连接 CAN/串口，不初始化 GPIO/PWM。
-
-专项 controller/config/loader/import 测试：
+修复前使用纯 launch-description construction 复现：
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-PYTHONPATH=src/windarmor_flight_control \
-python3 -m pytest -p no:cacheprovider \
-  src/windarmor_flight_control/test/test_bounded_verification_controller.py \
-  src/windarmor_flight_control/test/test_runtime_config.py \
-  src/windarmor_flight_control/test/test_controller_loader.py \
-  src/windarmor_flight_control/test/test_import_boundary.py -q
+python3 - <<'PY'
+import importlib.util
+from pathlib import Path
+
+path = Path('src/windarmor_bringup/launch/windarmor_observation_only.launch.py')
+spec = importlib.util.spec_from_file_location(
+    'windarmor_observation_only_launch', path
+)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+module.generate_launch_description()
+PY
 ```
 
-结果：首轮 65 passed；最终 controller 单文件复核 27 passed。覆盖 disabled、authority/
-actuation/freshness、IMU、missing/stale/unhealthy motor、完整 frame、baseline、selected
-offset、other hold、fan stop/config、invalid config、overflow、immutability、no drift、reset、
-generation/epoch isolation 和 import boundary。
+结果：稳定复现上述 missing keyword-only `namespace` TypeError。没有 execute launch
+description 或启动 node。
 
-构建与 Flight tests：
+专项 Jazzy launch 测试：
+
+```bash
+source /opt/ros/jazzy/setup.bash
+python3 -m pytest -p no:cacheprovider \
+  src/windarmor_bringup/test/test_launch_syntax.py -q
+```
+
+最终结果：4 passed。编写回归测试期间有两次测试自身失败：第一次在真实构造越过
+原始 namespace 异常后，ROS logging 尝试写只读 `~/.ros/log`；随后测试改用 pytest
+临时 `ROS_LOG_DIR`。第二次因 Jazzy 在 action execute 前不允许读取 `node_name`
+property；测试改用可在构造后读取的 `node_executable`，并同时核对三个 lifecycle
+action 的 root namespace。两次均没有执行 action、启动 node 或访问硬件，不是产品
+回归失败。
+
+构建：
 
 ```bash
 source /opt/ros/jazzy/setup.bash
 colcon build --symlink-install
-
-source /opt/ros/jazzy/setup.bash
-source install/setup.bash
-python3 -m pytest src/windarmor_flight_control/test -q
 ```
 
-结果：5 packages finished；最终 Flight tests 248 passed。
+结果：5 packages finished。
 
-五包测试：
+完整 bringup 测试：
 
 ```bash
 source /opt/ros/jazzy/setup.bash
 source install/setup.bash
-colcon test --packages-select \
-  imu_cybergear_ros2 windarmor_fan_controller windarmor_interfaces \
-  windarmor_flight_control windarmor_bringup
-colcon test-result --verbose
+python3 -m pytest src/windarmor_bringup/test -q
 ```
 
-结果：5 packages finished；795 tests，0 errors，0 failures，0 skipped。
+结果：27 passed。
 
-统一软件 CI：
+统一无硬件软件 CI：
 
 ```bash
 source /opt/ros/jazzy/setup.bash
 ./scripts/ci_software.sh
 ```
 
-结果：exit code 0；CI safety、Git whitespace、Python compile、隔离五包 build 全部通过；
-motor 400 passed，fan 112 passed，Flight + interfaces 256 passed；最终 colcon
-795/0/0/0。隔离环境首次构建 `windarmor_interfaces` 用时 4 min 41 s，最终正常完成。
-warnings/skipped：无。
+结果：exit code 0；CI safety、Git whitespace、Python compile、隔离五包 build 全部
+通过；motor 400 passed，fan 112 passed，Flight + interfaces 256 passed；最终 colcon
+汇总 796 tests、0 errors、0 failures、0 skipped。warnings/skipped：无。
 
-一次完整 Flight pytest 尝试把 `PYTHONPATH` 临时覆盖为 package source，因覆盖掉 ROS
-Jazzy Python path，两个既有 in-process Runtime test 在 collection 阶段找不到 `rclpy`；
-0 项相关测试执行。这是测试环境设置错误，不是产品断言失败。随后按指定顺序完成
-build 并 source ROS + workspace，最终 248 passed；统一 CI 也独立通过。
+没有运行：
 
-真实 Gate A–D、powered observation、motor/fan motion、timeout/E-STOP physical behavior
-均未执行，等待逐场景实机授权与验证。
+```bash
+ros2 launch windarmor_bringup windarmor_observation_only.launch.py
+```
+
+原因：本任务明确禁止自动重试 Gate A2；真实 launch 会访问 IMU serial 和 CAN receive
+transport，必须回到独立硬件授权流程。
 
 ## Next Step
 
-```text
-NEXT:
-Gate A — Physical + Powered Read-only
+软件 blocker 已修复且软件验证 green：
 
-NOT AUTHORIZED / NOT EXECUTED
+```text
+Gate A2 may be retried under the previous separate hardware authorization procedure.
 ```
 
-真正执行前必须先依据更新后的 plan 向用户提供当次子阶段的设备通电/断电清单、
-完整逐终端命令、预期 ROS/物理结果、PASS/FAIL、立即停止条件和安全退出顺序，并等待
-新的明确授权。默认从 A0 断电物理检查开始；A0 PASS 不自动授权 A1/A2。
+本任务没有自动执行 retry。重试前仍须重新给出并确认：motor bus 与逻辑电源需要
+通电、fan/ESC 保持断电、完整 Terminal 命令、预期结果、PASS/FAIL、立即停止条件和
+安全退出/断电顺序。A2 retry 的结果必须重新记录；本次软件修复本身不构成 A2 PASS。
 
 ## Git 状态（反馈生成时）
 
-- HEAD：`918270e2fe970860819e222a22c68b8ef546041d`；
-- branch：`master...origin/master`，status 未显示本地 ahead/behind；
-- working tree：dirty；包含本 Task 的 controller/config/runtime/tests/docs 修改，以及
-  任务开始前用户已有的 `docs/NEXT_COMMAND.md` 修改；
-- `docs/NEXT_COMMAND.md` 未被本任务编辑或覆盖；任务读取时工作区 SHA-256 为
-  `3237027a2a81d62c89dbb9d6962464ba2f4c32978f175e70788b972192acea21`，与 HEAD
-  版本 `5a46a62e735610460c78a004aa985cdd016504dace4073fe3e0036a59f4715f8` 不同；
-- `git diff --check`：PASS；
-- implementation/verification：未 commit；push/tag：未执行；未 checkout/reset/clean；
-- origin URL 只做本地配置核对，未 fetch、未联系 remote；
-- local stable tags 保持：`v0.3.0=f7d2a476...`、`v0.3.1=ff527a37...`、
-  `v0.3.2=29ae0bbc...`；未创建、移动、删除或重建 tag。
+- HEAD：`a832580615e432f0f69b3a6cc560331f58fcef34`；
+- branch：`master...origin/master`，任务开始时无 ahead/behind；
+- working tree：dirty；包含本 Task 的 launch/test/plan/feedback 修改，以及任务开始前
+  用户已有的 `docs/NEXT_COMMAND.md` 修改；
+- `docs/NEXT_COMMAND.md` 作为用户提供的当前任务依据保持未编辑；
+- implementation/verification：未 commit；push/tag：未执行；
+- 未 checkout/reset/clean；未联系 remote；
+- local `v0.3.0`、`v0.3.1`、`v0.3.2` stable tags 未创建、移动、删除或重建。
