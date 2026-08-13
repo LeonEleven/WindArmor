@@ -61,7 +61,7 @@ def ros_context():
 def make_node(controller, clock):
     node = FlightControlRuntimeNode(
         monotonic_fn=clock,
-        controller_loader=lambda _contract, _names: controller,
+        controller_loader=lambda _contract, _names, _configuration: controller,
     )
     node._status_pub = CapturingPublisher()
     node._preview_pub = CapturingPublisher()
@@ -207,7 +207,7 @@ def test_invalid_state_contract_inhibits_without_controller_call() -> None:
 def test_loader_failure_is_latched_but_observer_node_still_constructs() -> None:
     clock = MutableClock()
 
-    def fail_loader(_contract, _names):
+    def fail_loader(_contract, _names, _configuration):
         raise RuntimeError("injected loader")
 
     node = FlightControlRuntimeNode(

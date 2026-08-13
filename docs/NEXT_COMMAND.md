@@ -2,44 +2,68 @@
 
 ## Task
 
-v0.4.0 Task 6 — Hardware Verification Planning Only
+v0.4.0 Task 6.2 — Bounded Hardware Verification Controller & Final Test Readiness
 
 ## Objective
 
-在 v0.4.0 软件主线、仓库清理和算法成员交接已经完成的基础上，设计一份**分阶段、可独立授权、可中途停止**的真实硬件验证方案。
+在当前 `918270e` 基线上，为即将开始的 v0.4.0 实机验证准备一个专用、保守、可预测的 hardware verification controller，并完成最终测试前的软件准备。
 
-本任务只负责：
+本任务的目标是：
 
-1. 设计 v0.4.0 的真实硬件验证 protocol；
-2. 明确每个阶段的前置条件、允许动作、禁止动作、预期状态、观测项、停止条件和回滚方式；
-3. 明确哪些阶段需要用户单独授权；
-4. 明确 owner handoff、Flight command、timeout、Runtime crash、E-STOP/ERROR 等真实验证顺序；
-5. 设计最终 RC 前 legacy regression；
-6. 不执行任何真实硬件操作；
-7. 不修改控制逻辑；
-8. 不进入 v0.4.0 RC / release。
+> 准备真实硬件验证所必需的最小测试工具，然后停止继续扩展软件架构，转入真实系统验证。
 
-本任务的核心产物是一份长期可执行的验证计划，而不是一次性聊天或临时命令记录。
+本任务不再继续增加新的 authority / ownership / verification framework。
+
+完成本任务后，如果软件验证全部通过，下一步应直接进入逐阶段 hardware verification，而不是继续预先设计 Task 6.3、6.4、6.5。
 
 ---
 
-## Baseline
+# Baseline
 
 当前开发基线：
 
 ```text
-413dbc1
-整理仓库文档并完善飞控算法交接
+918270e
+实现只读硬件观测路径
 ```
 
-当前状态：
+当前已经完成：
 
-- v0.3.2 仍为正式稳定发布基线；
-- 当前开发目标为 v0.4.0；
-- Flight API / Structured State / DRY_RUN / authoritative safety readback / authority / owner handoff / actuator adapter / rollback & lease hardening / repository cleanup / algorithm handoff 均已完成软件阶段；
-- `flight_takeover_enabled=false` 仍为默认；
-- `motor_feedback_timeout_sec=0.0` 仍为默认；
-- 尚未执行 v0.4.0 Flight takeover 的真实硬件验证。
+- FlightState / FlightCommand API；
+- 独立算法开发模块；
+- Structured State；
+- DRY_RUN；
+- authoritative motor / fan safety readback；
+- authority epoch / generation；
+- owner reserve / commit / revoke；
+- atomic authority commit；
+- post-grant new-state barrier；
+- MotorManager Flight adapter；
+- FanCommandManager Flight adapter；
+- Flight command timeout；
+- rollback fail-closed；
+- handoff lease / active command lease；
+- observation-only hardware path；
+- repository cleanup；
+- algorithm developer handoff；
+- v0.4.0 hardware verification plan。
+
+除非本任务发现明确的软件缺陷，上述架构均视为冻结基线。
+
+不要继续为了测试便利重新设计：
+
+- AuthorityStateMachine；
+- ownership protocol；
+- authority epoch；
+- generation；
+- FlightCommandEnvelope；
+- command leases；
+- MotorManager；
+- FanCommandManager。
+
+---
+
+# Required Reading
 
 执行前必须阅读：
 
@@ -48,798 +72,1202 @@ v0.4.0 Task 6 — Hardware Verification Planning Only
 3. `docs/HARDWARE_REFERENCE.md`
 4. `docs/FLIGHT_CONTROL_ARCHITECTURE.md`
 5. `docs/FLIGHT_CONTROL_API.md`
-6. `docs/LATEST_FEEDBACK.md`
-7. `docs/V0.3.2_RC_HARDWARE_CHECKLIST.md`
+6. `docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md`
+7. `docs/LATEST_FEEDBACK.md`
 8. 当前 `docs/NEXT_COMMAND.md`
 
-还必须检查当前 motor/fan/Flight config、launch、ROS topics/services、owner handoff services、authority status、Flight command envelope topic 与 E-STOP/ERROR recovery path。
+还必须检查：
 
-如果仓库状态与以上描述冲突：不覆盖用户修改，不 reset/checkout/clean，先报告差异，以 `AGENTS.md` 为最高安全与 Git 规则。
+- `windarmor_flight_control/algorithms/`
+- current controller loader
+- `FlightState`
+- `FlightCommand`
+- Flight Runtime command validation
+- motor ownership / Flight target path
+- fan ownership / Flight normalized command path
+- Flight config
+- motor/fan config
+- current software tests
 
----
+如果仓库 HEAD、分支或用户已有修改与本任务描述不同：
 
-## Safety and Git Constraints
-
-本任务**绝对不授权任何真实硬件动作**。
-
-禁止：
-
-- 给 CyberGear 执行动作验证；
-- 启动真实 motor control；
-- 启动真实 fan PWM；
-- 实际发 Flight takeover；
-- 实际 reserve/commit owner；
-- 实际发送可执行 FlightCommandEnvelope；
-- 实际触发 motor/fan motion；
-- 实际做 Runtime crash 后硬件停止测试；
-- 实际触发 E-STOP/fault；
-- 实际调用 reset E-STOP / ERROR；
-- set-zero / enable；
-- 配置 SocketCAN；
-- 访问 `/dev/*`；
-- `sudo` 硬件操作；
-- commit / push / tag；
-- 创建、移动、删除或重建稳定 tag。
-
-允许：
-
-- 只读代码/文档/config；
-- 仓库搜索；
-- fake/mock/software 验证；
-- 编写 checklist/protocol；
-- 无硬件核对 ROS CLI/interface 名称。
+- 不覆盖用户修改；
+- 不 reset；
+- 不 checkout；
+- 不 clean；
+- 先报告差异；
+- 以 `AGENTS.md` 为最高安全和 Git 规则。
 
 ---
 
-# Deliverable 1 — Create `docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md`
+# Hardware Authorization Boundary
 
-新增长期文档：
+默认硬件状态必须按以下前提处理：
+
+```text
+CyberGear motors: NOT POWERED
+ducted fans / ESCs: NOT POWERED
+```
+
+本任务：
+
+- 不要求用户给 CyberGear 通电；
+- 不要求用户给 fan / ESC 通电；
+- 不执行真实 motor movement；
+- 不执行真实 fan PWM；
+- 不执行真实 Flight takeover；
+- 不执行 powered hardware verification；
+- 不打开真实 SocketCAN；
+- 不打开真实 IMU serial；
+- 不访问 `/dev/*`；
+- 不初始化 GPIO/PWM。
+
+如果实现或验证过程中发现必须进行真实硬件测试：
+
+```text
+STOP
+```
+
+先在 `docs/LATEST_FEEDBACK.md` 中说明：
+
+1. 为什么必须进行硬件测试；
+2. 需要给哪些硬件通电；
+3. 是否会产生运动；
+4. 风险范围；
+5. 用户需要执行的完整命令和步骤；
+6. 预期结果；
+7. 停止条件。
+
+未经用户新的明确授权不得继续。
+
+---
+
+# Git Constraints
+
+本任务默认：
+
+- 不授权 commit；
+- 不授权 push；
+- 不授权 tag；
+- 不创建 GitHub Release；
+- 不创建、移动、删除或重建稳定 tag。
+
+必须保持：
+
+- v0.3.0 tag 不变；
+- v0.3.1 tag 不变；
+- v0.3.2 tag 不变。
+
+---
+
+# Safety Baseline
+
+不得改变：
+
+- ERROR 不自动恢复；
+- E-STOP clear 不自动恢复 Flight；
+- transport reconnect 不自动恢复运行状态；
+- MANUAL / LEGACY_AUTO / HOME 不自动恢复；
+- old target 不重发；
+- old authority epoch 不恢复；
+- old generation 不恢复；
+- Flight release 不自动恢复 legacy owner；
+- motor ownership semantics；
+- fan ownership semantics；
+- command timeout；
+- handoff lease；
+- active command lease；
+- `motor_feedback_timeout_sec=0.0`；
+- `flight_takeover_enabled=false` 默认；
+- torque 不得推导 `current_a`；
+- fan normalized command 不是 thrust fraction。
+
+---
+
+# Deliverable 1 — Dedicated Hardware Verification Controller
+
+在：
+
+```text
+src/windarmor_flight_control/windarmor_flight_control/algorithms/
+```
+
+新增明确命名的 verification controller，例如：
+
+```text
+bounded_verification_controller.py
+```
+
+具体文件名可以按当前项目命名风格调整。
+
+它仍然必须严格实现现有算法接口：
+
+```python
+reset()
+
+update(
+    state: FlightState,
+    dt: float,
+) -> FlightCommand
+```
+
+不得修改 Flight API。
+
+不得 import：
+
+- `rclpy`
+- ROS message
+- CAN
+- CyberGear driver
+- serial
+- GPIO
+- PWM
+
+---
+
+# Deliverable 2 — Feedback-relative Motor Baseline
+
+verification controller 不得把：
+
+```text
+0.0 rad
+```
+
+当作真实机器人机械中位。
+
+真实 motor verification command 必须基于：
+
+```text
+fresh
+valid
+healthy
+MotorState.position_rad
+```
+
+建立 feedback-relative baseline。
+
+基本逻辑：
+
+```text
+selected test motor
+    = captured baseline position + configured bounded offset
+
+all other motors
+    = captured baseline position
+```
+
+必须使用 Flight API logical motor name。
+
+不得让算法依赖 CAN ID。
+
+如果任意 required motor：
+
+- missing；
+- stale；
+- invalid；
+- unhealthy；
+- position unknown；
+
+则必须返回：
+
+```python
+FlightCommand.safe_stop()
+```
+
+---
+
+# Deliverable 3 — Complete Motor Frame
+
+normal verification command 必须继续满足 Flight API 完整 frame 契约。
+
+例如 required motors 为：
+
+```text
+left_lift
+left_pitch
+right_pitch
+right_lift
+```
+
+则每一条 normal command 必须同时包含全部 motor target。
+
+不得通过：
+
+```text
+missing key
+```
+
+表达：
+
+```text
+hold previous target
+```
+
+不得复用旧目标。
+
+非测试 motor 必须明确使用 captured feedback-relative hold position。
+
+---
+
+# Deliverable 4 — No Invented Real Hardware Offset
+
+本任务不得凭空决定真实测试偏移，例如：
+
+```text
+0.05 rad
+5 deg
+10 deg
+```
+
+除非当前仓库已经存在明确、经过真实机械验证、适合作为 Flight hardware verification 的依据。
+
+如果不存在：
+
+真实 hardware config 中必须保持：
+
+```text
+motor test offset disabled
+```
+
+或使用等价明确 fail-closed 配置。
+
+软件 unit test 可以注入 fake offset，例如任意有限测试值，以验证数学和 command contract。
+
+但是：
+
+> fake unit-test value 不能自动成为未来实机默认值。
+
+在真实执行前，motor test offset 必须由用户明确确认。
+
+---
+
+# Deliverable 5 — Explicit Test Motor
+
+controller 必须使用显式配置：
+
+```text
+test_motor_name
+```
+
+并验证该名称属于当前 required logical motor names。
+
+不得：
+
+- 自动轮询 4 个 motor；
+- 自动依次运动；
+- 根据 CAN ID 选择；
+- 随机选择；
+- 启动后自动切换测试轴。
+
+未来实机验证必须一次只测试一个明确 motor axis。
+
+---
+
+# Deliverable 6 — Baseline Capture
+
+verification controller 必须有明确 baseline capture 语义。
+
+建议：
+
+```text
+RESET
+    ↓
+WAIT_VALID_ACTIVE_STATE
+    ↓
+CAPTURE_BASELINE
+    ↓
+COMMAND
+```
+
+baseline 至少包含每个 required motor 的：
+
+```text
+position_rad
+```
+
+要求：
+
+- baseline 只从 fresh + valid + healthy FlightState 获取；
+- baseline capture 后不能逐 tick 重新累加 offset；
+- authority session 变化后旧 baseline 不得继续使用；
+- `reset()` 后旧 baseline 清除；
+- controller重新进入新的 authority session 时必须重新 capture。
+
+---
+
+# Deliverable 7 — No Cumulative Drift
+
+禁止实现：
+
+```python
+target += offset
+```
+
+或：
+
+```text
+previous target + offset
+```
+
+这种逐周期累积行为。
+
+必须始终是：
+
+```text
+captured baseline + configured offset
+```
+
+例如：
+
+```text
+baseline = 1.00 rad
+offset   = 0.02 rad
+
+every update:
+target = 1.02 rad
+```
+
+不能变成：
+
+```text
+1.02
+1.04
+1.06
+...
+```
+
+必须有 unit test 覆盖。
+
+---
+
+# Deliverable 8 — Authority Session Isolation
+
+verification baseline 不得跨 authority session 复用。
+
+至少需要根据当前 existing FlightState / Runtime 可用 metadata 检查：
+
+- authority active；
+- generation；
+- 如 FlightState 已提供 authority epoch，则同时检查 epoch。
+
+如果 authority generation / epoch 改变：
+
+```text
+clear baseline
+return safe-stop until new valid baseline captured
+```
+
+不要让上一次 Flight takeover 的测试 target进入新 takeover。
+
+---
+
+# Deliverable 9 — Default Fan Command Is STOP
+
+verification controller 默认：
+
+```text
+fan left  = 0.0
+fan right = 0.0
+```
+
+这必须是默认且 fail-closed 的行为。
+
+因此未来 motor hardware verification 时：
+
+```text
+motor = bounded feedback-relative command
+fan   = explicit STOP
+```
+
+不得因为 normal FlightCommand 要求 fan payload 就自动给 fan非零输出。
+
+---
+
+# Deliverable 10 — Optional Bounded Fan Verification
+
+controller 可以支持显式配置：
+
+```text
+fan_left_test_command
+fan_right_test_command
+```
+
+用于未来 fan physical test。
+
+要求：
+
+```text
+0.0 <= command <= 1.0
+```
+
+默认仍必须：
+
+```text
+0.0
+0.0
+```
+
+本任务不决定真实 fan test command 值。
+
+未来真实值必须由用户明确确认。
+
+不得默认：
+
+```text
+1.0
+```
+
+不得把 normalized command解释成 thrust percentage。
+
+仍由 existing fan mapping / ramp / `flight_fan_max_pwm_us`限制真实输出。
+
+---
+
+# Deliverable 11 — Combined Ownership, Single-domain Actuation
+
+不要新增：
+
+```text
+motor-only Flight authority
+fan-only Flight authority
+```
+
+保持现有：
+
+```text
+motor + fan atomic ownership
+```
+
+未来 motor physical verification 定义为：
+
+```text
+motor:
+    bounded feedback-relative command
+
+fan:
+    explicit STOP
+```
+
+未来 fan physical verification定义为：
+
+```text
+motor:
+    feedback-relative HOLD
+
+fan:
+    explicitly configured bounded command
+```
+
+即：
+
+```text
+combined ownership
++
+single-domain non-stop actuation
+```
+
+不要为了测试方便重写 authority architecture。
+
+---
+
+# Deliverable 12 — Normal Command Preconditions
+
+verification controller 返回 normal `FlightCommand` 前至少要求：
+
+```text
+SystemState.command_authority == FLIGHT_CONTROL
+flight_control_active == True
+actuation_allowed == True
+required_inputs_fresh == True
+```
+
+并要求：
+
+```text
+IMU valid/fresh
+all required motors valid/fresh/healthy
+```
+
+否则：
+
+```python
+FlightCommand.safe_stop()
+```
+
+controller 不负责：
+
+- prepare；
+- reserve；
+- owner commit；
+- authority grant；
+- E-STOP reset；
+- ERROR recovery；
+- enable motor；
+- enable fan；
+- zero。
+
+---
+
+# Deliverable 13 — Verification Controller Enable Gate
+
+增加明确 verification enable 配置，例如：
+
+```text
+verification_controller_enabled
+```
+
+默认：
+
+```text
+false
+```
+
+即使 controller factory 被错误选中，只要 verification enable=false：
+
+```text
+return FlightCommand.safe_stop()
+```
+
+不得自动产生 hardware test command。
+
+---
+
+# Deliverable 14 — Hardware Test Config
+
+增加独立 verification config，或在现有 Flight config 中增加清晰的 verification section。
+
+至少表达：
+
+```text
+verification_controller_enabled
+test_motor_name
+motor_test_offset_rad
+fan_left_test_command
+fan_right_test_command
+```
+
+默认必须达到：
+
+```text
+verification_controller_enabled = false
+motor movement = disabled
+fan left = 0.0
+fan right = 0.0
+```
+
+如果 motor offset 未明确配置成可执行值：
+
+```text
+motor normal verification command must not be generated
+```
+
+不要使用一个看似安全但未经验证的默认非零 offset。
+
+---
+
+# Deliverable 15 — Configuration Validation
+
+必须 reject：
+
+- NaN；
+- Inf；
+- invalid logical motor name；
+- fan command < 0；
+- fan command > 1；
+- 非法 motor offset；
+- verification enabled 但必要参数未提供。
+
+配置错误：
+
+```text
+fail closed
+```
+
+不要 silent clamp hardware test parameters。
+
+---
+
+# Deliverable 16 — Simple Controller State Only
+
+不要为了 hardware verification controller 增加复杂状态机。
+
+最多保持类似：
+
+```text
+WAITING
+BASELINE_CAPTURED
+```
+
+或等价最小内部状态。
+
+不要新增：
+
+- verification authority state；
+- verification ownership state；
+-自动 test sequence；
+- timing-based multi-step motor test；
+- automatic return trajectory；
+- automatic motor cycling。
+
+真实测试步骤由用户逐条执行和观察，不由 controller自动编排。
+
+---
+
+# Deliverable 17 — Software Unit Tests
+
+使用 fake FlightState。
+
+至少覆盖：
+
+- reset；
+- verification disabled -> safe-stop；
+- no authority -> safe-stop；
+- actuation not allowed -> safe-stop；
+- required inputs stale -> safe-stop；
+- IMU stale/invalid -> safe-stop；
+- motor stale -> safe-stop；
+- motor unhealthy -> safe-stop；
+- incomplete motor set -> safe-stop；
+- invalid test motor -> fail-closed；
+- missing motor offset -> safe-stop；
+- baseline capture；
+- selected motor = baseline + fake offset；
+- other motors = baseline hold；
+- complete motor frame；
+- fan default stop；
+- fake configured fan command；
+- invalid fan command reject；
+- no cumulative motor drift；
+- reset clears baseline；
+- authority generation change clears baseline；
+- old baseline never reused；
+- output remains immutable valid FlightCommand。
+
+---
+
+# Deliverable 18 — Pure Algorithm Import Guard
+
+增加或扩展 tests，确保 verification controller 不 import：
+
+```text
+rclpy
+sensor_msgs
+std_msgs
+windarmor_interfaces
+socket
+serial
+gpiozero
+lgpio
+CyberGearDriver
+MotorManager
+FanControlCore
+```
+
+它必须继续是纯算法模块。
+
+---
+
+# Deliverable 19 — No Hardware Execution in Tests
+
+所有 Task 6.2 tests：
+
+- pure Python；
+- fake FlightState；
+- fake motor states；
+- no hardware node；
+- no SocketCAN；
+- no serial；
+- no GPIO；
+- no PWM；
+- no `/dev/*`。
+
+不得为了验证 controller 命令而启动真实 actuator adapter。
+
+---
+
+# Deliverable 20 — Update Hardware Verification Plan
+
+更新：
 
 ```text
 docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md
 ```
 
-文档开头必须明确：
+不要再继续围绕“staged reserve pause”设计新的 production feature。
+
+将后续真实验证收敛成四个 Gate：
 
 ```text
-Status: PLANNED / NOT YET EXECUTED
+Gate A
+Physical + Powered Read-only
+
+Gate B
+Bounded Actuator Verification
+
+Gate C
+Fail-closed Verification
+
+Gate D
+Legacy + Final RC Regression
 ```
 
-并注明：
-
-- 当前 stable release 仍是 v0.3.2；
-- v0.4.0 Flight takeover 尚未经过真实硬件验证；
-- 每个带电阶段必须得到用户单独授权；
-- 某阶段通过不自动授权下一阶段；
-- 任一阶段失败后默认停止，不自动继续。
+原 Stage 0–9 内容如仍有价值可以保留为详细 checklist，
+但执行入口应以 Gate A–D 为主，减少过度拆分。
 
 ---
 
-# Deliverable 2 — Verification Philosophy
+# Deliverable 21 — Gate A Plan
 
-明确：
-
-```text
-physical confirmation
--> read-only observation
--> ownership reservation without motion
--> single-subsystem takeover
--> bounded actuator command
--> combined takeover
--> timeout/fault injection
--> legacy regression
-```
-
-每个阶段都必须有：
-
-- prerequisites；
-- allowed operations；
-- forbidden operations；
-- expected ROS state；
-- expected physical behavior；
-- observations；
-- abort conditions；
-- rollback；
-- pass/fail；
-- next-stage gate。
-
-Stage N 通过 != 自动允许 Stage N+1。
-
----
-
-# Deliverable 3 — Stage 0: Physical Preflight
-
-只做断电/不上电状态的物理核对。
-
-至少确认：
-
-- Raspberry Pi 5 / CAN HAT；
-- CAN bus wiring；
-- motor CAN ID ↔ physical joint；
-- motor mechanical direction；
-- IMU X+/Y+/Z+；
-- left fan GPIO12 / pin32；
-- right fan GPIO13 / pin33；
-- GND；
-- fan physical left/right；
-- ESC power wiring；
-- 可物理断电方式；
-- 急停方式；
-- 机械活动范围；
-- current motor soft limits 是否与机构范围一致。
-
-GPIO13 仍按“需首次真实确认”处理，不得写成已验证。
-
-记录表必须支持：
+定义：
 
 ```text
-PASS / FAIL / NOT VERIFIED
+Gate A — Physical + Powered Read-only
 ```
 
----
+只规划，不执行。
 
-# Deliverable 4 — Stage 1: Read-only State Verification
+至少分：
 
-`flight_takeover_enabled=false`，不允许 actuator command。
+## A0 — Power-off physical inspection
 
-验证：
+检查：
 
-```text
-hardware
--> existing subsystem feedback
--> structured ROS state
--> FlightState
--> DRY_RUN preview
-```
-
-至少包括：
-
-### IMU
-- `/imu/data_raw`
-- relative roll/pitch
-- zero_generation
-- connected status
-- physical axis match
-- stale/invalid behavior
-
-### Motor
-- `/motors/feedback`
-- 4 logical motors
-- logical name ↔ CAN ID
-- position/velocity/torque/temp
-- no fake `current_a`
-- health/fault/temp
-- safety readback
-
-### Fan
-- `/fans/status_pwm`
-- `/fans/enabled`
-- `/fans/control_state`
-- `/fans/safety_state`
-- no RPM/thrust assumption
-
-### Flight Runtime
-- DRY_RUN
-- authority NONE
-- actuation_allowed false
-- preview only
-- no executable actuator path
-
----
-
-# Deliverable 5 — Stage 2: Ownership Reserve / Revoke Without Motion
-
-只验证：
-
-```text
-READY_TO_TAKEOVER
--> reserve
--> revoke
-```
-
-不进入可执行 normal Flight command。
-
-要求：
-
-- `flight_takeover_enabled=true` 仅在该阶段获得单独授权后开启；
-- 使用明确 safe/test controller；
-- reserve 后 motor/fan 进入 safe hold/stop；
-- legacy MANUAL/AUTO 被 block；
-- 不产生新 motor target；
-- 不产生新 active fan PWM；
-- revoke 后 owner -> NONE；
-- 不自动恢复 legacy owner；
-- operator 显式 reclaim。
-
-验证 token、authority_epoch/generation、owner readback、partial reserve rollback、handoff lease timeout、revoke unavailable 的 fail-closed。
-
----
-
-# Deliverable 6 — Stage 3: Motor-only Flight Takeover
-
-这是第一次可能允许真实 motor movement，必须单独显式授权。
-
-目标：
-
-- fan 保持 safe stop；
-- 只验证 motor ownership + bounded Flight position command；
-- 先单 motor / 单轴；
-- 再按需要扩展完整 4-motor frame。
-
-前置：
-
-- Stage 0–2 通过；
-- motor temperature normal；
-- no fault；
-- global E-STOP clear；
-- soft limits confirmed；
+- CAN wiring；
+- motor mapping；
 - mechanical clearance；
-- physical kill available；
-- explicit motor-motion authorization。
+- IMU direction；
+- GPIO12 / GPIO13；
+- fan left/right；
+- physical emergency power cut。
 
-命令幅度必须非常小且靠近 current/last successful position。
+## A1 — Sensor / IMU observation
 
-**不要凭空发明最大偏移数值。**
+根据实际硬件供电关系，
+只开启必要系统。
 
-如果仓库没有可安全引用的阈值，计划写：
+## A2 — Motor passive observation
+
+必须明确告诉用户：
+
+```text
+这一子阶段需要给 CyberGear motor bus 通电
+```
+
+但 fan/ESC 默认仍保持断电。
+
+使用：
+
+```text
+windarmor_observation_only.launch.py
+```
+
+确认：
+
+- no actuator initialization；
+- no motor movement；
+- passive 0x02 feedback 是否真实存在。
+
+如果没有 passive feedback：
+
+```text
+STOP
+record protocol limitation
+```
+
+不得临时改用 normal motor initialization继续。
+
+## A3 — Fan
+
+第一次 read-only Gate 中：
+
+```text
+fan/ESC remain unpowered
+```
+
+因为当前没有真实 fan hardware feedback。
+
+---
+
+# Deliverable 22 — Gate B Plan
+
+定义：
+
+```text
+Gate B — Bounded Actuator Verification
+```
+
+只规划，不执行。
+
+执行顺序建议：
+
+### B1 — Motor bounded verification
+
+明确通知用户：
+
+```text
+CyberGear motors need power
+fan/ESC should remain unpowered if electrical architecture permits
+```
+
+如果 Flight ownership要求 fan controller真实存在而必须给 fan controller供电，
+必须在执行前明确说明，不能假设。
+
+使用 verification controller：
+
+```text
+fan command = STOP
+selected motor = baseline + user-approved offset
+other motors = baseline hold
+```
+
+### B2 — Fan bounded verification
+
+需要单独授权：
+
+```text
+fan/ESC power ON
+```
+
+motor：
+
+```text
+feedback-relative hold
+```
+
+fan：
+
+```text
+user-approved bounded normalized command
+```
+
+不要默认沿用 B1 的授权。
+
+---
+
+# Deliverable 23 — Gate C Plan
+
+定义：
+
+```text
+Gate C — Fail-closed Verification
+```
+
+只规划。
+
+包含：
+
+- `FlightCommand.safe_stop()`；
+- command timeout；
+- Runtime stop/restart；
+- stale authority rejection；
+- owner loss；
+- E-STOP interaction。
+
+不要为每个测试提前创建新的软件 Task。
+
+如果真实测试暴露 bug：
+
+```text
+STOP hardware validation
+create targeted fix task
+```
+
+---
+
+# Deliverable 24 — Gate D Plan
+
+定义：
+
+```text
+Gate D — Legacy + Final RC Regression
+```
+
+包含：
+
+- motor MANUAL；
+- motor LEGACY_AUTO；
+- HOME；
+- fan MANUAL；
+- fan LEGACY_AUTO；
+- E-STOP；
+- shutdown；
+- restart；
+- explicit legacy reclaim；
+- final normal regression。
+
+Gate D通过后才进入 v0.4.0 RC / release收口。
+
+---
+
+# Deliverable 25 — Detailed User Manual Test Steps
+
+这是后续 hardware execution 的强制要求。
+
+`V0.4.0_HARDWARE_VERIFICATION_PLAN.md` 中，每个真实 Gate 必须明确：
+
+1. 哪些设备需要通电；
+2. 哪些设备必须保持断电；
+3. 上电前检查；
+4. Terminal 1 执行什么；
+5. Terminal 2 执行什么；
+6. Terminal 3 执行什么（如需要）；
+7. 每条命令完整内容；
+8. 每条命令执行后的预期 ROS 输出；
+9. 预期物理行为；
+10. 明确不应该出现的物理行为；
+11. PASS 判据；
+12. FAIL 判据；
+13. 立即停止条件；
+14. 安全退出命令；
+15. 安全断电顺序。
+
+不能只写：
+
+```text
+启动节点并观察
+```
+
+---
+
+# Deliverable 26 — Commands Must Match Repository
+
+计划中的：
+
+```text
+ros2 launch
+ros2 topic echo
+ros2 topic hz
+ros2 service call
+ros2 param
+```
+
+必须根据当前真实：
+
+- executable；
+- launch；
+- topic；
+- service；
+- interface type；
+- parameter name；
+
+逐一核对。
+
+不得凭记忆编造命令。
+
+如果某个真实 test value 尚未由用户决定：
 
 ```text
 TO BE SET BEFORE EXECUTION
 ```
 
-不得为测试修改 soft limit、speed limit 或 `motor_feedback_timeout_sec`。
+但 command结构本身应尽量写完整。
 
 ---
 
-# Deliverable 7 — Stage 4: Fan-only Flight Takeover
+# Deliverable 27 — Explicit Power Notices
 
-motor 保持不动，只验证 fan ownership + normalized command mapping。
-
-要求：
-
-- 从 stop / very-low normalized command 开始；
-- 不直接跳 1.0；
-- 不超过 current `flight_fan_max_pwm_us`；
-- 不把 normalized value 当 thrust；
-- 验证 left/right mapping、起转、ramp、timeout、safe-stop、revoke、E-STOP override、Runtime loss safe-stop。
-
-不发明 RPM/thrust 判定标准。
-
----
-
-# Deliverable 8 — Stage 5: Combined Ownership, Minimal Command
-
-目标验证：
+未来所有人工 hardware step 必须在对应步骤最前面写：
 
 ```text
-motor reserve/commit
-fan reserve/commit
-atomic Runtime commit
-post-grant new-state barrier
-first valid envelope
-```
-
-只使用：
-
-- motor 最小安全幅度；
-- fan 最低实际可验证 command；
-- 简单非飞行、非激烈闭环 test controller。
-
-重点是 distributed ownership + atomic commit，不是飞控算法性能。
-
-必须记录：
-
-- authority_epoch；
-- generation；
-- cutoff state_sequence；
-- first command state_sequence；
-- owner tokens；
-- first accepted command sequence。
-
-
----
-
-# Deliverable 9 — Stage 6: Safe-stop / Timeout / Runtime Loss
-
-至少设计：
-
-## Algorithm safe-stop
-
-ACTIVE 时：
-
-```text
-FlightCommand.safe_stop()
-```
-
-预期：
-
-- motor halt；
-- fan stop；
-- Runtime INHIBITED；
-- owner NONE；
-- no automatic legacy recovery。
-
-## Command heartbeat timeout
-
-验证 motor/fan Flight command timeout、owner release、Runtime inhibit。
-
-## Handoff lease timeout
-
-reserve/commit 后第一条 command 前故意延迟，确认 owner fail-closed。
-
-## Runtime process stop/crash
-
-预期：
-
-- no new command；
-- owner local lease timeout；
-- motor halt；
-- fan stop；
-- new Runtime 不恢复 old authority；
-- old epoch message reject。
-
-## Owner process loss
-
-任一 owner 丢失：
-
-- Runtime inhibit；
-- remaining owner best-effort revoke；
-- no auto fallback。
-
-所有 crash/kill 操作在未来执行时都必须单独授权。
-
----
-
-# Deliverable 10 — Stage 7: E-STOP / ERROR Interaction
-
-这是高风险阶段，必须单独授权。
-
-至少规划：
-
-## E-STOP during Flight
-
-预期：
-
-- lower-level E-STOP 优先；
-- Flight authority失效；
-- motor/fan safe state；
-- Runtime INHIBITED；
-- E-STOP clear 不自动恢复 Flight；
-- existing explicit recovery + new prepare。
-
-## Motor ERROR during Flight
-
-优先使用安全、已有、可控的软件模拟/受控 fault。
-
-若必须真实 hardware fault 才能验证，标记：
-
-```text
-OPTIONAL / HIGH RISK / NOT REQUIRED FOR NORMAL RC
-```
-
-不得规划：
-
-- 故意 critical overtemperature；
-- 故意堵转；
-- 人为危险过流；
-- 带电拔插高功率线；
-- destructive fault。
-
-预期：
-
-- ERROR latch；
-- Flight 不能 clear ERROR；
-- reconnect 不恢复 Flight；
-- old target 不重发。
-
----
-
-# Deliverable 11 — Stage 8: Legacy Regression After Flight
-
-验证：
-
-- motor MANUAL；
-- motor legacy AUTO；
-- HOME；
-- fan MANUAL；
-- fan legacy AUTO；
-- E-STOP；
-- reset flow；
-- normal shutdown；
-- transport reconnect；
-- v0.3.2 normal behavior。
-
-特别确认：
-
-- Flight release 后不会自动 legacy；
-- operator 显式 reclaim 后 legacy 才恢复；
-- old Flight epoch/generation command 不再有效。
-
----
-
-# Deliverable 12 — Stage 9: Final v0.4.0 RC Regression
-
-最终候选验证摘要，不在 Task 6 执行。
-
-至少包含：
-
-- boot；
-- IMU；
-- motor feedback；
-- fan status；
-- DRY_RUN；
-- explicit Flight takeover；
-- minimal normal command；
-- safe-stop；
-- explicit legacy reclaim；
-- E-STOP；
-- shutdown；
-- restart；
-- no stale authority replay；
-- no old target replay。
-
-避免与 Stage 0–8 逐项重复，作为最终整机正常功能 + 核心安全契约摘要。
-
----
-
-# Deliverable 13 — Per-stage Template
-
-每个 Stage 统一使用：
-
-```text
-Stage name
-Risk level
-Hardware scope
-Prerequisites
-Required explicit user authorization
-Allowed operations
-Forbidden operations
-Exact launch / ROS commands
-Expected ROS state
-Expected physical behavior
-Observations to record
-Abort / stop conditions
-Rollback / safe-state procedure
-Pass criteria
-Fail criteria
-Next-stage gate
-```
-
-如果某项仍需执行前确认：
-
-```text
-TO BE CONFIRMED BEFORE EXECUTION
-```
-
-不要编造不存在的 topic/service/launch 名称。
-
-所有命令必须从当前仓库真实接口核对。
-
----
-
-# Deliverable 14 — Authorization Matrix
-
-增加表格，至少区分：
-
-```text
-Stage 0 physical-only
-Stage 1 powered read-only
-Stage 2 owner handoff, no motion
-Stage 3 motor motion
-Stage 4 fan spin
-Stage 5 combined actuator
-Stage 6 timeout/crash
-Stage 7 E-STOP/fault
-Stage 8 legacy regression
-Stage 9 final RC
-```
-
-每阶段写：
-
-- 是否需要真实硬件；
-- 是否带电；
-- 是否可能运动；
-- 是否需要用户单独授权；
-- 是否可 software-only 替代。
-
-所有会导致真实 actuator movement、owner takeover、E-STOP/fault injection 的阶段必须单独授权。
-
----
-
-# Deliverable 15 — Hardware Scope Matrix
-
-按域拆分：
-
-```text
-IMU
-Motor/CAN
-Fan/GPIO/PWM
-Flight Runtime
-Ownership protocol
-E-STOP
-Power/mechanical environment
-```
-
-标明每个 Stage 涉及哪些域。
-
----
-
-# Deliverable 16 — Evidence Template
-
-设计统一记录：
-
-```text
-Date/time
-Git HEAD
-Config snapshot
-Stage
-Hardware powered?
-Takeover enabled?
-Authority epoch
-Generation
-Owner states
-ControllerState
-Global E-STOP
-Motor health
-Fan state
-Command sequence
-Expected
-Observed
-Pass/Fail
-Operator notes
-Stop reason
-```
-
-未来实际执行时填写，不把聊天记录当正式验证证据。
-
----
-
-# Deliverable 17 — Config Snapshot Requirements
-
-硬件执行前必须记录关键 config。
-
-### Motor
-- `motor_ids`
-- `motor_names`
-- `motor_signs`
-- soft limits
-- manual/auto/flight motion speeds
-- `motor_feedback_timeout_sec`
-- handoff/command timeout
-
-### Fan
-- pins
-- stop/start/max
-- flight max
-- ramp rates
-- handoff/command timeout
-
-### Flight
-- control rate
-- freshness
-- `flight_takeover_enabled`
-- handoff timeout
-- controller factory
-
-Task 6 不修改这些值。
-
----
-
-# Deliverable 18 — Pre-execution Safety Checklist
-
-任何带电 Stage 前统一确认：
-
-- correct Git HEAD；
-- working tree status；
-- correct config；
-- expected launch；
-- physical clearance；
-- no person in motion envelope；
-- kill power available；
-- E-STOP reachable；
-- fan guarded / clear；
-- motor load mechanically safe；
-- terminal/log capture；
-- no stale ROS graph/process；
-- previous Flight authority cleared；
-- no old Runtime process；
-- user explicitly authorized this Stage。
-
----
-
-# Deliverable 19 — Global Stop Conditions
-
-至少：
-
-- unexpected motor direction；
-- unexpected fan side/direction；
-- command target mismatch；
-- motor fault bit；
-- worsening temperature warning；
-- critical temperature；
-- CAN/transport instability；
-- IMU axis mismatch；
-- unknown/incorrect owner state；
-- E-STOP unknown when clear required；
-- unexpected authority token；
-- command sequence anomaly；
-- unexpected ACTIVE；
-- stale readback；
-- lease timeout；
-- unexpected actuator movement；
-- mechanical interference；
-- unusual sound/vibration/smell/heat；
-- user requests stop。
-
-发生任意条件：
-
-```text
-STOP current stage
-do not auto-continue
-record evidence
-return to safe state
-```
-
----
-
-# Deliverable 20 — Recovery Rules
-
-继续遵守：
-
-- ERROR 不自动恢复；
-- E-STOP clear 不恢复 Flight；
-- transport reconnect 不恢复 Flight；
-- Runtime restart 不恢复 authority；
-- old epoch/generation 不恢复；
-- owner timeout 后不自动 legacy；
-- Flight safe-stop 后不自动 legacy；
-- next attempt 需要 explicit prepare/handoff；
-- legacy reclaim 需要显式 operator action。
-
-不要设计自动恢复以方便测试。
-
----
-
-# Deliverable 21 — No Destructive Testing
-
-常规 v0.4.0 验证禁止：
-
-- 故意堵转 motor；
-- 故意超过 soft limit；
-- 故意升温到 critical；
-- 故意过流；
-- 故意破坏 CAN bus；
-- 带电拔插 high-current line；
-- 触碰旋转 fan；
-- 超出 current fan Flight max；
-- 修改 safety threshold 制造故障；
-- 绕过 E-STOP/watchdog；
-- 直接写 CyberGear SDO 代替正式 path。
-
----
-
-# Deliverable 22 — Software Gate Before Hardware Session
-
-硬件 session 前执行：
-
-```bash
-source /opt/ros/jazzy/setup.bash
-./scripts/ci_software.sh
-```
-
-并记录当前 Git HEAD。
-
-如果 hardware session 使用的 commit 与最近 green CI commit 不同，必须重新判断是否重跑。
-
----
-
-# Deliverable 23 — Plan Interface Audit
-
-本任务完成前以只读/无硬件方式核对计划中的：
-
-- topic names；
-- service names；
-- launch names；
-- package names；
-- parameter names；
-- status enums；
-- owner states；
-- authority states。
-
-可使用：
-
-```text
-rg
-git grep
-ROS interface introspection from built workspace
-```
-
-但不启动真实硬件 node。
-
-所有命令示例必须与当前代码一致。
-
----
-
-# Deliverable 24 — README / AGENTS Minimal Update Only If Needed
-
-原则上本任务只新增 hardware verification plan。
-
-README 可增加一个简洁入口链接。
-
-AGENTS 仅在确有必要时补充：
-
-> 所有带电 Stage 均需逐阶段独立授权。
-
-不要复制完整 checklist 到 README/AGENTS。
-
----
-
-# Deliverable 25 — Do Not Modify Control Logic
-
-禁止修改：
-
-- motor control；
-- motor ownership；
-- fan control；
-- fan ownership；
-- Flight Runtime；
-- authority；
-- envelope；
-- safety monitor；
-- timeout implementation；
-- launch default behavior；
-- config values。
-
-若制定 plan 时发现新的 software blocker：
-
-- 不在 Task 6 修；
-- 写入 `LATEST_FEEDBACK.md`；
-- 建议新的 Task 6.x；
-- 停止进入 hardware execution。
-
----
-
-# Deliverable 26 — Software Verification
-
-至少运行：
-
-```bash
-git diff --check
+【本阶段需要通电】
+...
 ```
 
 以及：
 
+```text
+【本阶段必须保持断电】
+...
+```
+
+如果 motor和fan需要不同供电阶段，必须明确区分。
+
+默认前提仍是：
+
+```text
+motors OFF
+fans/ESC OFF
+```
+
+不能因为之前某个 Gate曾上电，就假设后续仍然通电。
+
+---
+
+# Deliverable 28 — User-facing Manual Test Format
+
+后续实际需要用户操作时必须采用类似格式：
+
+```text
+【本阶段硬件状态】
+
+需要通电：
+- ...
+
+保持断电：
+- ...
+
+【上电前检查】
+
+1. ...
+2. ...
+
+【Terminal 1】
+
+执行：
+
+<exact command>
+
+预期：
+
+...
+
+【Terminal 2】
+
+执行：
+
+<exact command>
+
+预期：
+
+...
+
+【物理预期】
+
+应该发生：
+- ...
+
+绝对不应该发生：
+- ...
+
+【立即停止条件】
+
+- ...
+- ...
+
+【PASS】
+
+...
+
+【FAIL】
+
+...
+
+【安全退出】
+
+1. ...
+2. ...
+3. ...
+```
+
+不要让用户自行从长篇 architecture文档推导操作步骤。
+
+---
+
+# Deliverable 29 — README / API
+
+`FLIGHT_CONTROL_API.md` 原则上不需要修改算法 contract。
+
+可以增加一句：
+
+> `bounded_verification_controller` 仅用于项目硬件验证，不是实际飞控算法模板。
+
+README只需在 hardware verification section 保持链接清晰。
+
+不要继续扩大主 README。
+
+---
+
+# Deliverable 30 — Preserve Architecture
+
+本任务禁止重新设计：
+
+- AuthorityStateMachine；
+- ownership protocol；
+- authority epoch；
+- generation；
+- FlightCommandEnvelope；
+- MotorManager；
+- fan ownership；
+- command lease；
+- rollback；
+- observation-only architecture。
+
+只有发现明确软件 bug 才停止并报告。
+
+不要因为“理论上可以更安全”继续增加新机制。
+
+---
+
+# Deliverable 31 — Software Verification
+
+仅运行无硬件验证。
+
+至少：
+
 ```bash
 source /opt/ros/jazzy/setup.bash
+
+colcon build --symlink-install
+
+source install/setup.bash
+
+python3 -m pytest \
+  src/windarmor_flight_control/test \
+  -q
+
+colcon test --packages-select \
+  imu_cybergear_ros2 \
+  windarmor_fan_controller \
+  windarmor_interfaces \
+  windarmor_flight_control \
+  windarmor_bringup
+
+colcon test-result --verbose
+
 ./scripts/ci_software.sh
 ```
 
-不得访问真实硬件。
+如果仓库当前推荐命令有变化，以当前统一 CI script 为准。
+
+不得访问真实：
+
+```text
+/dev/*
+CAN
+CyberGear
+IMU serial
+GPIO
+PWM
+ESC
+fan
+```
 
 ---
 
 # Expected Result
 
-Task 6 完成后：
+Task 6.2 完成后：
 
-1. 存在 `docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md`；
-2. 文档状态明确为未执行；
-3. 验证被拆成 Stage 0–9；
-4. 每个 Stage 有独立授权门槛；
-5. 所有会产生 motion/takeover/fault 的阶段默认禁止；
-6. Stage 0 先确认机械/接线/IMU frame；
-7. Stage 1 先只读状态链；
-8. Stage 2 先 owner reserve/revoke；
-9. motor/fan takeover 分开验证；
-10. combined handoff 在单 subsystem 之后；
-11. timeout/crash/E-STOP 在基础 motion 成功后；
-12. legacy regression 在 Flight 测试后；
-13. final RC regression 单独定义；
-14. 无 destructive testing；
-15. plan 中 interface 与当前仓库一致；
-16. 未执行任何真实硬件操作；
-17. 未改变 control/safety/config semantics；
-18. 下一步只能由用户逐阶段选择并授权 Stage 0/1 或后续阶段。
+1. 有专用 bounded hardware verification controller；
+2. controller 使用 feedback-relative motor baseline；
+3. 不把 0 rad 当真实机械中位；
+4. motor offset不累积；
+5. 未测试 motor明确 hold baseline；
+6. fan默认 STOP；
+7. verification默认 disabled；
+8. 未指定真实 motor offset时 fail-closed；
+9. 不新增 motor-only/fan-only authority；
+10. 不新增 staged ownership mode；
+11. 不新增 reservation keepalive；
+12. Flight safety architecture冻结；
+13. hardware plan收敛为 Gate A–D；
+14. future人工测试有完整命令/预期结果/停止条件；
+15. 所有真实 actuator动作仍需用户逐项授权；
+16. 本任务未执行任何真实硬件；
+17. software CI全部通过；
+18. 下一步不再创建预防性软件任务；
+19. 默认进入 Gate A hardware verification准备；
+20. 只有真实硬件验证暴露缺陷时再创建针对性 fix Task。
 
 ---
 
@@ -847,19 +1275,19 @@ Task 6 完成后：
 
 明确不做：
 
-- Stage 0–9 的真实执行；
-- CyberGear motion；
+- 旧版 Task 6.2 staged ownership；
+- reservation keepalive；
+- verification authority states；
+- real hardware test；
+- motor power-on；
+- fan/ESC power-on；
+- motor movement；
 - fan spin；
-- owner takeover；
-- E-STOP/fault injection；
-- hardware timing measurement；
-- config tuning；
-- Flight algorithm tuning；
-- IMU calibration；
-- thrust/RPM characterization；
-- current measurement；
+- actual Flight takeover；
+- hardware parameter tuning；
+- PID / flight algorithm；
 - package version bump；
-- v0.4.0 RC tag；
+- v0.4.0 RC；
 - release；
 - GitHub Release；
 - commit；
@@ -870,18 +1298,18 @@ Task 6 完成后：
 
 # Stop Conditions
 
-若出现：
+出现以下任一情况必须停止并报告：
 
-- 无法从当前仓库确认 interface 名称；
-- hardware mapping 与 `HARDWARE_REFERENCE.md` 冲突；
-- 发现新的 software safety blocker；
-- 某 Stage 必须绕过 existing safety path；
-- 必须改 config default 才能制定计划；
-- 必须做真实硬件动作才能确认计划；
-- 计划开始包含 destructive testing；
-- 一次授权被解释为后续阶段授权；
-
-必须停止并报告。
+- 必须修改 authority architecture才能做 bounded test；
+- 必须真实给 hardware通电才能完成 controller；
+- 必须编造 motor safe offset；
+- 必须绕过 MotorManager；
+- 必须绕过 FanCommandManager；
+- 必须关闭 safety timeout；
+- 必须伪造 feedback；
+- 必须自动恢复 legacy owner；
+- 任务范围再次扩展成新的 verification framework；
+- 发现当前软件存在会阻止 Gate A/B 的明确 safety bug。
 
 ---
 
@@ -896,50 +1324,108 @@ docs/LATEST_FEEDBACK.md
 至少包含：
 
 ## Scope
-- 新增/修改 docs；
-- 是否修改 README/AGENTS；
-- source/config/control logic 是否未修改。
 
-## Verification Plan
-- Stage 0–9 摘要；
-- authorization matrix；
-- hardware scope matrix；
-- global stop conditions；
-- evidence template；
-- config snapshot；
-- recovery rules。
+- 修改文件；
+- verification controller；
+- config；
+- hardware plan；
+- tests。
 
-## Interface Audit
-- 核对的 topic/service/parameter/launch；
-- 是否存在计划与实现不一致；
-- 是否存在需要 Task 6.x 修复的软件 blocker。
+## Verification Controller
+
+说明：
+
+- controller 文件/factory；
+- baseline capture；
+- selected motor；
+- target生成规则；
+- non-test motor hold规则；
+- fan默认值；
+- verification enable gate；
+- safe-stop conditions；
+- authority session变化行为；
+- 是否存在 cumulative drift（预期：否）。
+
+## Hardware Readiness
+
+明确：
+
+```text
+Gate A
+Gate B
+Gate C
+Gate D
+```
+
+分别处于什么状态。
+
+说明：
+
+- 哪些 Gate需要 motor通电；
+- 哪些需要 fan/ESC通电；
+- 哪些参数仍需用户执行前决定；
+- hardware commands是否已经与当前 repo核对。
 
 ## Safety Boundary
+
 明确：
-- 未执行真实硬件；
-- 未开启 takeover；
-- 未运行 motor/fan；
-- 未调用 E-STOP/ERROR recovery；
-- 未修改 config；
-- `flight_takeover_enabled=false` 不变；
-- `motor_feedback_timeout_sec=0.0` 不变；
-- stable tags 不变。
+
+- 本任务未给 CyberGear通电；
+- 本任务未给 fan/ESC通电；
+- 未执行真实 motor/fan；
+- 未执行 owner takeover；
+- authority/ownership architecture未改；
+- `flight_takeover_enabled=false`默认未改；
+- `motor_feedback_timeout_sec=0.0`未改；
+- ERROR/E-STOP/reconnect semantics未改。
 
 ## Tests
-- `git diff --check`；
-- `./scripts/ci_software.sh`；
-- pass/fail；
-- warnings/skipped；
-- 是否有进入 Stage 0/1 前 blocker。
+
+- exact commands；
+- verification controller tests；
+- pytest count；
+- colcon result；
+- CI result；
+- warnings/skipped。
+
+## Next Step
+
+如果没有 software blocker：
+
+```text
+NEXT:
+Gate A — Physical + Powered Read-only
+```
+
+但：
+
+```text
+NOT AUTHORIZED / NOT EXECUTED
+```
+
+在真正执行 Gate A 前，必须先向用户提供：
+
+- 哪些设备需要通电；
+- 哪些设备保持断电；
+- 完整逐步命令；
+- 每步预期结果；
+- PASS/FAIL；
+- 立即停止条件；
+- 安全退出步骤。
+
+然后等待用户明确授权。
 
 ## Git 状态（反馈生成时）
+
+记录：
+
 - HEAD；
 - branch；
 - working tree；
 - implementation/verification 阶段是否 commit；
 - push/tag；
-- remote 是否核验；
-- v0.3.0 / v0.3.1 / v0.3.2 stable tags 是否保持。
+- remote是否核验；
+- v0.3.0 / v0.3.1 / v0.3.2 stable tags是否保持。
 
 本任务默认不授权 commit / push / tag。
 

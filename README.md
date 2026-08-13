@@ -28,9 +28,15 @@ ownership client 或可执行 command publisher，不改变 v0.3.2 的电机、�
 [v0.4.0 Hardware Verification Plan](docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md)；
 其状态为 `PLANNED / NOT YET EXECUTED`，且不构成任何硬件操作授权。
 
-### Stage 1 只读观测入口
+仓库另提供默认禁用的 `bounded_verification_controller`，仅用于该计划中的受控
+实机验证。它先从当前 authority session 的新鲜、合法、健康电机反馈捕获相对
+baseline，再对一个显式逻辑电机应用用户批准的 offset；其他电机保持 baseline，
+风扇默认请求停止。仓库配置没有可执行的默认 motor offset，不能直接据此进行
+带电测试。
 
-仓库提供未来 Stage 1 专用的
+### Gate A 只读观测入口
+
+仓库提供未来 Gate A2 专用的
 `windarmor_observation_only.launch.py`：它只组合 IMU driver、独立 IMU 相对姿态
 observer、CyberGear passive-RX observer 和 takeover 固定为 `false` 的 Flight Runtime。
 该入口不创建普通电机控制器、MotorManager、fan controller、GPIO/PWM/ESC、owner
@@ -42,8 +48,8 @@ ros2 launch windarmor_bringup windarmor_observation_only.launch.py
 ```
 
 这不是默认软件测试命令：它会访问真实 IMU 串口并打开 CAN receive transport，只有
-未来按硬件验证计划获得 Stage 1 单独明确授权后才能运行。当前只完成 pure/fake/mock
-软件验证，尚未执行真实 Stage 1，也尚未确认实机 CyberGear 在零 command TX 时是否
+未来按硬件验证计划获得 Gate A2 单独明确授权后才能运行。当前只完成 pure/fake/mock
+软件验证，尚未执行真实 Gate A2，也尚未确认实机 CyberGear 在零 command TX 时是否
 主动发送 0x02 feedback。普通 `windarmor.launch.py` 和 v0.3.2 控制行为不变。
 
 ### 飞控算法开发

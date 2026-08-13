@@ -9,6 +9,10 @@ from typing import Mapping
 
 
 TOPIC_PATTERN = re.compile(r"/?[A-Za-z_][A-Za-z0-9_/]*")
+BOUNDED_VERIFICATION_FACTORY = (
+    "windarmor_flight_control.algorithms."
+    "bounded_verification_controller:create_controller"
+)
 
 PARAMETER_DEFAULTS = {
     "control_rate_hz": 50.0,
@@ -28,6 +32,12 @@ PARAMETER_DEFAULTS = {
     "controller_factory": (
         "windarmor_flight_control.algorithms.flight_controller:create_controller"
     ),
+    "verification_controller_enabled": False,
+    "test_motor_name": "",
+    "motor_test_offset_configured": False,
+    "motor_test_offset_rad": 0.0,
+    "fan_left_test_command": 0.0,
+    "fan_right_test_command": 0.0,
     "imu_raw_topic": "/imu/data_raw",
     "imu_status_topic": "/imu/status",
     "imu_relative_topic": "/imu/relative_roll_pitch",
@@ -76,6 +86,12 @@ class RuntimeConfig:
     fan_observer_min_pwm_us: float
     fan_observer_max_pwm_us: float
     controller_factory: str
+    verification_controller_enabled: bool
+    test_motor_name: str
+    motor_test_offset_configured: bool
+    motor_test_offset_rad: float
+    fan_left_test_command: float
+    fan_right_test_command: float
     imu_raw_topic: str
     imu_status_topic: str
     imu_relative_topic: str
@@ -172,8 +188,13 @@ def build_runtime_config(values: Mapping[str, object]) -> RuntimeConfig:
     """Validate all timing and interface values before ROS resources exist."""
 
     converted = dict(values)
-    if not isinstance(converted["flight_takeover_enabled"], bool):
-        raise ValueError("flight_takeover_enabled must be a bool")
+    for name in (
+        "flight_takeover_enabled",
+        "verification_controller_enabled",
+        "motor_test_offset_configured",
+    ):
+        if not isinstance(converted[name], bool):
+            raise ValueError(f"{name} must be a bool")
     for name in POSITIVE_FIELDS:
         value = _finite(name, converted[name])
         if value <= 0.0:
@@ -201,6 +222,35 @@ def build_runtime_config(values: Mapping[str, object]) -> RuntimeConfig:
     if not isinstance(factory, str) or not factory.strip():
         raise ValueError("controller_factory must be a non-empty import contract")
     converted["controller_factory"] = factory.strip()
+
+    test_motor_name = converted["test_motor_name"]
+    if not isinstance(test_motor_name, str):
+        raise ValueError("test_motor_name must be a string")
+    if test_motor_name and test_motor_name not in names:
+        raise ValueError("test_motor_name must be a configured logical motor name")
+    converted["test_motor_name"] = test_motor_name
+
+    offset = _finite("motor_test_offset_rad", converted["motor_test_offset_rad"])
+    converted["motor_test_offset_rad"] = offset
+    for name in ("fan_left_test_command", "fan_right_test_command"):
+        command = _finite(name, converted[name])
+        if not 0.0 <= command <= 1.0:
+            raise ValueError(f"{name} must be within [0.0, 1.0]")
+        converted[name] = command
+
+    if converted["verification_controller_enabled"]:
+        if converted["controller_factory"] != BOUNDED_VERIFICATION_FACTORY:
+            raise ValueError(
+                "verification_controller_enabled requires the bounded verification factory"
+            )
+        if not test_motor_name:
+            raise ValueError(
+                "verification_controller_enabled requires test_motor_name"
+            )
+        if not converted["motor_test_offset_configured"]:
+            raise ValueError(
+                "verification_controller_enabled requires an explicitly configured motor offset"
+            )
 
     for name in TOPIC_FIELDS:
         converted[name] = _topic(name, converted[name])

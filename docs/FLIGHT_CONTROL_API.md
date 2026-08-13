@@ -40,6 +40,10 @@ python3 -m pytest -p no:cacheprovider \
 默认 `flight_takeover_enabled=false`；真实 Flight takeover 与硬件验证不属于算法
 开发的默认流程。
 
+`bounded_verification_controller` 仅用于项目硬件验证，不是实际飞控算法模板；
+其默认配置不可执行，任何真实 offset 或 fan command 都必须在对应实机 Gate 前由
+用户明确确认。
+
 ## 算法入口
 
 算法实现 `FlightController`：

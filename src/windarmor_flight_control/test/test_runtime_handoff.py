@@ -146,7 +146,7 @@ def make_enabled_node(controller, clock, *, authority_epoch=100, **overrides):
     node = FlightControlRuntimeNode(
         monotonic_fn=clock,
         authority_epoch_fn=lambda: authority_epoch,
-        controller_loader=lambda _contract, _names: controller,
+        controller_loader=lambda _contract, _names, _configuration: controller,
         config_overrides=config,
     )
     node._status_pub = CapturingPublisher()

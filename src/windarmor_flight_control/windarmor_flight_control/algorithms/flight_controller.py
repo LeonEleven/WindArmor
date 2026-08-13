@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from ..core.controller import FlightController
 from .example_controller import NeutralExampleController
 
 
-def create_controller(required_motor_names: tuple[str, ...]) -> FlightController:
+def create_controller(
+    required_motor_names: tuple[str, ...],
+    configuration: Mapping[str, object] | None = None,
+) -> FlightController:
     """Create the API example with test-only zero values for every logical key."""
 
+    del configuration
     return NeutralExampleController(
         {name: 0.0 for name in required_motor_names}
     )

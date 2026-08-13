@@ -122,10 +122,7 @@ class FlightControlRuntimeNode(Node):
         self._last_tick_at = self._monotonic()
 
         try:
-            self._controller = controller_loader(
-                self._config.controller_factory,
-                self._config.motor_names,
-            )
+            self._controller = self._load_configured_controller()
             self._controller.reset()
         except Exception as exc:
             self._inhibit(f"controller startup failure: {exc}")
@@ -294,6 +291,24 @@ class FlightControlRuntimeNode(Node):
 
     def _now(self) -> float:
         return float(self._monotonic())
+
+    def _load_configured_controller(self):
+        return self._controller_loader(
+            self._config.controller_factory,
+            self._config.motor_names,
+            {
+                "verification_controller_enabled": (
+                    self._config.verification_controller_enabled
+                ),
+                "test_motor_name": self._config.test_motor_name,
+                "motor_test_offset_configured": (
+                    self._config.motor_test_offset_configured
+                ),
+                "motor_test_offset_rad": self._config.motor_test_offset_rad,
+                "fan_left_test_command": self._config.fan_left_test_command,
+                "fan_right_test_command": self._config.fan_right_test_command,
+            },
+        )
 
     def _observe(
         self,
@@ -492,10 +507,7 @@ class FlightControlRuntimeNode(Node):
             if self._authority.state is not AuthorityState.INHIBITED:
                 raise RuntimeError("authority is not inhibited")
             if self._controller is None:
-                self._controller = self._controller_loader(
-                    self._config.controller_factory,
-                    self._config.motor_names,
-                )
+                self._controller = self._load_configured_controller()
             self._controller.reset()
             self._authority.reset_inhibit()
             self._handoff.reset()

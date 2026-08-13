@@ -26,6 +26,17 @@ flight_control_runtime_node:
 
     controller_factory: "windarmor_flight_control.algorithms.flight_controller:create_controller"
 
+    # Dedicated hardware-verification controller settings. The controller is
+    # fail-closed unless its factory is selected, this gate is true, one logical
+    # motor is named, and the offset is explicitly marked configured. The zero
+    # placeholder below is not an approved real-hardware test value.
+    verification_controller_enabled: false
+    test_motor_name: ""
+    motor_test_offset_configured: false
+    motor_test_offset_rad: 0.0
+    fan_left_test_command: 0.0
+    fan_right_test_command: 0.0
+
     imu_raw_topic: "/imu/data_raw"
     imu_status_topic: "/imu/status"
     imu_relative_topic: "/imu/relative_roll_pitch"

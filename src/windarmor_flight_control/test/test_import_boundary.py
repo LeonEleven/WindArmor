@@ -9,11 +9,15 @@ FORBIDDEN_ROOTS = {
     "can",
     "geometry_msgs",
     "gpiozero",
+    "imu_cybergear_ros2",
     "lgpio",
     "rclpy",
     "sensor_msgs",
     "serial",
+    "socket",
     "std_msgs",
+    "windarmor_fan_controller",
+    "windarmor_interfaces",
 }
 
 
@@ -45,3 +49,21 @@ def test_importing_public_api_does_not_load_ros_or_hardware_libraries() -> None:
 
     newly_loaded_roots = {name.split(".", 1)[0] for name in set(sys.modules) - before}
     assert not newly_loaded_roots & FORBIDDEN_ROOTS
+
+
+def test_verification_controller_has_no_actuator_implementation_dependencies() -> None:
+    source = (
+        PACKAGE_ROOT / "algorithms" / "bounded_verification_controller.py"
+    ).read_text(encoding="utf-8")
+    forbidden = {
+        "CyberGearDriver",
+        "MotorManager",
+        "FanControlCore",
+        "rclpy",
+        "sensor_msgs",
+        "std_msgs",
+        "windarmor_interfaces",
+        "gpiozero",
+        "lgpio",
+    }
+    assert not {token for token in forbidden if token in source}
