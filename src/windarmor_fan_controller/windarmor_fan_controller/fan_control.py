@@ -244,11 +244,12 @@ class FanControlCore:
         self._motor_mode_event_count = 0
         self._fan_enabled: Optional[bool] = None
         self._fan_enabled_at: Optional[float] = None
+        self._waiting_for_first_fan_enabled = True
 
         self.e_stop_latched = False
         self._e_stop_active: Optional[bool] = None
         self._e_stop_at: Optional[float] = None
-        self._safety_reason = "启动后等待显式选择控制路径"
+        self._safety_reason = "等待底层风扇 enabled 状态首次观测"
         self._immediate_stop_pending = True
         self.ownership = FanOwnershipCore(
             handoff_timeout_sec=config.fan_flight_handoff_timeout_sec,
@@ -403,10 +404,21 @@ class FanControlCore:
         return True
 
     def update_fan_enabled(self, enabled: bool, now: float) -> bool:
-        if not isinstance(enabled, bool) or not math.isfinite(now):
+        self._waiting_for_first_fan_enabled = False
+        if (
+            not isinstance(enabled, bool)
+            or isinstance(now, bool)
+            or not isinstance(now, (int, float))
+            or not math.isfinite(now)
+        ):
             self._fan_enabled = None
             self._fan_enabled_at = None
-            self.force_safe_stop("底层风扇 enabled 状态无效")
+            state = (
+                FanControlState.EMERGENCY_STOP
+                if self.e_stop_latched
+                else FanControlState.DISABLED
+            )
+            self.force_safe_stop("底层风扇 enabled 状态无效", state=state)
             return False
         self._fan_enabled = enabled
         self._fan_enabled_at = now
@@ -678,11 +690,24 @@ class FanControlCore:
             self.state = FanControlState.EMERGENCY_STOP
             return self.output
 
+        if self._waiting_for_first_fan_enabled:
+            self._clear_all_control()
+            self._stop_immediately()
+            self.ownership.release_to_none()
+            if self.state is not FanControlState.EMERGENCY_STOP:
+                self.state = FanControlState.SAFE_STOP
+            return self.output
+
         if self._fan_enabled is not True or not self._fresh(
             self._fan_enabled_at, now, self.config.fan_enabled_timeout_sec
         ):
+            reason = (
+                self._safety_reason
+                if self._fan_enabled is None
+                else "底层风扇未启用或 enabled 状态已超时"
+            )
             self.force_safe_stop(
-                "底层风扇未启用或 enabled 状态已超时",
+                reason,
                 state=FanControlState.DISABLED,
             )
             return self.output

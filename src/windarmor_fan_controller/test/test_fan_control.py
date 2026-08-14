@@ -13,6 +13,7 @@ from windarmor_fan_controller.fan_control import (
     slew_pwm,
     update_hysteresis,
 )
+from windarmor_fan_controller.fan_ownership import FanCommandOwner
 
 
 CURVE_EXPECTATIONS = {
@@ -363,6 +364,184 @@ def test_bottom_disabled_and_timeout_clear_caches() -> None:
     assert core.step(1.31).state == FanControlState.DISABLED
     core.update_fan_enabled(True, 1.32)
     assert core.step(1.32).command_pwm == (800, 800)
+
+
+def test_delayed_first_enabled_observation_keeps_safe_passive_startup() -> None:
+    core = FanControlCore(FanControlConfig(fan_enabled_timeout_sec=1.0))
+
+    for timestamp in (0.1, 0.5, 1.1, 2.0):
+        output = core.control_tick(timestamp)
+        snapshot = core.safety_snapshot
+        assert output.state is FanControlState.SAFE_STOP
+        assert output.command_pwm == (800, 800)
+        assert not snapshot.enabled_observed
+        assert not snapshot.enabled
+        assert snapshot.passive_for_takeover
+        assert "首次观测" in snapshot.safety_reason
+        assert core.ownership.owner is FanCommandOwner.NONE
+
+    assert core.update_fan_enabled(True, 3.0)
+    output = core.control_tick(3.0)
+    snapshot = core.safety_snapshot
+    assert output.state is FanControlState.SAFE_STOP
+    assert output.command_pwm == (800, 800)
+    assert snapshot.enabled_observed
+    assert snapshot.enabled
+    assert snapshot.passive_for_takeover
+    assert core.ownership.owner is FanCommandOwner.NONE
+
+
+def test_first_enabled_false_is_genuinely_disabled() -> None:
+    core = FanControlCore(FanControlConfig())
+
+    assert core.update_fan_enabled(False, 0.1)
+    output = core.control_tick(0.1)
+    snapshot = core.safety_snapshot
+
+    assert output.state is FanControlState.DISABLED
+    assert output.command_pwm == (800, 800)
+    assert snapshot.enabled_observed
+    assert not snapshot.enabled
+    assert not snapshot.passive_for_takeover
+    assert core.ownership.owner is FanCommandOwner.NONE
+
+
+@pytest.mark.parametrize(
+    ("enabled", "timestamp"),
+    [
+        (1, 0.1),
+        (None, 0.1),
+        (True, None),
+        (True, "bad"),
+        (True, False),
+        (True, math.nan),
+        (False, math.inf),
+    ],
+)
+def test_invalid_first_enabled_observation_fails_closed(
+    enabled, timestamp
+) -> None:
+    core = FanControlCore(FanControlConfig())
+
+    assert not core.update_fan_enabled(enabled, timestamp)
+    assert core.control_tick(0.2).state is FanControlState.DISABLED
+    snapshot = core.safety_snapshot
+    assert not snapshot.enabled_observed
+    assert not snapshot.enabled
+    assert not snapshot.passive_for_takeover
+    assert snapshot.safety_reason == "底层风扇 enabled 状态无效"
+
+    assert core.update_fan_enabled(True, 0.3)
+    assert core.control_tick(0.3).state is FanControlState.DISABLED
+
+
+def test_runtime_enabled_timeout_stays_disabled_after_late_true() -> None:
+    core = FanControlCore(FanControlConfig(fan_enabled_timeout_sec=1.0))
+    assert core.update_fan_enabled(True, 0.0)
+    assert core.control_tick(0.1).state is FanControlState.SAFE_STOP
+    assert core.safety_snapshot.passive_for_takeover
+
+    timed_out = core.control_tick(1.01)
+    assert timed_out.state is FanControlState.DISABLED
+    assert timed_out.command_pwm == (800, 800)
+    assert not core.safety_snapshot.passive_for_takeover
+
+    assert core.update_fan_enabled(True, 1.02)
+    assert core.control_tick(1.02).state is FanControlState.DISABLED
+    assert not core.safety_snapshot.passive_for_takeover
+
+
+def test_runtime_explicit_disable_stays_disabled_after_true() -> None:
+    core = FanControlCore(FanControlConfig())
+    assert core.update_fan_enabled(True, 0.0)
+    assert core.control_tick(0.1).state is FanControlState.SAFE_STOP
+
+    assert core.update_fan_enabled(False, 0.2)
+    assert core.control_tick(0.2).state is FanControlState.DISABLED
+    assert core.update_fan_enabled(True, 0.3)
+    assert core.control_tick(0.3).state is FanControlState.DISABLED
+    assert core.command_pwm == (800, 800)
+    assert not core.safety_snapshot.passive_for_takeover
+
+
+def test_startup_e_stop_dominates_late_enabled_true() -> None:
+    core = FanControlCore(FanControlConfig())
+    assert core.update_e_stop(True, 0.1)
+    assert core.control_tick(0.1).state is FanControlState.EMERGENCY_STOP
+
+    assert core.update_fan_enabled(True, 0.2)
+    output = core.control_tick(0.2)
+    assert output.state is FanControlState.EMERGENCY_STOP
+    assert output.command_pwm == (800, 800)
+    assert core.e_stop_latched
+    assert not core.safety_snapshot.passive_for_takeover
+    assert core.ownership.owner is FanCommandOwner.NONE
+
+
+@pytest.mark.parametrize(
+    ("mode", "accepted", "state"),
+    [
+        ("not-a-mode", False, FanControlState.SAFE_STOP),
+        ("ERROR", True, FanControlState.SAFE_STOP),
+        ("EMERGENCY_STOP", True, FanControlState.EMERGENCY_STOP),
+    ],
+)
+def test_motor_fault_dominates_startup_wait(mode, accepted, state) -> None:
+    core = FanControlCore(FanControlConfig())
+
+    assert core.update_motor_mode(mode, 0.1) is accepted
+    output = core.control_tick(0.2)
+    assert output.state is state
+    assert output.command_pwm == (800, 800)
+    assert core.ownership.owner is FanCommandOwner.NONE
+    assert not core.prepare_flight_ownership(10, 1, now=0.2).success
+
+
+@pytest.mark.parametrize(
+    "old_owner",
+    [
+        FanCommandOwner.LEGACY_MANUAL,
+        FanCommandOwner.LEGACY_AUTO,
+        FanCommandOwner.FLIGHT_RESERVED,
+        FanCommandOwner.FLIGHT_CONTROL,
+    ],
+)
+def test_startup_wait_discards_old_owner_and_never_restores_it(old_owner) -> None:
+    core = FanControlCore(FanControlConfig())
+    if old_owner is FanCommandOwner.LEGACY_MANUAL:
+        core.ownership.claim_legacy_manual()
+        core.manual_armed = True
+        core._manual_pwm = [1200, 1200]
+    elif old_owner is FanCommandOwner.LEGACY_AUTO:
+        core.ownership.claim_legacy_auto()
+        core.auto_requested = True
+        core._flight_target_pwm = (1200, 1200)
+    else:
+        assert core.ownership.prepare(100, 2, now=0.0, safe=True).success
+        if old_owner is FanCommandOwner.FLIGHT_CONTROL:
+            assert core.ownership.commit(100, 2, now=0.0, safe=True).success
+            assert core.ownership.accept_command(
+                100, 2, 7, now=0.0
+            ).success
+            core._flight_target_pwm = (1400, 1400)
+
+    assert core.control_tick(0.1).command_pwm == (800, 800)
+    assert core.ownership.owner is FanCommandOwner.NONE
+    assert not core.manual_armed
+    assert not core.auto_requested
+    assert core.ownership.authority_epoch is None
+    assert core.ownership.generation is None
+    assert core.ownership.last_command_sequence is None
+
+    assert core.update_fan_enabled(True, 0.2)
+    assert core.control_tick(0.2).state is FanControlState.SAFE_STOP
+    assert core.ownership.owner is FanCommandOwner.NONE
+    assert core.command_pwm == (800, 800)
+    if old_owner in (
+        FanCommandOwner.FLIGHT_RESERVED,
+        FanCommandOwner.FLIGHT_CONTROL,
+    ):
+        assert not core.prepare_flight_ownership(100, 2, now=0.3).success
 
 
 def test_independent_e_stop_requires_explicit_reset() -> None:

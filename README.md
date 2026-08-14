@@ -27,7 +27,9 @@ ownership client 或可执行 command publisher，不改变 v0.3.2 的电机、�
 分阶段验证协议见
 [v0.4.0 Hardware Verification Plan](docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md)。
 Gate A0/A1、normal controller 的 Gate B feedback baseline 和 Flight DRY_RUN 已通过；
-冷启动保持修复仍等待单独实机重试，第一次 bounded Flight takeover 保持暂停。
+冷启动当前位置保持的 B0 已通过。第一次 bounded Flight takeover 在 prepare 前因 fan
+manager 启动状态锁在 `DISABLED` 而停止；first-observation 软件修复已通过，但 B1
+仍只处于等待单独授权重试、尚非硬件 PASS。
 这些状态不构成任何后续硬件操作授权。
 
 仓库另提供默认禁用的 `bounded_verification_controller`，仅用于该计划中的受控
@@ -551,6 +553,13 @@ ros2 topic pub -r 10 /fans/pwm std_msgs/msg/Int32MultiArray \
 `command_timeout_sec` 必须是严格大于零的有限数值，非法值会在 GPIO 初始化前
 使节点构造失败，不能用 `0` 关闭看门狗。当前实际输出可从
 `/fans/status_pwm` 查看，底层接受状态可从 `/fans/enabled` 查看。
+
+manager 启动后、底层 `/fans/enabled` 首次真实观测到达前，会持续保持 stop PWM、
+`SAFE_STOP` 和 owner NONE；即使底层默认 3 秒解锁等待超过 enabled 的 1 秒运行期
+freshness timeout，也不会把“首观测尚未到达”误锁为 `DISABLED`。首个 fresh
+`enabled=true` 只建立无 owner 的 passive state，不会启动 MANUAL、AUTO 或 Flight。
+首个 false、任意无效观测，以及已经完成首观测后的 false/stale 仍 fail-closed 为
+sticky `DISABLED`，后到的 true 不会自动恢复；E-STOP 和 motor safety 保持更高优先级。
 
 ### 相对姿态、电机模式与风扇 AUTO
 

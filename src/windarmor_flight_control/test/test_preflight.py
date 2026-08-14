@@ -71,6 +71,44 @@ def test_healthy_complete_preflight_is_ready():
     assert result.reason is PreflightReason.READY
 
 
+def test_healthy_safe_stop_after_fan_startup_is_ready_without_bypass():
+    context = healthy_context()
+    context = replace(
+        context,
+        state=replace(
+            context.state,
+            fans=replace(context.state.fans, control_state="SAFE_STOP"),
+            system=replace(context.state.system, fan_control_state="SAFE_STOP"),
+        ),
+        fan_safety=replace(context.fan_safety, control_state="SAFE_STOP"),
+    )
+
+    result = evaluate_preflight(context)
+    assert result.ready
+    assert result.reason is PreflightReason.READY
+
+
+def test_genuine_disabled_fan_remains_rejected_by_existing_preflight():
+    context = healthy_context()
+    context = replace(
+        context,
+        state=replace(
+            context.state,
+            fans=replace(context.state.fans, control_state="DISABLED"),
+            system=replace(context.state.system, fan_control_state="DISABLED"),
+        ),
+        fan_safety=replace(
+            context.fan_safety,
+            control_state="DISABLED",
+            passive_for_takeover=False,
+        ),
+    )
+
+    result = evaluate_preflight(context)
+    assert not result.ready
+    assert result.reason is PreflightReason.FAN_NOT_PASSIVE
+
+
 @pytest.mark.parametrize(
     ("mutate", "reason"),
     [
