@@ -117,6 +117,23 @@ def test_inactive_configured_node_still_ingests_valid_measured_feedback():
     assert node._motor_feedback_received_at[4] == pytest.approx(10.0)
 
 
+def test_startup_hold_feedback_has_no_false_position_error_warning():
+    node, _state, _manager, monitor = system_with_monitor(motor_ids=(4,))
+    node._init_complete = True
+    node._current_targets = {4: 0.85}
+    node._desired_targets = {4: 0.85}
+    node._last_target_change_time = {4: 0.0}
+    node._logger.messages.clear()
+
+    monitor.on_motor_feedback(feedback(4, position_rad=0.85))
+
+    assert not any(
+        "位置偏差过大" in message
+        for level, message in node._logger.messages
+        if level == "warn"
+    )
+
+
 def test_initializing_fault_frame_is_cached_then_trips_fail_closed():
     node, state, _manager, monitor = system_with_monitor(motor_ids=(4, 3))
     node._is_active = False

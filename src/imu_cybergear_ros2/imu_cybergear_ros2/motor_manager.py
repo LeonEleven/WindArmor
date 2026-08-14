@@ -146,6 +146,7 @@ class MotorManager:
                     return False
                 try:
                     self._mark_init_touched(mid)
+                    feedback_generation_before = self._feedback_generation(mid)
                     self._current_init_stage = f"ID{mid}:run_mode"
                     if self._initialization_fault_latched():
                         return False
@@ -164,15 +165,22 @@ class MotorManager:
                         self._node._current_speeds[mid] = self._node._default_speed
                     self._node._sleep(0.08)
 
+                    self._current_init_stage = f"ID{mid}:measured_position"
+                    startup_target = self._startup_hold_position(
+                        mid, after_generation=feedback_generation_before
+                    )
+
                     self._current_init_stage = f"ID{mid}:target_position"
                     if self._initialization_fault_latched():
                         return False
                     with self._node._driver_io_lock:
-                        self._node._driver.write_sdo_float(mid, SDO_TARGET_POS, 0.0)
+                        self._node._driver.write_sdo_float(
+                            mid, SDO_TARGET_POS, startup_target
+                        )
                     with self._node._lock:
                         # _current_targets 始终表示最近一次成功写入驱动的位置目标。
-                        self._node._current_targets[mid] = 0.0
-                        self._node._desired_targets[mid] = 0.0
+                        self._node._current_targets[mid] = startup_target
+                        self._node._desired_targets[mid] = startup_target
                         self._node._last_target_change_time[mid] = time.monotonic()
                     self._node._sleep(0.08)
 
@@ -186,7 +194,10 @@ class MotorManager:
                     if mid not in self._init_successful_motor_ids:
                         self._init_successful_motor_ids.append(mid)
                     self._node._sleep(0.08)
-                    self._node.get_logger().info(f"电机 ID{mid} 初始化完成")
+                    self._node.get_logger().info(
+                        f"电机 ID{mid} 启动保持已从实测位置初始化: "
+                        f"{startup_target:.3f} rad"
+                    )
                     break
                 except Exception as exc:
                     if attempt < max_init_retry - 1:
@@ -229,6 +240,76 @@ class MotorManager:
             self._node._command_fault_active = False
         self._current_init_stage = "complete"
         return True
+
+    def _feedback_generation(self, motor_id: int) -> int:
+        with self._node._lock:
+            return int(
+                getattr(self._node, "_motor_feedback_generations", {}).get(
+                    motor_id, 0
+                )
+            )
+
+    def _startup_hold_position(
+        self, motor_id: int, *, after_generation: int
+    ) -> float:
+        """Return a new, validated type-2 position in native driver coordinates."""
+        with self._node._lock:
+            generation = int(
+                getattr(self._node, "_motor_feedback_generations", {}).get(
+                    motor_id, 0
+                )
+            )
+            status = getattr(self._node, "_motor_feedback", {}).get(motor_id)
+            received_at = getattr(
+                self._node, "_motor_feedback_received_at", {}
+            ).get(motor_id)
+
+        if generation <= after_generation or status is None or received_at is None:
+            raise RuntimeError(
+                f"电机 ID{motor_id} 在首次位置目标前没有新的合法 type-2 反馈"
+            )
+        if getattr(status, "motor_id", None) != motor_id:
+            raise RuntimeError(
+                f"电机 ID{motor_id} 启动反馈 ID 不匹配: "
+                f"{getattr(status, 'motor_id', None)!r}"
+            )
+
+        position = getattr(status, "position_rad", None)
+        if (
+            not isinstance(position, (int, float))
+            or isinstance(position, bool)
+            or not math.isfinite(float(position))
+        ):
+            raise RuntimeError(
+                f"电机 ID{motor_id} 启动反馈位置不是有限数值: {position!r}"
+            )
+        if int(getattr(status, "fault_flags", -1)) != 0:
+            raise RuntimeError(
+                f"电机 ID{motor_id} 启动反馈包含故障标志: "
+                f"{getattr(status, 'fault_flags', None)!r}"
+            )
+        temperature = getattr(status, "temperature", None)
+        critical = float(self._node._motor_temp_critical_deg_c)
+        if (
+            not isinstance(temperature, (int, float))
+            or isinstance(temperature, bool)
+            or not math.isfinite(float(temperature))
+            or float(temperature) >= critical
+        ):
+            raise RuntimeError(
+                f"电机 ID{motor_id} 启动反馈温度不可信或达到临界值: "
+                f"{temperature!r}"
+            )
+        mode = getattr(status, "mode", None)
+        if not isinstance(mode, int) or isinstance(mode, bool) or mode not in (0, 1, 2):
+            raise RuntimeError(
+                f"电机 ID{motor_id} 启动反馈设备状态非法: {mode!r}"
+            )
+        if self._initialization_fault_latched():
+            raise RuntimeError(
+                f"电机 ID{motor_id} 取得位置时已有安全故障锁存"
+            )
+        return float(position)
 
     def _initialization_fault_latched(self) -> bool:
         if getattr(self._node, "_transport_fault_active", False):

@@ -52,6 +52,7 @@ class FakeNode:
         self._command_failure_counts = {mid: 0 for mid in self._motor_ids}
         self._command_fault_active = False
         self._motor_protection_flags = {mid: False for mid in self._motor_ids}
+        self._motor_temp_critical_deg_c = 90.0
         self._default_speed = 10.0
         self._manual_speed_min = 0.5
         self._manual_speed_max = 20.0
@@ -94,8 +95,18 @@ class FakeNode:
         self._latest_pitch = 0.0
         self._selected_motor_id = self._motor_ids[0]
         self._motor_feedback = {}
+        self._motor_feedback_received_at = {}
+        self._motor_feedback_generations = {}
         self.timers = []
         self.destroyed_timers = []
+        self._driver.register_feedback_callback(self._cache_feedback)
+
+    def _cache_feedback(self, status):
+        self._motor_feedback[status.motor_id] = status
+        self._motor_feedback_received_at[status.motor_id] = 1.0
+        self._motor_feedback_generations[status.motor_id] = (
+            self._motor_feedback_generations.get(status.motor_id, 0) + 1
+        )
 
     def get_logger(self):
         return self._logger

@@ -25,8 +25,10 @@ ownership client 或可执行 command publisher，不改变 v0.3.2 的电机、�
 或安全运行语义。Flight takeover 当前只经过 pure/fake/in-memory 软件验证，真实
 方向、机械动态、通信 timing、PWM/ESC 和联合接管均未实机验证。
 分阶段验证协议见
-[v0.4.0 Hardware Verification Plan](docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md)；
-其状态为 `PLANNED / NOT YET EXECUTED`，且不构成任何硬件操作授权。
+[v0.4.0 Hardware Verification Plan](docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md)。
+Gate A0/A1、normal controller 的 Gate B feedback baseline 和 Flight DRY_RUN 已通过；
+冷启动保持修复仍等待单独实机重试，第一次 bounded Flight takeover 保持暂停。
+这些状态不构成任何后续硬件操作授权。
 
 仓库另提供默认禁用的 `bounded_verification_controller`，仅用于该计划中的受控
 实机验证。它先从当前 authority session 的新鲜、合法、健康电机反馈捕获相对
@@ -238,11 +240,19 @@ E-STOP、ERROR、transport fault、deactivate、cleanup 和 shutdown 后均不�
 电机固件的过流 fault bit。软件没有、也不允许从 `torque_nm` 或原始力矩推导
 电流。
 
-初始化仍按既有策略为每台电机写入目标位置 `0.0`。只有速度、目标和进入运控
-模式各自成功后才提交相应软件状态；后续电机最终失败时，会按已触及电机的反向
-顺序尽力停止、关闭驱动、销毁已创建 ROS 资源并返回配置失败。连接失败同样会
-关闭驱动并释放资源。配置失败、`on_cleanup()` 与 `on_shutdown()` 共用幂等释放
-流程；单项释放失败会记录阶段、资源或电机 ID，并继续执行剩余清理。
+CyberGear 的机械零位会在电机动力掉电后丢失。normal controller 冷启动时，每台
+电机先通过 `run_mode`/`limit_spd` 的通信类型 18 应答取得并验证本次 type-2 实测位置，
+再把首次 `loc_ref` 写成同一 CyberGear 原生坐标值，仅保持上电时的当前物理姿态；
+`motor_signs` 不会在这条 driver-to-driver 保持路径上重复应用。若没有本次新鲜合法
+反馈，或反馈 ID、位置、设备状态、故障位、温度不可信，configure 失败并回滚，绝不
+fallback 到 `0.0`，也不会自动 set-zero。成功后 `current_targets`、`desired_targets`
+和 idle feedback probe 都从同一保持值开始。
+
+只有速度、保持目标和进入运控模式各自成功后才提交相应软件状态；后续电机最终
+失败时，会按已触及电机的反向顺序尽力停止、关闭驱动、销毁已创建 ROS 资源并返回
+配置失败。连接失败同样会关闭驱动并释放资源。配置失败、`on_cleanup()` 与
+`on_shutdown()` 共用幂等释放流程；单项释放失败会记录阶段、资源或电机 ID，并继续
+执行剩余清理。
 
 ### 电机配置与状态转换契约
 
@@ -349,9 +359,11 @@ ros2 launch windarmor_bringup windarmor.launch.py
 仅执行 `windarmor.launch.py` 不会立即进入最终联动：电机初始化后默认处于
 MANUAL，风扇 AUTO 也默认关闭。启动后按以下顺序操作。
 
-1. 在机械中位保持 IMU 和机器人静止。注意控制器配置阶段会给四个电机写入
-   目标位置 0；如果机构不在已标定零位，电机可能在进入 AUTO 前就向零位
-   修正。
+1. 保持 IMU 和机器人静止。控制器配置阶段会先保持四台电机的本次实测当前位置，
+   不会把当前位置自动定义为零。若 CyberGear motor bus 自上次显式 set-zero 后发生过
+   动力掉电，先确认机器人处于正确物理 reference posture，再显式调用
+   `/motors/set_zero`；完成该步骤前不要运行依赖准确机械坐标的 MANUAL/AUTO/HOME/
+   Flight 动作。Raspberry Pi 单独掉电不等同于 CyberGear 零位必然丢失。
 2. 在第二个终端加载环境：
 
 ```bash

@@ -1,177 +1,133 @@
-# 最新反馈：v0.4.0 Task 6.2.2 Motor Feedback Acquisition Fix
+# 最新反馈：v0.4.0 Task 6.2.3 Cold-start Hold-current Motor Initialization
 
 > 本文件只保留当前最新任务反馈。
 >
-> 日期：2026-08-13
+> 日期：2026-08-14
 
 ## Root Cause
 
-真实 Gate A passive observation 已确认：CAN transport connected，但四台 CyberGear 在
-零 host command TX 下均持续 `has_feedback=false`。真实 Gate B baseline 随后确认
-normal controller 可完成 ID4/3/2/1 初始化、进入 `MANUAL_RUNNING` 并保持，但
-`/motors/feedback` 仍永久没有 feedback。
+CyberGear 官方手册明确说明通信类型 6 设置的机械零位“掉电丢失”。这里的关键事件是
+CyberGear motor power loss，不能把 Raspberry Pi 单独掉电描述成电机零位必然丢失。
+软件也无法从一个合法当前位置判断机器人是否正处于项目机械零位，因此 cold startup
+不能自动 set-zero。
 
-代码审计确认两层原因：
+真实 Gate B normal feedback baseline 观察到启动前位置约为：
 
-1. `on_configure()` 先注册 driver feedback callback，再调用
-   `connect_and_init_motors()`；初始化中的通信类型 18 `loc_ref` 写入以及 enable 等命令
-   可能立即收到 type-2 response，但此时 lifecycle 尚未执行 `on_activate()`，所以
-   `node._is_active == false`。
-2. `SafetyMonitor.on_motor_feedback()` 原先在 `_is_active == false` 时直接 return，导致
-   回调已经收到的真实 measured frame 没有进入 `_motor_feedback` 和本地 monotonic
-   receive-time cache。即使只保存一次初始化反馈，实机 idle/hold 又没有持续 spontaneous
-   0x02，因此它也会很快变 stale。
+```text
+ID4 target=0.000, actual≈0.845 rad
+ID3 target=0.000, actual≈0.747 rad
+ID2 target=0.000, actual≈0.910 rad
+```
 
-修改代码前新增 fake regression：fake driver 在 configure 写 `SDO_TARGET_POS` 时同步返回
-合法 type-2。baseline 稳定失败，回调到达但 cache 为 `set()`；修复后同一测试确认
-ID4/3/2/1 全部进入 cache。
+旧初始化顺序先写 `run_mode` 和 `limit_spd`，随后无条件写
+`loc_ref=0.0`，最后进入 control mode。CyberGear 手册 4.1.9 规定通信类型 18 单参数
+写入应答为完整通信类型 2；Task 6.2.2 已使 configure 阶段的合法 type-2 进入 measured
+feedback cache。因此旧代码在第一次位置目标之前已经具备取得真实位置的协议路径，却
+没有使用它，导致掉电后可能主动运动到已失效的内部零点。
 
-## Protocol Review
-
-本次重新检查了：
-
-- `reference/document/CyberGear/CyberGear微电机使用说明书.pdf` 第 4.1、4.2 节；
-- `reference/document/CyberGear/串口转CAN AT指令表V1.1.pdf` 的 AT 模式扩展帧格式；
-- `reference/document/CyberGear/USB-CAN适配器说明书 V1.2.pdf` 的 2.0B、1 Mbps 与扩展帧说明；
-- 本地 `reference/code/imu_cybergear_2.0_ros2_ws`；
-- 只读远端 `https://github.com/LeonEleven/imu_cybergear_2.0_ros2_ws`。
-
-确认的协议事实：
-
-- CyberGear 使用 CAN 2.0 扩展帧、1 Mbps；发送 ID 是
-  `(communication_type << 24) | (master_id << 8) | motor_id`。
-- type-2 response ID 的 bit8–15 是 motor ID、bit16–21 是 fault、bit22–23 是 device
-  mode、bit0–7 是 master ID；payload 是大端 position/velocity/torque/temperature 四个
-  `uint16`。
-- 手册 4.1.9 明确 type-18 单参数写入应答为完整 type-2。当前 position mode 已使用
-  `0x7016 loc_ref`，payload 是 little-endian index、两个零字节和 little-endian float。
-- type-17 request 使用同一 extended-ID 布局，payload byte0–1 为 little-endian index，
-  byte2–7 为零；response 交换 motor/master 位置，byte4–7 返回参数值。
-- `0x7019 mechPos`、`0x701A iqf`、`0x701B mechVel`、`0x701C VBUS` 存在，但手册注明
-  `0x7019–0x7020` 只在 firmware 1.2.1.5 可读。本任务没有查询真实 firmware。
-
-前置项目同样只有 type-2 reader、type-18 SDO write 和 `_is_active` feedback guard，
-没有可直接采用的持续 status request。最终选择 Option A：在 normal controller active、
-当前 owner 仍合法时，重发严格等于最近成功提交的当前 hold target 的 `loc_ref`，利用
-documented type-18 -> type-2 response。它提供 Flight 当前需要的全部 position、velocity、
-torque、temperature、device mode 和 fault fields。
-
-未采用的方案：
-
-- passive zero-TX：实机已证明没有 spontaneous 0x02，不再是 release requirement；
-- type-17：真实 firmware 能力未知，而且不能单独提供完整 temperature/fault/mode/torque；
-- enable、stop、set-zero、type-1：会改变运行状态、机械零位或控制语义，不符合本任务；
-- 扩大 driver/authority architecture：没有必要。
+修改代码前增加了 fake reproduction：ID4/3/2/1 分别返回
+`0.85/0.74/0.91/0.42 rad`，旧代码仍把四台首次位置目标全部写成 `0.0`。测试按新安全
+要求断言后稳定得到 1 failed，明确证明 measured position 与 startup commanded target
+不一致。
 
 ## Implementation
 
 修改文件：
 
-- `src/imu_cybergear_ros2/imu_cybergear_ros2/safety_monitor.py`；
-- `src/imu_cybergear_ros2/imu_cybergear_ros2/motor_manager.py`；
-- `src/imu_cybergear_ros2/imu_cybergear_ros2/motor_config.py`；
 - `src/imu_cybergear_ros2/imu_cybergear_ros2/imu_motor_controller_node.py`；
-- `src/imu_cybergear_ros2/config/imu_cybergear_params.yaml`；
-- `src/imu_cybergear_ros2/test/test_motor_config.py`；
-- `src/imu_cybergear_ros2/test/test_motor_manager.py`；
-- `src/imu_cybergear_ros2/test/test_motor_ownership.py`；
+- `src/imu_cybergear_ros2/imu_cybergear_ros2/motor_manager.py`；
+- `src/imu_cybergear_ros2/imu_cybergear_ros2/safety_monitor.py`；
+- `src/imu_cybergear_ros2/test/fake_motor_driver.py`；
+- `src/imu_cybergear_ros2/test/test_motor_lifecycle.py`；
+- `src/imu_cybergear_ros2/test/test_motor_reliability.py`；
 - `src/imu_cybergear_ros2/test/test_motor_safety.py`；
 - `src/imu_cybergear_ros2/test/test_structured_feedback_node.py`；
+- `src/imu_cybergear_ros2/test/test_transport_lifecycle.py`；
 - `README.md`；
-- `docs/FLIGHT_CONTROL_ARCHITECTURE.md`；
-- `docs/FLIGHT_CONTROL_API.md`；
 - `docs/HARDWARE_REFERENCE.md`；
 - `docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md`；
 - `docs/LATEST_FEEDBACK.md`。
 
-反馈 ingestion 不再与 lifecycle active gate 绑定：完整合法 frame 会以 callback 本地
-monotonic receive time 更新 measured cache。invalid frame 仍不覆盖最新合法 frame；
-INITIALIZING/inactive configured 状态的 fault bit、连续 invalid 和 critical temperature
-仍可触发既有 stop + ERROR。初始化流程新增 feedback-safety latch 检查，已锁存时停止
-后续初始化命令并进入事务式 rollback；SHUTTING_DOWN/UNINITIALIZED 不启动新的 safety
-action。
+每台电机每次初始化 attempt 开始时记录该 ID 的合法 feedback generation。随后仍沿用
+当前 communication path 写 `SDO_RUN_MODE` 和 `SDO_TARGET_SPEED`；两者都是 type-18，
+其 type-2 response 由既有 SafetyMonitor 完整校验并进入 cache。第一次
+`SDO_TARGET_POS` 前必须取得 generation 更新后的同 ID feedback，且同时满足：
 
-active 后创建独立 10 Hz feedback acquisition timer。每个 tick 只在以下条件全部成立时
-发送：node active/running、init complete、无 command/safety/transport latch、state 与
-MANUAL/LEGACY_AUTO/FLIGHT owner 一致、四台 current target 完整。Flight owner 还必须已
-接受当前 generation 的首条 normal command。每次 I/O 前重新核对 owner 和同值 target。
+- cache、local receive time 和 position 均存在；
+- feedback motor ID 与当前 configured motor 完全一致；
+- position 是有限数值；
+- device mode 属于协议允许集合；
+- fault flags 为零；
+- temperature 有限且低于 critical threshold；
+- motor safety 与 transport latch 均未触发。
 
-probe 只调用既有 `write_sdo_float(ID, 0x7016, exact_current_target)`，不走 target commit，
-所以不改变 `current_targets`、`desired_targets`、speed、last accepted Flight sequence、
-run mode 或 ownership。deactivate/cleanup/shutdown 在关闭 driver 前销毁 timer；E-STOP、
-ERROR、transport fault、reconnect-locked、reserved/NONE owner 和 revoked generation 均不
-发送。probe write failure 复用既有 position-command fail-closed ERROR、全电机 best-effort
-stop 和 transport event/reconnect-locked 路径。
+任一条件不满足都会使该 attempt 失败；最终 configure 失败并走既有反向 rollback。
+没有 `0.0`、软限位中点、旧进程 target、旧 Flight target 或磁盘值 fallback，也没有
+自动 set-zero。
 
-## Safety
+成功时 `startup_target` 直接使用 `MotorStatus.position_rad`，再写入同一 driver API 的
+`loc_ref`。反馈与 target 都是 CyberGear 原生坐标，因此不乘 `motor_signs`；这避免
+negative-sign motor 被重复变换。fake regression 同时覆盖配置 sign 为负的 ID4/ID2 和
+sign 为正的 ID3/ID1，并证明四台 first target 都严格等于各自 measured position。
 
-- 没有启动 hardware node/launch，没有访问 `/dev/*`、真实 serial、SocketCAN、can10、
-  CyberGear、GPIO12/13、PWM 或 ESC；没有给 motor/fan 通电。
-- probe 值严格等于当前 authoritative committed target；没有用 0、configured value 或
-  target 伪造 measured feedback。
-- 没有改变 run mode、enable/recover、set-zero、HOME、MANUAL/AUTO 默认语义。
-- invalid/fault/temperature、position monitoring、ERROR latch、E-STOP、transport fault、
-  reconnect locked、no automatic recovery 均未弱化。
-- owner revoke/safe-stop 后不继续 probe；新 Flight generation 的首条 normal command 前
-  不读取或重放旧 Flight target。
-- 没有新增 `current_a`，没有把 `iqf` 或 torque 伪装成 current。
-- `motor_feedback_timeout_sec=0.0` 未改变；Flight observer freshness 未放宽或关闭。
-- `flight_takeover_enabled=false` 默认未改变。
-- motor IDs、names、signs、limits 和三种 legacy motion speed 未改变。
+首次 target write 成功后，`current_targets`、`desired_targets` 和 target timestamp 同步
+提交为该 measured hold value。active 后 Task 6.2.2 的 periodic same-target probe 因而
+重发同一 startup hold，而不是回到零。每次 lifecycle configure 都清空 feedback cache
+和 per-motor generation，必须从本次新 response 建立 baseline。
 
-## FlightRuntimeStatus CLI
+正常日志使用“启动保持已从实测位置初始化”，不描述为 zero calibration。
 
-`FlightRuntimeStatus.msg`、`CMakeLists.txt` 的 `rosidl_generate_interfaces`、package export、
-install 中的 `.msg/.idl/.json`、C/C++ headers、Python module/typesupport 均存在且可加载。
-以下检查通过：
+## Compatibility
 
-```bash
-ros2 interface show windarmor_interfaces/msg/FlightRuntimeStatus
-ros2 interface list | rg 'windarmor_interfaces/msg/FlightRuntimeStatus'
-python3 -c "from rosidl_runtime_py.utilities import get_message; get_message('windarmor_interfaces/msg/FlightRuntimeStatus')"
-```
-
-Jazzy 的显式 type 参数语法本身有效；在当前 rebuild + source 环境中原命令不再返回
-`The passed message type is invalid`。因此没有 message/package/install bug，历史现象是
-运行该 CLI 的终端使用了 stale 或未重新 source 的 workspace overlay。正确恢复与观察：
-
-```bash
-source /opt/ros/jazzy/setup.bash
-colcon build --symlink-install
-source install/setup.bash
-ros2 interface show windarmor_interfaces/msg/FlightRuntimeStatus
-ros2 topic type /flight_control/dry_run/status
-ros2 topic echo /flight_control/dry_run/status
-```
-
-hardware plan 已改为先检查 topic type，再由 `echo` 自动推断，避免手工 type 与旧环境混淆。
+- **Task 6.2.2 acquisition：** active periodic probe 保持原 owner、generation、latch 和
+  lifecycle gates，只把初始 authoritative target 从固定零改为 measured hold。
+- **MANUAL：** 首条 operator target 仍按既有 absolute target、soft limit 和统一推进器
+  contract 替换 hold。
+- **AUTO：** 姿态目标生成、`motor_signs`、gain、速度和软限位未改变。
+- **HOME：** 仍是 operator 请求后按既有 HOME speed 向软件零位推进；cold power cycle
+  后必须先由 operator 确认姿态并显式 set-zero。
+- **set-zero：** `/motors/set_zero` 和键盘 `x` 协议未改变。fake 验证从非零 startup hold
+  显式 set-zero 后，measured coordinate、current target 和 desired target 都同步为零。
+- **E-STOP / ERROR：** 既有 latch、stop batch、禁止自动恢复和 position-error monitor
+  保持；启动 target 与 measured 相同，不再制造虚假的初始大位置偏差。
+- **transport / reconnect：** feedback 建立前或初始化中 transport fault 继续 configure
+  failure + rollback；runtime reconnect 仍只恢复 transport 并保持 ERROR，不初始化电机、
+  不恢复旧 target。
+- **Flight：** ControllerState、CommandAuthority、owner reserve/commit/revoke、Flight API、
+  bounded verification controller 和 `flight_takeover_enabled=false` 默认值均未改变；旧
+  Flight target 不跨 cleanup/reconfigure 复用。
+- **fans：** fan subsystem、GPIO12/13、PWM、ESC 和相关配置均未修改。
 
 ## Tests
 
-根因修复前 regression reproduction：
+修改前 reproduction：
 
 ```bash
 source /opt/ros/jazzy/setup.bash
 source install/setup.bash
 python3 -m pytest -p no:cacheprovider \
-  src/imu_cybergear_ros2/test/test_structured_feedback_node.py::test_configure_feedback_response_populates_observation_cache -q
+  src/imu_cybergear_ros2/test/test_structured_feedback_node.py::test_cold_start_first_position_target_holds_each_measured_position -q
 ```
 
-结果：1 failed；callback 收到 frame，但 `_motor_feedback == {}`。修复后：1 passed。
+旧代码结果：1 failed；measured 为 `{4: 0.85, 3: 0.74, 2: 0.91, 1: 0.42}`，first targets
+为 `{4: 0.0, 3: 0.0, 2: 0.0, 1: 0.0}`。修复后同一测试通过。
 
 专项回归：
 
 ```bash
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
 python3 -m pytest -p no:cacheprovider \
-  src/imu_cybergear_ros2/test/test_motor_config.py \
-  src/imu_cybergear_ros2/test/test_motor_manager.py \
+  src/imu_cybergear_ros2/test/test_structured_feedback_node.py \
+  src/imu_cybergear_ros2/test/test_motor_lifecycle.py \
   src/imu_cybergear_ros2/test/test_motor_safety.py \
-  src/imu_cybergear_ros2/test/test_motor_ownership.py \
-  src/imu_cybergear_ros2/test/test_structured_feedback.py \
-  src/imu_cybergear_ros2/test/test_structured_feedback_node.py -q
+  src/imu_cybergear_ros2/test/test_transport_lifecycle.py -q
 ```
 
-结果：133 passed。
+结果：80 passed。覆盖 non-zero/all-four/sign、first target、no-zero fallback、no feedback、
+missing/NaN/Inf position、ID mismatch、invalid mode、fault、critical temperature、software
+bookkeeping、same-target probe、set-zero、position-error、transport failure、reconnect lock、
+first/middle/last rollback、cleanup 和 fresh reconfigure baseline。
 
 规定的完整验证：
 
@@ -180,7 +136,6 @@ source /opt/ros/jazzy/setup.bash
 colcon build --symlink-install
 source install/setup.bash
 python3 -m pytest src/imu_cybergear_ros2/test -q
-python3 -m pytest src/windarmor_flight_control/test -q
 colcon test --packages-select \
   imu_cybergear_ros2 windarmor_fan_controller windarmor_interfaces \
   windarmor_flight_control windarmor_bringup
@@ -190,19 +145,16 @@ colcon test-result --verbose
 
 结果：
 
-- build：5 packages finished；
-- motor pytest：415 passed；
-- Flight pytest：248 passed；
-- manual colcon：811 tests、0 errors、0 failures、0 skipped；
-- isolated CI：exit 0；safety/whitespace/compile/build 全部通过；motor 415 passed、fan
-  112 passed、Flight + interfaces 256 passed；最终 811 tests、0 errors、0 failures、
+- manual build：5 packages finished；
+- motor pytest：431 passed；
+- manual colcon：827 tests、0 errors、0 failures、0 skipped；
+- isolated CI：exit 0；safety、whitespace、compile、五包 build 全部通过；motor 431 passed、
+  fan 112 passed、Flight + interfaces 256 passed；最终 827 tests、0 errors、0 failures、
   0 skipped；
-- `windarmor_interfaces/test/test_message_contract.py`：8 passed；
-- warnings/skipped：无测试 warning，无 skipped。受限 sandbox 中一次无 publisher 的
-  `ros2 topic echo --timeout` 输出本地 RMW 网络权限诊断，但没有 type-invalid，且不属于
-  产品/测试失败。
+- test warnings/skipped：无 pytest warning，无 skipped。受限 sandbox 中部分进程内 ROS
+  lifecycle 测试会输出本地 RMW/getifaddrs 权限诊断，但不访问硬件且不构成测试失败。
 
-所有测试只使用 pure/fake/mock/in-memory 路径，不是实机验证。
+全部验证只使用 pure/fake/mock/in-memory 路径，不是实机验证。
 
 ## Hardware Status
 
@@ -210,35 +162,53 @@ colcon test-result --verbose
 Gate A0: PASS
 Gate A1: PASS
 
-Passive zero-TX motor observation:
-NOT SUPPORTED / NOT REQUIRED
+Task 6.2.2:
+SOFTWARE + HARDWARE PASS
 
-Gate B baseline:
+Gate B feedback baseline:
+PASS
+
+Gate B Flight DRY_RUN:
+PASS
+
+Cold-start hold-current fix:
+SOFTWARE READY
+HARDWARE RETRY REQUIRED
+
+Flight bounded takeover:
 PAUSED
-
-After this software fix:
-READY FOR SEPARATE HARDWARE RETRY
 ```
 
-没有自动运行 Gate B retry，不能写 hardware PASS。持续 type-2 acquisition、实际总线
-timing、无可观察运动和长期稳定性仍等待独立带电验证。
+```text
+cold-start hardware retry:
+NOT EXECUTED
+```
+
+本任务没有启动 hardware node/launch，没有访问 `/dev/*`、真实 serial、SocketCAN、
+can10、CyberGear、GPIO12/13、PWM 或 ESC，也没有给 motor/fan 通电。只能报告：
+
+```text
+READY FOR COLD-START HARDWARE RETRY
+```
 
 ## Next Step
 
 ```text
-NEXT:
-Gate B baseline hardware retry
+Cold-start Hold-current Verification
 ```
 
-执行前必须再次向用户列出并确认：需要通电的 Raspberry Pi/IMU/CAN 与 CyberGear motor
-bus、保持断电的 fan/ESC、exact commands、预期输出、PASS/FAIL、预计动作/方向/限制/
-持续时间、急停方法、立即停止条件和恢复断电顺序。本任务不自动执行 retry。
+该验证只确认 controller 启动后保持 motor power-on 时的当前位置，不主动移动到零。
+通过后 operator 确认机器人处于正确 physical reference posture，显式执行 set-zero，
+确认四轴 feedback 接近零，再准备第一次 bounded Flight takeover。不需要重跑完整 Gate A
+或旧 Gate B feedback baseline。
 
-## Git 状态（反馈生成时）
+该实机步骤必须等待用户单独授权，并重新列出十项带电门槛；本任务未自动执行。
 
-- HEAD：`9f2b3f5c8736838884f96125c329575a7ad2bd61`；
+## Git
+
+- HEAD：`f5f58fb88ac5c523f780911e9d3941ad5832a187`；
 - branch：`master...origin/master`，无已知 ahead/behind；
-- working tree：dirty，包含本 Task 的 source/config/tests/docs 修改，以及任务开始前用户
+- working tree：dirty，包含本 Task 的 source/tests/README/docs 修改，以及任务开始前用户
   已有的 `docs/NEXT_COMMAND.md` 修改；该用户文件保持未编辑；
 - `git diff --check`：通过；
 - commit/push/tag：未执行；

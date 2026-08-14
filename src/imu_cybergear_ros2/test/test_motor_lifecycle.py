@@ -239,12 +239,46 @@ def test_reconfigure_replaces_feedback_health_session_and_callbacks():
         assert not node._motor_safety_fault_active
         assert not any(node._motor_protection_flags.values())
         assert all(
-            not item.has_feedback
+            item.has_feedback
             for item in second_health.freshness_snapshot(now=10**9)
         )
+        assert set(node._motor_feedback_generations) == {4, 3, 2, 1}
         assert node.on_cleanup(None) == TransitionCallbackReturn.SUCCESS
         assert_fully_released(node, second)
     finally:
+        node.destroy_node()
+
+
+def test_reconfigure_uses_new_measured_baseline_and_never_reuses_old_targets():
+    first_positions = {4: 0.85, 3: 0.74, 2: 0.91, 1: 0.42}
+    second_positions = {4: 0.31, 3: -0.22, 2: 0.18, 1: 0.63}
+    first = FakeMotorDriver(feedback_positions=first_positions)
+    second = FakeMotorDriver(feedback_positions=second_positions)
+    node = ImuMotorControllerNode(
+        driver_factory=DriverFactory([first, second]),
+        sleep_fn=lambda _seconds: None,
+    )
+    try:
+        assert node.on_configure(None) == TransitionCallbackReturn.SUCCESS
+        assert node._current_targets == first_positions
+        with node._lock:
+            node._current_targets = {motor_id: -0.7 for motor_id in node._motor_ids}
+            node._desired_targets = {motor_id: 0.7 for motor_id in node._motor_ids}
+        assert node.on_cleanup(None) == TransitionCallbackReturn.SUCCESS
+
+        assert node.on_configure(None) == TransitionCallbackReturn.SUCCESS
+        assert node._current_targets == second_positions
+        assert node._desired_targets == second_positions
+        assert {
+            motor_id: node._motor_feedback[motor_id].position_rad
+            for motor_id in node._motor_ids
+        } == second_positions
+        assert node._motor_feedback_generations == {
+            motor_id: 1 for motor_id in second_positions
+        }
+        assert node.on_cleanup(None) == TransitionCallbackReturn.SUCCESS
+    finally:
+        node.on_cleanup(None)
         node.destroy_node()
 
 
@@ -296,6 +330,38 @@ def test_configure_failure_rolls_back_touched_motors_driver_and_ros_resources(
                 }
                 for call in driver.calls
             )
+    finally:
+        node.destroy_node()
+
+
+@pytest.mark.parametrize(
+    ("feedback_motor_ids", "missing_motor_id", "expected_stops"),
+    [
+        (set(), 4, [4]),
+        ({4}, 3, [3, 4]),
+        ({4, 3, 2}, 1, [1, 2, 3, 4]),
+    ],
+    ids=["first_motor", "middle_motor", "last_motor"],
+)
+def test_missing_startup_feedback_rolls_back_first_middle_and_last_motor(
+    feedback_motor_ids, missing_motor_id, expected_stops
+):
+    driver = FakeMotorDriver(feedback_motor_ids=feedback_motor_ids)
+    node = ImuMotorControllerNode(
+        driver_factory=DriverFactory([driver]), sleep_fn=lambda _seconds: None
+    )
+    try:
+        assert node.on_configure(None) == TransitionCallbackReturn.FAILURE
+        assert operation_motor_ids(driver, "stop_motor") == expected_stops
+        assert not any(
+            operation == "write_sdo_float"
+            and motor_id == missing_motor_id
+            and index == SDO_TARGET_POS
+            for operation, motor_id, index, _value in driver.calls
+        )
+        assert_fully_released(node, driver)
+        assert node.on_cleanup(None) == TransitionCallbackReturn.SUCCESS
+        assert driver.close_attempts == 1
     finally:
         node.destroy_node()
 

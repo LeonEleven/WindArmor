@@ -3,6 +3,8 @@
 from collections import Counter
 from threading import Event, Lock
 
+from imu_cybergear_ros2.cybergear_driver import MotorStatus, SDO_RUN_MODE
+
 
 class FakeMotorDriver:
     def __init__(
@@ -13,6 +15,9 @@ class FakeMotorDriver:
         close_failure=False,
         blockers=None,
         reconnect_results=None,
+        auto_feedback=True,
+        feedback_positions=None,
+        feedback_motor_ids=None,
         **_kwargs,
     ):
         self.backend_name = "fake"
@@ -21,6 +26,11 @@ class FakeMotorDriver:
         self.close_failure = close_failure
         self.blockers = dict(blockers or {})
         self.reconnect_results = list(reconnect_results or ())
+        self.auto_feedback = auto_feedback
+        self.feedback_positions = dict(feedback_positions or {})
+        self.feedback_motor_ids = (
+            None if feedback_motor_ids is None else set(feedback_motor_ids)
+        )
         self.calls = []
         self.counts = Counter()
         self.feedback_callback = None
@@ -119,6 +129,26 @@ class FakeMotorDriver:
 
     def write_sdo_int(self, motor_id, index, value):
         self._call("write_sdo_int", motor_id, index, value)
+        if (
+            self.auto_feedback
+            and index == SDO_RUN_MODE
+            and (
+                self.feedback_motor_ids is None
+                or motor_id in self.feedback_motor_ids
+            )
+        ):
+            self.emit_feedback(
+                MotorStatus(
+                    motor_id=motor_id,
+                    position_rad=self.feedback_positions.get(motor_id, 0.0),
+                    speed_rad_s=0.0,
+                    torque_nm=0.0,
+                    temperature=25.0,
+                    mode=0,
+                    fault_flags=0,
+                    timestamp=1.0,
+                )
+            )
 
     def write_sdo_float(self, motor_id, index, value):
         self._call("write_sdo_float", motor_id, index, value)
@@ -131,6 +161,7 @@ class FakeMotorDriver:
 
     def set_zero(self, motor_id):
         self._call("set_zero", motor_id)
+        self.feedback_positions[motor_id] = 0.0
 
     def close(self):
         self.close_attempts += 1

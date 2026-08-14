@@ -311,6 +311,7 @@ class ImuMotorControllerNode(LifecycleNode):
         self._selected_motor_id = 1
         self._motor_feedback = {}
         self._motor_feedback_received_at: Dict[int, float] = {}
+        self._motor_feedback_generations: Dict[int, int] = {}
         self._motor_feedback_structured_sequence = 0
         # This sequence spans lifecycle reconfigure within the same process so
         # observers never accept an old safety snapshot as a new one.
@@ -672,6 +673,7 @@ class ImuMotorControllerNode(LifecycleNode):
         self._selected_motor_id = 1 if 1 in self._motor_ids else self._motor_ids[0]
         self._motor_feedback = {}
         self._motor_feedback_received_at = {}
+        self._motor_feedback_generations = {}
         self._motor_feedback_structured_sequence = 0
         self._motor_protection_flags = {
             motor_id: False for motor_id in self._motor_ids
@@ -914,6 +916,7 @@ class ImuMotorControllerNode(LifecycleNode):
             self._key_to_motor = {}
             self._motor_feedback = {}
             self._motor_feedback_received_at = {}
+            self._motor_feedback_generations = {}
             self._motor_protection_flags = {}
             self._motor_temperature_warning_flags = {}
             self._state_mgr = None

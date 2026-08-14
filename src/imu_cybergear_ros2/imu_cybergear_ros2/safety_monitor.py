@@ -193,6 +193,13 @@ class SafetyMonitor:
                     received_times = {}
                     self._node._motor_feedback_received_at = received_times
                 received_times[mid] = received_at
+                generations = getattr(
+                    self._node, "_motor_feedback_generations", None
+                )
+                if generations is None:
+                    generations = {}
+                    self._node._motor_feedback_generations = generations
+                generations[mid] = generations.get(mid, 0) + 1
                 warning_flags = getattr(
                     self._node, "_motor_temperature_warning_flags", None
                 )

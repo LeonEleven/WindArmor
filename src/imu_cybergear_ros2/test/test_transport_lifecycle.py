@@ -12,7 +12,7 @@ from imu_cybergear_ros2.controller_state import (
     TransitionReason,
     TransitionSource,
 )
-from imu_cybergear_ros2.cybergear_driver import MotorStatus
+from imu_cybergear_ros2.cybergear_driver import MotorStatus, SDO_TARGET_POS
 from imu_cybergear_ros2.imu_motor_controller_node import ImuMotorControllerNode
 from imu_cybergear_ros2.motor_motion import MotionSource
 from imu_cybergear_ros2.transport_recovery import (
@@ -176,6 +176,35 @@ def test_transport_fault_during_initial_configure_rolls_back_without_runtime_rec
         assert not any(call[0] == "connect_once" for call in driver.calls)
         assert driver.transport_event_callback is None
         assert driver.close_attempts == 1
+    finally:
+        node.destroy_node()
+
+
+def test_transport_fault_before_startup_feedback_never_writes_position_target():
+    driver = FakeMotorDriver(auto_feedback=False)
+    emitted = False
+
+    def disconnect_after_first_request(_seconds):
+        nonlocal emitted
+        if not emitted:
+            emitted = True
+            driver.emit_transport_event(transport_event(driver))
+
+    node = ImuMotorControllerNode(
+        driver_factory=DriverFactory([driver]),
+        sleep_fn=disconnect_after_first_request,
+    )
+    try:
+        assert node.on_configure(None) == TransitionCallbackReturn.FAILURE
+        assert not any(
+            operation == "write_sdo_float" and index == SDO_TARGET_POS
+            for operation, _motor_id, index, _value in driver.calls
+        )
+        assert not any(call[0] == "connect_once" for call in driver.calls)
+        assert [
+            call[1] for call in driver.calls if call[0] == "stop_motor"
+        ] == [4]
+        assert driver.transport_event_callback is None
     finally:
         node.destroy_node()
 

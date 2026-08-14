@@ -65,12 +65,38 @@ CyberGear 手册 4.1.9 规定通信类型 18 单参数写入应答为通信类�
 速度、力矩、温度、device mode 和 fault bits 的完整 0x02。软件 fake regression 已证明
 该 probe 不修改 target、不切换模式、不 enable/recover/set-zero，也不会在 revoked
 Flight generation、E-STOP、ERROR、transport fault 或 inactive lifecycle 下发送；真实
-持续反馈效果等待独立 Gate B baseline retry，尚不能写作 hardware PASS。
+Gate B feedback baseline 已确认四台电机持续反馈均为 valid、fresh、healthy 且
+`fault_flags=0`。
 
 手册 4.1.8 另定义通信类型 17 单参数读取，4.1.12 列出 `0x7019 mechPos`、
 `0x701A iqf`、`0x701B mechVel`、`0x701C VBUS`，但注明 `0x7019–0x7020` 只在
 1.2.1.5 固件可读。本任务未查询真实固件，且 type-17 单独不能提供完整 temperature、
 fault flags、device mode 和 torque contract，因此不作为 Flight 完整反馈来源。
+
+### CyberGear zero reference and cold power cycle
+
+CyberGear 手册明确说明通信类型 6 设置的机械零位“掉电丢失”。这里的掉电是
+CyberGear motor power loss；不能把 Raspberry Pi 单独掉电描述成电机零位必然丢失。
+软件也无法只根据当前位置合法就判断机器人正处于项目机械零位，因此 cold startup
+绝不自动 set-zero。
+
+normal controller 每次 configure 都为每台电机重新取得本次初始化期间的新鲜、合法
+type-2 实测位置，并把第一次 `loc_ref` 设置为同一 CyberGear 原生坐标值。反馈和目标
+使用同一个 driver coordinate，`motor_signs` 不在这条保持路径中再次应用。没有可信
+位置、ID 不匹配、位置非有限、设备状态非法、fault bit、临界温度或 transport 故障
+都会使 configure 失败并执行既有 rollback；不得使用零、软限位中点或旧会话 target
+作为 fallback。
+
+CyberGear motor power cycle 后的操作顺序是：
+
+1. cold startup 只保持上电时当前位置；
+2. operator 确认机器人处于正确物理 reference posture；
+3. operator 显式执行 `/motors/set_zero`；
+4. 确认四轴 feedback 接近零后，才进行依赖准确机械坐标的 MANUAL、AUTO、HOME 或
+   Flight 测试。
+
+同一进程 cleanup/reconfigure 也必须重新采集本次 measured baseline，不能复用前一
+lifecycle、Flight generation 或磁盘中的 target。
 
 ## IMU mounting and frame
 
