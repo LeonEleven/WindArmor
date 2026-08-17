@@ -121,6 +121,7 @@ class FanCommandManager(Node):
         self._last_observable_signature = None
         self._safety_observation_sequence = 1
         self._ownership_observation_sequence = 1
+        self._shutdown_cleanup_started = False
 
         state_qos = QoSProfile(
             depth=1,
@@ -596,10 +597,16 @@ class FanCommandManager(Node):
         self._finish_observation()
 
     def destroy_node(self) -> None:
-        with self._core_lock:
-            self._core.force_safe_stop("fan command manager shutdown")
-        self._finish_observation(force=True)
-        super().destroy_node()
+        if self._shutdown_cleanup_started:
+            return
+        self._shutdown_cleanup_started = True
+        try:
+            with self._core_lock:
+                self._core.force_safe_stop("fan command manager shutdown")
+            if self.context.ok():
+                self._finish_observation(force=True)
+        finally:
+            super().destroy_node()
 
 
 def main(args: Optional[list[str]] = None) -> None:

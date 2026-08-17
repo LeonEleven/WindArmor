@@ -22,19 +22,21 @@ readback、authority/owner handoff、actuator adapter 和 fail-closed lease 已�
 
 接管开关 `flight_takeover_enabled=false` 默认保持关闭：默认 Runtime 不创建
 ownership client 或可执行 command publisher，不改变 v0.3.2 的电机、风扇、IMU
-或安全运行语义。Flight takeover 当前只经过 pure/fake/in-memory 软件验证，真实
-方向、机械动态、通信 timing、PWM/ESC 和联合接管均未实机验证。
+或安全运行语义。Flight combined takeover 已完成 B1 bounded functional hardware
+verification：atomic ACTIVE、`command_authority=FLIGHT_CONTROL`、`left_pitch +0.05 rad`、
+其他三轴 baseline hold、motor/fan E-STOP、owner release 和 E-STOP 后
+`actuation_allowed=false` 均有实机证据；fan/ESC 在该场景保持断电。Gate C fail-closed、
+B2 fan bounded 和 Gate D 最终回归仍未完成。
 分阶段验证协议见
 [v0.4.0 Hardware Verification Plan](docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md)。
-Gate A0/A1、normal controller 的 Gate B feedback baseline 和 Flight DRY_RUN 已通过；
-冷启动当前位置保持的 B0 已通过。第一次 bounded Flight takeover 在 prepare 前因 fan
-manager 启动状态锁在 `DISABLED` 而停止；第二次尝试接受了 prepare，但没有取得
-`FLIGHT_CONTROL ACTIVE` 或有界电机运动证据，并在 E-STOP/rollback 期间暴露 fan
-`e_stop_latched` 与 control state 不一致。第三次尝试已到达 preflight READY 并启动
-ownership handoff，但 Flight Runtime 把 fan 正式的 `FLIGHT_WAITING` 误判为 unknown，
-随后 fail-closed inhibit，仍未进入 ACTIVE 或确认有界运动。E-STOP dominance 和 Flight
-fan state contract alignment 软件修复均已通过，B1 仍只处于等待单独授权重试、尚非
-硬件 PASS。
+Gate A0/A1、normal controller 的 Gate B feedback baseline、Flight DRY_RUN、冷启动
+当前位置保持 B0 和 B1 functional hardware verification 已通过。B1 closure run 没有满足
+procedural `ACTIVE <= 3.0 sec`：watchdog 在 ACTIVE 后等待 2.5 秒才临时启动新的
+`ros2 topic pub --once`，额外 ROS process/DDS discovery 延迟使实际 `/e_stop` 送达超时；
+lower-level 收到 E-STOP 后的停止和状态转换本身很快。该 timing 证据将在 Gate C 使用
+预创建 publisher 的 watchdog 顺便闭合，不为此重跑 B1 functional test。Task 6.2.7 的
+shutdown cleanup 和 watchdog 已通过纯软件验证，Gate C 仅处于等待新授权的
+`READY FOR HARDWARE VERIFICATION`。
 这些状态不构成任何后续硬件操作授权。
 
 仓库另提供默认禁用的 `bounded_verification_controller`，仅用于该计划中的受控
@@ -571,6 +573,11 @@ timeout、enabled 或 motor mode 更新、统一零点变化及其他普通 safe
 只有满足既有恢复条件并显式调用 `/fans/reset_e_stop` 后才允许离开该状态；不会恢复旧
 Flight generation、owner 或 command。
 
+`fan_command_manager` 退出时也使用同一 safe-stop cleanup。ROS context 仍有效时会先发布
+最终 STOP 和只读状态，再销毁 ROS 资源；若 SIGINT/launch 已先使 context 无效，则仍清除
+内部 owner、token 和旧命令，但不会向 invalid context 发布。重复 destroy 是幂等的，正常
+运行期间的其他 publish error 不会被无条件吞掉。
+
 ### 相对姿态、电机模式与风扇 AUTO
 
 `/imu/relative_roll_pitch` 使用
@@ -637,6 +644,26 @@ fan_response_curve: "smoothstep"
 ```bash
 ros2 topic pub --once /e_stop std_msgs/msg/Bool "{data: true}"
 ```
+
+### Gate C 预热 E-STOP watchdog
+
+仓库提供 `scripts/flight_estop_watchdog.py` 作为受控硬件验证辅助工具；它不加入正常 launch，
+也不参与 production safety architecture。只有获得对应 Gate C 的单独硬件授权后才可用于
+实机流程：
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+python3 scripts/flight_estop_watchdog.py
+```
+
+工具启动时即创建 `/e_stop` publisher 和 Flight authority subscription，确认至少一个
+E-STOP subscriber 后才打印 `WATCHDOG READY`。它只在首次同时观察到 `ACTIVE`、
+`FLIGHT_CONTROL` 和 `actuation_allowed=true` 后启动 monotonic 计时，默认 2.0 秒后由同一
+预热 publisher 发布一次 `/e_stop=true`；10 秒内没有 ACTIVE 也会 fail-closed 发布一次并
+报告 `NO ACTIVE WITHIN TIMEOUT`。`--delay-sec` 只允许 `0 < value < 3.0`。工具不会调用
+prepare/reset、操作 ownership 或发送 motor/fan command；prepare 仍由单独获授权的操作员
+执行。它的纯软件测试不会连接真实硬件。
 
 MANUAL 模式下可按 `motor_ids` 的配置顺序（默认 `[4, 3, 2, 1]`）发送
 电机绝对期望目标，单位为弧度。整条消息通过长度和有限值校验后才会更新，

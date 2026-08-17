@@ -1,104 +1,143 @@
-# 最新反馈：v0.4.0 Task 6.2.6 Flight Fan Safety State Contract Alignment
+# 最新反馈：v0.4.0 Task 6.2.7 Fan Shutdown + Gate C E-STOP Watchdog
 
 > 本文件只保留当前最新任务反馈。
 >
 > 日期：2026-08-17
 
-## Hardware Observation
-
-B1 bounded Flight takeover retry attempt #3 的既有实机观察结果为：
+## B1 Final Functional Result
 
 ```text
-prepare accepted: YES
-ARMING reached: YES
-preflight READY: YES
-ownership handoff started: YES
-fan control_state: FLIGHT_WAITING
-Flight Runtime: unknown fan control state -> INHIBITED
-confirmed FLIGHT_CONTROL ACTIVE: NO
-confirmed bounded +0.05 rad movement: NO EVIDENCE
+B1 bounded Flight functional hardware verification:
+HARDWARE PASS
 ```
 
-fan producer 已按正式 contract 发布 `FLIGHT_WAITING`，但 Flight consumer 拒绝了该状态，
-随后按既有 fail-closed 路径进入 INHIBITED。该轮没有确认
-`authority_state=ACTIVE`、`command_authority=FLIGHT_CONTROL`、
-`actuation_allowed=true` 或 `left_pitch +0.05 rad` 运动，因此 B1 attempt #3 是
-`INCONCLUSIVE / FAIL-CLOSED BEFORE ACTIVE`，不是 hardware PASS。
+既有 closure run 已确认 prepare、ARMING、READY_TO_TAKEOVER、atomic ACTIVE、
+`command_authority=FLIGHT_CONTROL`、motor/fan committed、owner token 匹配、atomic cutoff
+存在及 `actuation_allowed=true`。`left_pitch` 达到 baseline `+0.05 rad`，其他三轴保持
+baseline；相关 feedback 均为 valid/fresh/healthy、`fault_flags=0`。E-STOP 到达 lower-level
+后，motor 从 `AUTO_RUNNING` 进入 `EMERGENCY_STOP`，motor/fan latch 均为 true，fan
+control state 为 `EMERGENCY_STOP`，Flight 进入 INHIBITED/NONE、actuation disabled，最终
+motor/fan owner 均为 NONE；未观察到 shake 或异常声音。
 
-## Root Cause
+上述是用户提供的既有实机证据。本 Task 6.2.7 没有重跑 B1。
 
-fan producer 的 `FanControlState` 正式定义 11 个状态：
+## Timing Deviation
 
 ```text
-SAFE_STOP
-MANUAL_DISARMED
-MANUAL_WAITING_FOR_NEUTRAL
-MANUAL_WAITING
-MANUAL_ACTIVE
-AUTO_WAITING
-AUTO_ACTIVE
-FLIGHT_WAITING
-FLIGHT_ACTIVE
-DISABLED
-EMERGENCY_STOP
+B1 functional result: PASS
+procedural ACTIVE <= 3.0 sec: NOT MET in closure run
 ```
 
-Flight `SafetyReadbackAdapter` 使用独立的封闭 allowlist，却遗漏了正式的
-`FLIGHT_WAITING` 和 `FLIGHT_ACTIVE`。修改生产代码前加入实际 fan core snapshot 回归，
-两个状态均稳定复现 `ValueError: unknown fan control state`，结果为 2 failed。问题位于
-consumer contract，不是 fan core、preflight、authority、motor 或 bounded controller。
+旧临时 watchdog 在检测到 ACTIVE 后先 sleep 2.5 秒，随后才启动新的
+`ros2 topic pub --once`。ROS process startup 和 DDS discovery 增加了显著延迟，导致实际
+`/e_stop` publication 晚于 3 秒；lower-level 真正收到 E-STOP 后的 motor stop、fan stop
+和状态转换很快，因此不能写成 Flight E-STOP failure。严格 `<3 sec` 证据将在 Gate C
+E-STOP 子场景使用预热 publisher 顺便闭合，不为此重跑 B1 functional test。
+
+## Fan Shutdown Root Cause
+
+修改生产实现前增加了真实 rclpy context regression：构造 `FanCommandManager` 后先执行
+`rclpy.shutdown()`，再调用 `destroy_node()`。旧实现稳定复现：
+
+```text
+destroy_node
+-> force_safe_stop
+-> _finish_observation
+-> _publish_command
+-> Publisher.publish
+-> RCLError: publisher's context is invalid
+```
+
+因此根因是 shutdown ordering：SIGINT/launch teardown 已先使 node context invalid，manager
+的 finally cleanup 仍无条件发布；不是 fan state machine 或普通 command path 错误。旧实现
+专项结果为 1 failed，异常与实机 stack 一致。
+
+另一个 `Cannot shutdown a ROS adapter that is not running` 字符串只存在于 Jazzy
+`launch_ros.ros_adapters.ROSAdapter.shutdown()` 的重复 shutdown guard，不来自本仓库 fan
+manager。现有证据不能证明它与 invalid publisher 是同一缺陷，因此本任务记录但不扩展
+修改 launch framework。
 
 ## Implementation
 
+`fan_command_manager.destroy_node()` 现在具有窄范围 lifecycle guard：
+
+- cleanup 只启动一次，重复 destroy 不重新发布或恢复旧 command；
+- 始终在内存 core 中执行 safe-stop，清 owner、token 和旧命令；
+- context 有效时仍发布既有最终 STOP 和只读状态；
+- context 已无效时跳过全部 ROS publish，再销毁资源；
+- `finally` 保证 ROS 资源销毁；有效 context 下的其他 publish error 仍向上暴露，不做
+  arbitrary exception swallowing。
+
+新增 `scripts/flight_estop_watchdog.py`，publisher、authority subscription 和 timer 在启动
+时一次创建。它确认 `/e_stop` 至少有一个 matched subscriber 后才报告 READY；只在首次
+同时观察到 ACTIVE、FLIGHT_CONTROL、`actuation_allowed=true` 后启动 monotonic 计时，
+默认 2.0 秒后由同一 publisher 发布一次 E-STOP。10 秒内没有 ACTIVE 时也 fail-closed
+发布一次并报告 `NO ACTIVE WITHIN TIMEOUT`。`--delay-sec` 仅允许 `0 < value < 3.0`。
+
+watchdog 可选等待 Flight 回报 `global_e_stop_active=true` 且 actuation disabled，并输出
+ACTIVE-to-publish、publish-to-inhibit monotonic 时间。它不调用 prepare/reset，不 reserve/
+commit/revoke owner，也不发送 motor/fan command；未加入任何正常 launch。
+
 修改文件：
 
-- `src/windarmor_flight_control/windarmor_flight_control/runtime/safety_adapter.py`；
-- `src/windarmor_flight_control/test/test_fan_estop_rollback_integration.py`；
+- `src/windarmor_fan_controller/windarmor_fan_controller/fan_command_manager.py`；
+- `src/windarmor_fan_controller/test/test_fan_shutdown.py`；
+- `scripts/flight_estop_watchdog.py`；
+- `src/windarmor_flight_control/test/test_flight_estop_watchdog.py`；
+- `scripts/ci_software.sh`；
 - `README.md`；
 - `docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md`；
 - `docs/LATEST_FEEDBACK.md`；
-- 任务开始前用户已有的 `docs/NEXT_COMMAND.md` 保持其任务内容不被实现过程改写。
+- 任务开始前用户已有的 `docs/NEXT_COMMAND.md` 内容由实现过程保留。
 
-adapter 现在显式维护与 producer 一致的 11-state closed vocabulary，并把两个 Flight 状态
-纳入已知集合。识别状态不等于无条件接受：`FLIGHT_WAITING` 和 `FLIGHT_ACTIVE` 必须满足
-enabled 已观测且为 true、非 E-STOP、非 passive，且没有 legacy MANUAL/AUTO owner 冲突。
-未知字符串和 cross-field 冲突仍抛出错误并由 Runtime fail-closed 处理。
+## Gate C Watchdog
 
-集成测试使用实际 `FanControlCore` snapshot、严格 safety adapter、既有 Runtime prepare/
-preflight/ownership state machine 与 fake owner endpoints，走通 reserve、commit、readback、
-cutoff 和 atomic ACTIVE；随后 Runtime 产生的真实 envelope 被 fan core 接受并进入
-`FLIGHT_ACTIVE`。测试没有直接篡改 Runtime authority state，也没有新增 production 跨包依赖。
+在未来单独获授权的 Gate C E-STOP 子场景中，必须在 prepare 前运行：
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+python3 scripts/flight_estop_watchdog.py
+```
+
+只有看到 `WATCHDOG READY` 后才可由另一终端执行单独授权的 prepare。watchdog 不适用于
+C1 stale-input、C2 command-timeout 或 C3 Runtime-shutdown 子场景，因为自动 E-STOP 会
+干扰这些独立 fail-closed 原因。不得退回临时启动 `ros2 topic pub --once` 来测量严格
+timing，也不得自动 retry prepare。
 
 ## Safety
 
-新增和既有回归共同确认：
-
-- 11 个 producer 正式状态逐一被 consumer 按原值识别；
-- 两个 Flight 状态都不能与 E-STOP latch 或 passive predicate 并存；
-- Flight 状态要求 `enabled_observed=true` 且 `enabled=true`；
-- Flight 状态不能与 legacy MANUAL armed 或 AUTO requested/active 并存；
-- 未知状态仍被拒绝；malformed bool 仍被拒绝；
-- E-STOP dominance、被动接管、epoch/generation、cutoff、lease、旧 command/restart rejection
-  和 explicit-reset-required inhibit 规则均未删除或放宽；
-- fan core、preflight、authority、motor、bounded controller、GPIO/PWM 路径均未修改。
-
-本次只对 legitimate Flight ownership readback 补齐 consumer contract，不绕过 authority，
-也不把软件模拟结果表述为实机验证。
+- production Flight API、authority、preflight、takeover、reserve/commit/cutoff、lease、
+  bounded controller 和 Runtime timing 均未修改；
+- motor controller、feedback、cold-start、set-zero 和 command envelope 未修改；
+- fan state machine、E-STOP dominance、normalized PWM 和 startup semantics 未修改；
+- context 有效时的最终 STOP publication 没有删除；无效 context 只禁止必然失败的 ROS
+  publish，内存 cleanup 仍执行；
+- watchdog 只有 observe authority 和 publish `/e_stop=true` 两项权限，不 reset safety、
+  不取得 authority、不产生 actuator command，也不成为 production interlock。
 
 ## Tests
 
-修改前 reproduction：
+修复前 reproduction：
 
 ```bash
 source /opt/ros/jazzy/setup.bash
 source install/setup.bash
 python3 -m pytest -p no:cacheprovider \
-  src/windarmor_flight_control/test/test_fan_estop_rollback_integration.py::test_flight_waiting_snapshot_is_a_known_safety_state \
-  src/windarmor_flight_control/test/test_fan_estop_rollback_integration.py::test_flight_active_snapshot_is_a_known_safety_state -q
+  src/windarmor_fan_controller/test/test_fan_shutdown.py::test_destroy_after_context_shutdown_does_not_publish_or_raise -q
 ```
 
-旧实现结果：2 failed，均为 `unknown fan control state`。修复并补齐状态矩阵、冲突矩阵和
-Runtime handoff integration 后，同一集成文件结果为 25 passed。
+旧实现结果：1 failed，准确复现 invalid-context RCLError。
+
+专项验证：
+
+```bash
+python3 -m pytest -p no:cacheprovider \
+  src/windarmor_fan_controller/test/test_fan_shutdown.py \
+  src/windarmor_flight_control/test/test_flight_estop_watchdog.py -q
+```
+
+结果：22 passed，其中 shutdown 5 项、watchdog 17 项。
 
 规定的完整验证：
 
@@ -118,57 +157,45 @@ colcon test-result --verbose
 结果：
 
 - manual build：5 packages finished；
-- fan pytest：153 passed；
-- Flight pytest：275 passed；
-- manual colcon：895 tests、0 errors、0 failures、0 skipped；
+- fan pytest：158 passed；
+- Flight pytest：292 passed；
+- manual colcon：917 tests、0 errors、0 failures、0 skipped；
 - isolated CI：exit 0；safety、whitespace、compile、五包 build 全部通过；motor 431 passed、
-  fan 153 passed、Flight + interfaces 283 passed；最终 895 tests、0 errors、0 failures、
+  fan 158 passed、Flight + interfaces 300 passed；最终 917 tests、0 errors、0 failures、
   0 skipped。
 
-全部验证只使用 pure/fake/mock/in-memory 路径，不是实机验证。
+全部新增测试使用 pure logic、invalid in-process context 或 capture publisher；没有连接
+真实 CAN、串口、GPIO/PWM 或 actuator。
 
-## Hardware Status
+## Hardware
 
 ```text
-Task 6.2.6:
+No hardware used in Task 6.2.7
+
+Task 6.2.7:
 SOFTWARE PASS
 
-B1 attempt #3:
-INCONCLUSIVE / FAIL-CLOSED BEFORE ACTIVE
-
-B1 next:
-READY FOR RETRY ONLY
-NOT HARDWARE PASS
-
-B1 hardware:
-NOT PASS
+Gate C:
+READY FOR HARDWARE VERIFICATION
+NOT AUTHORIZED
 ```
 
-本任务没有启动 hardware node/launch、Flight prepare 或 takeover，没有访问 `/dev/*`、真实
-serial、SocketCAN、can10、CyberGear、GPIO12/13、PWM 或 ESC，没有给 motor/fan 通电，也
-没有发送 actuator command。
+本任务没有启动 hardware node/launch、Flight prepare 或 takeover，没有访问 `/dev/*`、
+SocketCAN、can10、GPIO12/13、PWM 或 ESC，没有给 motor/fan 通电，也没有发送真实
+actuator command。
 
-## Next Step
-
-下一步仍是：
+## Next
 
 ```text
-B1 bounded Flight takeover retry
-with file-based observation
+Gate C fail-closed hardware verification
 ```
 
-从 prepare 前持续记录 `/tmp/windarmor_b1_authority.log` 和
-`/tmp/windarmor_b1_feedback.log`。只有明确观察到 ACTIVE event 后才启动最长 3 秒 actuation
-window；如果 prepare 后 10 秒内仍没有 ACTIVE，立即 E-STOP、记录 `NO ACTIVE`，且不得自动
-重复 prepare。候选边界仍为 `left_pitch`、`+0.05 rad`、其他 motor captured baseline hold、
-fan `0.0/0.0`、ESC 断电、GPIO12/13 与 ESC 信号断开。
-
-任何真实 prepare 都必须等待新的单独硬件授权并重新满足十项带电门槛；本次 SOFTWARE PASS
-不构成执行授权，也不要求重跑 Gate A、Task 6.2.2、B0、Task 6.2.4 startup test。
+按 C1–C4 子场景分别等待新的单独硬件授权和完整十项带电门槛。预热 watchdog 只准备了
+工具，不构成任何真实 prepare、E-STOP timing test 或其他 Gate C 执行授权。
 
 ## Git
 
-- task-start HEAD：`5fa3810513dab65ff885954bf5af749b756bf0f8`；
+- task-start HEAD：`3e94b5bc3bf2aa20368031c65a25165ac6d9a602`；
 - branch：`master...origin/master`，任务开始时无已知 ahead/behind；
 - 用户本次明确授权将本任务用中文 commit 并 push 到 GitHub；
 - 不创建或移动 tag；stable tags `v0.3.0/v0.3.1/v0.3.2` 保持不变；

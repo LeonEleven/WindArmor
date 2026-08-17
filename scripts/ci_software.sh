@@ -70,7 +70,8 @@ run_stage() {
         src/windarmor_bringup/launch/*.py \
         src/windarmor_flight_control/launch/*.py \
         scripts/check_ci_safety.py \
-        scripts/check_git_whitespace.py
+        scripts/check_git_whitespace.py \
+        scripts/flight_estop_watchdog.py
       ;;
     build)
       section "Colcon build"
