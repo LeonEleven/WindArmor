@@ -327,7 +327,11 @@ class FanControlCore:
         """幂等清除全部授权和旧命令，并请求立即发布停止值。"""
         self._clear_all_control()
         self._stop_immediately()
-        self.state = state
+        self.state = (
+            FanControlState.EMERGENCY_STOP
+            if self.e_stop_latched
+            else state
+        )
         self._safety_reason = reason
         self._immediate_stop_pending = True
         self._flight_target_pwm = (

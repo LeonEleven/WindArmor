@@ -28,8 +28,10 @@ ownership client 或可执行 command publisher，不改变 v0.3.2 的电机、�
 [v0.4.0 Hardware Verification Plan](docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md)。
 Gate A0/A1、normal controller 的 Gate B feedback baseline 和 Flight DRY_RUN 已通过；
 冷启动当前位置保持的 B0 已通过。第一次 bounded Flight takeover 在 prepare 前因 fan
-manager 启动状态锁在 `DISABLED` 而停止；first-observation 软件修复已通过，但 B1
-仍只处于等待单独授权重试、尚非硬件 PASS。
+manager 启动状态锁在 `DISABLED` 而停止；第二次尝试接受了 prepare，但没有取得
+`FLIGHT_CONTROL ACTIVE` 或有界电机运动证据，并在 E-STOP/rollback 期间暴露 fan
+`e_stop_latched` 与 control state 不一致。E-STOP dominance 软件修复已通过，B1 仍只
+处于等待单独授权重试、尚非硬件 PASS。
 这些状态不构成任何后续硬件操作授权。
 
 仓库另提供默认禁用的 `bounded_verification_controller`，仅用于该计划中的受控
@@ -560,6 +562,11 @@ freshness timeout，也不会把“首观测尚未到达”误锁为 `DISABLED`�
 `enabled=true` 只建立无 owner 的 passive state，不会启动 MANUAL、AUTO 或 Flight。
 首个 false、任意无效观测，以及已经完成首观测后的 false/stale 仍 fail-closed 为
 sticky `DISABLED`，后到的 true 不会自动恢复；E-STOP 和 motor safety 保持更高优先级。
+manager 一旦锁存 E-STOP，ownership revoke、Flight safe-stop、command/handoff lease
+timeout、enabled 或 motor mode 更新、统一零点变化及其他普通 safe-stop cleanup 都只能
+清 owner/token/旧命令并保持 stop PWM，control state 必须持续为 `EMERGENCY_STOP`。
+只有满足既有恢复条件并显式调用 `/fans/reset_e_stop` 后才允许离开该状态；不会恢复旧
+Flight generation、owner 或 command。
 
 ### 相对姿态、电机模式与风扇 AUTO
 

@@ -1,82 +1,105 @@
-# 最新反馈：v0.4.0 Task 6.2.4 Fan Passive Startup Ordering Fix
+# 最新反馈：v0.4.0 Task 6.2.5 Fan E-STOP State Preservation
 
 > 本文件只保留当前最新任务反馈。
 >
-> 日期：2026-08-14
+> 日期：2026-08-17
+
+## Hardware Observation
+
+B1 bounded Flight takeover retry attempt #2 的实机观察结果为：
+
+```text
+prepare accepted: YES
+confirmed FLIGHT_CONTROL ACTIVE: NO EVIDENCE
+confirmed bounded +0.05 rad movement: NO EVIDENCE
+E-STOP: TRIGGERED
+```
+
+该轮 Runtime 重复报告：
+
+```text
+rejected fan safety observation:
+fan e-stop latch conflicts with control state
+```
+
+Flight Runtime 重启后正确观察到 `global_estop_active` 并保持 controller inhibited，要求
+显式 reset-inhibit。由于没有保存到 ACTIVE 或 actuator command/movement 证据，B1 不是
+FAIL，也不是 PASS，仍为 inconclusive。
 
 ## Root Cause
 
-B1 bounded Flight takeover 第一次尝试在调用 prepare 前停止。motor safety 为 PASS，
-Flight DRY_RUN 为 PASS；fan safety 的真实 readback 为：
+修改生产代码前新增 pure-core regression，并复现了以下确定序列：
 
-```text
-enabled_observed=true
-enabled=true
-control_state=DISABLED
-passive_for_takeover=false
-```
+1. fan 已完成 Flight reserve/commit；
+2. `/e_stop=true` 使 `e_stop_latched=true`、state=`EMERGENCY_STOP`、PWM 立即回 stop；
+3. E-STOP 后迟到的普通 Flight command 被 core 以 `flight_command_not_allowed` 拒绝；
+4. manager 的 fail-closed fallback 调用默认 `force_safe_stop(...)`；
+5. 旧实现保留 latch，却把 state 无条件写成默认 `SAFE_STOP`；
+6. 当前严格 Flight safety adapter 因 latch/state 矛盾而正确拒绝 readback。
 
-当时 Flight authority 为 NONE，没有发送 Flight motor command，也没有 fan actuation。
+旧实现上的专项结果为 2 failed、4 passed；失败分别锁定迟到 Flight command fallback 和
+E-STOP 后 Flight safe-stop 对 state 的降级。
 
-根因是 fan manager/core 与底层 controller 的启动顺序不匹配。`FanControlCore` 从
-`SAFE_STOP`、`_fan_enabled=None` 启动，但旧 `control_tick()` 把“尚未收到第一条
-enabled observation”与运行期 false/stale 合并处理，第一次 tick 立即进入
-`DISABLED`。随后 `update_fan_enabled(True)` 只更新 observation；idle path 又按既有规则
-保留 `DISABLED`，因此状态永久不能自然回到 passive。
-
-底层 `DualFanController` 默认先输出 stop PWM 并等待 `arm_delay_sec=3.0`，待初始化返回后
-才创建 `/fans/enabled` publisher/timer 并首次发布；manager 的
-`fan_enabled_timeout_sec=1.0`。这不是 runtime timeout 配置错误，不能用放大 timeout、
-提前伪造 `enabled=true` 或放宽 Flight preflight 解决。
-
-修改生产代码前加入 pure-core reproduction：在 `t=0.1/0.5/1.1/2.0`、尚无任何
-enabled observation 时 tick，再于 `t=3.0` 首次更新 true。旧代码按新要求断言后稳定
-得到 1 failed，首个 tick 实际为 `DISABLED`，而预期是安全 `SAFE_STOP`。
+任务中的初始推断只部分成立：缺陷确实是 E-STOP 后再次调用默认/non-E-STOP
+`force_safe_stop()`，但同步 pure-core 顺序下 `emergency_stop()` 已主动释放 Flight owner，
+随后 revoke 返回 `already_revoked`，不会直接再次调用 `force_safe_stop()`。因此不能把
+“revoke service 本身”写成唯一根因；准确根因是统一 cleanup primitive 没有维护 latch
+dominance，迟到 command fallback、safe-stop、timeout、zero-generation 等任何调用者都
+可能制造矛盾状态。硬件日志没有保存到足以区分当时具体 caller 的证据，本报告不虚构。
 
 ## Implementation
 
 修改文件：
 
 - `src/windarmor_fan_controller/windarmor_fan_controller/fan_control.py`；
-- `src/windarmor_fan_controller/test/test_fan_control.py`；
-- `src/windarmor_flight_control/test/test_preflight.py`；
+- `src/windarmor_fan_controller/test/test_fan_estop_dominance.py`；
+- `src/windarmor_flight_control/test/test_fan_estop_rollback_integration.py`；
+- `src/windarmor_flight_control/package.xml`；
 - `README.md`；
 - `docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md`；
-- `docs/LATEST_FEEDBACK.md`。
+- `docs/LATEST_FEEDBACK.md`；
+- 任务开始前用户已有的 `docs/NEXT_COMMAND.md` 保持内容不被实现过程改写。
 
-`FanControlCore` 只增加一个内部 first-observation latch，不新增公开
-`FanControlState`、ROS interface 或 recovery service：
+`FanControlCore.force_safe_stop()` 现在集中维护一个明确 invariant：
 
-- 首条 `/fans/enabled` 尚未到达时，所有 tick 保持 stop PWM、`SAFE_STOP`、无
-  MANUAL/AUTO/Flight owner，并如实报告 `enabled_observed=false`、`enabled=false`；
-- 第一条合法 fresh `true` 结束 startup wait；在没有更高优先级 fault 或 owner 时仍为
-  stop PWM、`SAFE_STOP`、owner NONE，readback 为 `enabled_observed=true`、
-  `enabled=true`、`passive_for_takeover=true`；
-- 第一条合法 `false` 立即进入 `DISABLED`；
-- 任意无效 payload 或非有限时间同样结束 startup wait、清除观测并进入
-  `DISABLED`，后续 true 不会把它当成正常首次观测；
-- 已完成首观测后的 false 或 freshness timeout 保持原有 sticky `DISABLED`，后续 true
-  不自动恢复。
+```text
+e_stop_latched == true
+    => final control state == EMERGENCY_STOP
+```
 
-生产代码未修改 Flight preflight、timeout、底层 `/fans/enabled` 真实性、PWM bounds、
-GPIO mapping、motor code、bounded verification controller 或 combined reserve/commit
-协议。
+cleanup 仍会立即输出 stop PWM、清除 MANUAL/AUTO、Flight target、owner、epoch、generation、
+command sequence 和 lease；只是不再允许普通 requested state 覆盖已锁存 emergency state。
+现有 `reset_e_stop()` 仍先检查 external E-STOP 已明确为 false、fan enabled 新鲜合法、motor
+mode 新鲜合法，再清 latch 并进入既有 `MANUAL_DISARMED`。没有新增 public state、service、
+自动 reset 或 legacy reclaim，也没有修改 Flight safety adapter、Flight API、authority、
+motor subsystem、fan first-observation 或 preflight rules。
+
+Flight package只增加 `windarmor_fan_controller` 的 test dependency，用于实际 fan core 与
+fake Runtime owner endpoint 的进程内集成；不形成 production 运行依赖。
 
 ## Safety
 
-- **E-STOP：** startup wait 中 `/e_stop=true` 仍立即锁存 `EMERGENCY_STOP` 和 stop PWM；
-  后到的 enabled=true 不会清除锁存，仍要求既有显式 reset。
-- **Explicit disable / runtime timeout：** 两者都进入 sticky `DISABLED`，释放不安全
-  ownership、清除旧命令且不自动 recovery。
-- **Motor safety：** invalid、ERROR 和 EMERGENCY_STOP 继续阻止 Flight prepare；startup
-  wait 不覆盖 motor E-STOP 状态。
-- **Ownership：** startup wait 强制 owner NONE，并清除 MANUAL/AUTO/Flight reserved 或
-  committed 状态、epoch/generation 和旧 command sequence；已使用的 Flight token 不能
-  replay。
-- **Snapshot：** 未观测、合法 true、合法 false、invalid、E-STOP 和 runtime stale 均按
-  core 真实状态发布；没有为 preflight 伪造 passive/readiness。
-- **Flight：** 既有 enabled、passive、motor、freshness、owner 和 command/handoff lease
-  检查全部保留；真正 `DISABLED` 仍被确定性拒绝。
+新增回归覆盖：
+
+- Flight reserved / committed 后 E-STOP；
+- E-STOP 后 revoke、safe-stop、handoff timeout、command timeout；
+- E-STOP 后 enabled=true、enabled=false、enabled stale；
+- E-STOP 后 motor MANUAL、AUTO、ERROR、DISABLED、EMERGENCY_STOP；
+- E-STOP 后 zero-generation 初次或再次变化；
+- 所有普通 `force_safe_stop()` requested state 均不能降级 E-STOP；
+- latch 期间 snapshot 始终为 `EMERGENCY_STOP`、stop PWM、非 passive、非 manual、非 legacy
+  AUTO；
+- 修正后的 snapshot 被严格 Flight adapter 接受，矛盾 snapshot 仍被拒绝；
+- 无 E-STOP 时 revoke、safe-stop、handoff timeout 保持原有 `SAFE_STOP` contract；
+- 只有显式 reset 可离开 E-STOP，且 reset 不恢复旧 owner、epoch、generation、token、command
+  sequence 或 fan target；旧 command 不能 replay，必须新 reserve/commit/generation/command；
+- ACTIVE Runtime 收到 global E-STOP 后 inhibit，motor/fan fake revoke 均执行，command dispatch
+  关闭，fan final readback 保持锁存；
+- 新 Runtime 仍从 lower-level motor/fan E-STOP readback 聚合
+  `global_estop_active=true`，prepare 后进入既有 explicit-reset-required inhibit 路径。
+
+Flight adapter 的 warning 没有删除、放宽或 rate-limit；修复目标是 core 不再发布该类矛盾
+状态，其他 malformed/inconsistent observation 仍严格拒绝。
 
 ## Tests
 
@@ -86,27 +109,19 @@ GPIO mapping、motor code、bounded verification controller 或 combined reserve
 source /opt/ros/jazzy/setup.bash
 source install/setup.bash
 python3 -m pytest -p no:cacheprovider \
-  src/windarmor_fan_controller/test/test_fan_control.py::test_delayed_first_enabled_observation_keeps_safe_passive_startup -q
+  src/windarmor_fan_controller/test/test_fan_estop_dominance.py -q
 ```
 
-旧代码结果：1 failed，实际首个输出状态为 `DISABLED`。修复后同一测试：1 passed。
-
-专项安全回归：
+旧实现结果：2 failed、4 passed。单点修复后同一组为 6 passed；补齐矩阵后的 fan + Runtime
+专项为：
 
 ```bash
-source /opt/ros/jazzy/setup.bash
-source install/setup.bash
 python3 -m pytest -p no:cacheprovider \
-  src/windarmor_fan_controller/test/test_fan_control.py \
-  src/windarmor_fan_controller/test/test_fan_flight_ownership.py \
-  src/windarmor_flight_control/test/test_preflight.py -q
+  src/windarmor_fan_controller/test/test_fan_estop_dominance.py \
+  src/windarmor_flight_control/test/test_fan_estop_rollback_integration.py -q
 ```
 
-结果：124 passed。覆盖首观测延迟并超过 timeout、first true/false、invalid payload/time、
-runtime timeout、false→true sticky、startup E-STOP、motor invalid/ERROR/E-STOP、NONE 与旧
-MANUAL/AUTO/Flight owner、旧 epoch/generation/command、全程 stop PWM、truthful passive、
-healthy startup preflight READY、genuine DISABLED rejection，以及既有 Flight
-handoff/command timeout。
+结果：26 passed。
 
 规定的完整验证：
 
@@ -126,11 +141,11 @@ colcon test-result --verbose
 结果：
 
 - manual build：5 packages finished；
-- fan pytest：131 passed；
-- Flight pytest：250 passed；
-- manual colcon：848 tests、0 errors、0 failures、0 skipped；
+- fan pytest：153 passed；
+- Flight pytest：254 passed；
+- manual colcon：874 tests、0 errors、0 failures、0 skipped；
 - isolated CI：exit 0；safety、whitespace、compile、五包 build 全部通过；motor 431 passed、
-  fan 131 passed、Flight + interfaces 258 passed；最终 848 tests、0 errors、0 failures、
+  fan 153 passed、Flight + interfaces 262 passed；最终 874 tests、0 errors、0 failures、
   0 skipped。
 
 全部验证只使用 pure/fake/mock/in-memory 路径，不是实机验证。
@@ -138,52 +153,44 @@ colcon test-result --verbose
 ## Hardware Status
 
 ```text
-Gate A0: PASS
-Gate A1: PASS
-Task 6.2.2: SOFTWARE + HARDWARE PASS
-Gate B feedback baseline: PASS
-Gate B Flight DRY_RUN: PASS
-B0 cold-start hold-current: PASS
-
-B1 bounded takeover attempt #1:
-BLOCKED BEFORE PREPARE
-
-motor safety: PASS
-fan safety: enabled=true but stuck DISABLED
-Flight authority: NONE
-actuation: NONE
-
-Fan passive startup fix:
+Task 6.2.5:
 SOFTWARE PASS
 
-B1 bounded takeover:
-READY FOR RETRY
-NOT HARDWARE PASS
-
-B1 retry:
-NOT EXECUTED
+B1 hardware:
+NOT PASS
+READY FOR RETRY ONLY
 ```
 
-本任务没有启动 hardware node/launch，没有访问 `/dev/*`、真实 serial、SocketCAN、
-can10、CyberGear、GPIO12/13、PWM 或 ESC，也没有给 motor/fan 通电。
+本任务没有启动 hardware node/launch、Flight prepare 或 takeover，没有访问 `/dev/*`、真实
+serial、SocketCAN、can10、CyberGear、GPIO12/13、PWM 或 ESC，没有给 motor/fan 通电，也
+没有发送 actuator command。
 
 ## Next Step
 
+下一步仍是：
+
 ```text
 B1 bounded Flight takeover retry
+with file-based observation
 ```
 
-只需先确认 fan safety readback 为 fresh、真实 passive，再按新的单独授权重试既有 B1；
-不重跑 Gate A、Task 6.2.2 或 B0。候选边界保持 `left_pitch`、`+0.05 rad`、其他 motor
-hold captured baseline、fan `0.0/0.0`、ESC 断电且 GPIO12/13 信号断开。任何 Flight
-prepare 仍必须等待用户另行明确授权并重新满足十项带电门槛。
+验证计划已改为从 prepare 前持续记录：
+
+```text
+/tmp/windarmor_b1_authority.log
+/tmp/windarmor_b1_feedback.log
+```
+
+只有明确观察到 ACTIVE event 后才启动最长 3 秒 actuation window；如果没有 ACTIVE，不得
+把 prepare 后的 wall-clock 计时当作 ACTIVE test。候选边界仍为 `left_pitch`、`+0.05 rad`、
+其他 motor captured baseline hold、fan `0.0/0.0`、ESC 断电、GPIO12/13 与 ESC 信号断开。
+任何真实 prepare 必须等待新的单独硬件授权和十项带电门槛，不重跑 Gate A、Task 6.2.2、
+B0 或 Task 6.2.4 startup test。
 
 ## Git
 
-- task-start HEAD：`601de7b4cff2d00a71415c96949aa6be09ba266c`；
+- task-start HEAD：`75eafcb48c23af22ffeb9fb29a1b48876d7bdbfe`；
 - branch：`master...origin/master`，任务开始时无已知 ahead/behind；
-- working tree：dirty，包含本 Task 的 source/tests/README/docs 修改，以及任务开始前用户
-  已有的 `docs/NEXT_COMMAND.md` 修改；该用户文件保持未编辑；
-- `git diff --check`：通过；
-- commit/push/tag：未执行；
-- 未 checkout/reset/clean；stable tags `v0.3.0/v0.3.1/v0.3.2` 未改变。
+- 用户本次明确授权将本任务用中文 commit 并 push 到 GitHub；
+- 不创建或移动 tag；stable tags `v0.3.0/v0.3.1/v0.3.2` 保持不变；
+- 未执行 checkout/reset/clean。

@@ -1,0 +1,182 @@
+import os
+from types import SimpleNamespace
+
+import pytest
+import rclpy
+
+from windarmor_fan_controller.fan_control import (
+    FanControlConfig,
+    FanControlCore,
+    FanControlState,
+)
+from windarmor_fan_controller.fan_ownership import FanCommandOwner
+from windarmor_flight_control.core.authority import AuthorityState
+from windarmor_flight_control.runtime.safety_adapter import SafetyReadbackAdapter
+
+from .runtime_helpers import fan_safety_message, motor_safety_message
+from .test_runtime_handoff import (
+    FakeClient,
+    complete_handoff,
+    make_enabled_node,
+    response,
+)
+from .test_runtime_node import FakeController, MutableClock
+
+
+@pytest.fixture(scope="module", autouse=True)
+def ros_context():
+    os.environ["ROS_LOG_DIR"] = "/tmp"
+    if not rclpy.ok():
+        rclpy.init()
+    yield
+    if rclpy.ok():
+        rclpy.shutdown()
+
+
+def flight_owned_fan_core() -> FanControlCore:
+    core = FanControlCore(FanControlConfig())
+    assert core.update_fan_enabled(True, 1.0)
+    assert core.update_motor_mode("AUTO", 1.0)
+    assert core.update_e_stop(False, 1.0)
+    assert core.prepare_flight_ownership(100, 1, now=1.01).success
+    assert core.commit_flight_ownership(100, 1, now=1.02).success
+    return core
+
+
+def snapshot_message(core: FanControlCore, *, sequence: int = 1):
+    snapshot = core.safety_snapshot
+    return SimpleNamespace(
+        source_epoch=500,
+        observation_sequence=sequence,
+        e_stop_latched=snapshot.e_stop_latched,
+        control_state=snapshot.control_state,
+        enabled_observed=snapshot.enabled_observed,
+        enabled=snapshot.enabled,
+        manual_armed=snapshot.manual_armed,
+        legacy_auto_requested=snapshot.legacy_auto_requested,
+        legacy_auto_active=snapshot.legacy_auto_active,
+        safety_reason=snapshot.safety_reason,
+        passive_for_takeover=snapshot.passive_for_takeover,
+    )
+
+
+def test_exact_b1_estop_rollback_snapshot_is_truthful_and_adapter_accepts() -> None:
+    core = flight_owned_fan_core()
+    assert core.update_flight_command(
+        100, 1, 0, 0.0, 0.0, now=1.03
+    ).success
+
+    assert core.update_e_stop(True, 1.04)
+    assert core.revoke_flight_ownership(100, 1).success
+    core.force_safe_stop("runtime rollback completion")
+
+    snapshot = core.safety_snapshot
+    assert snapshot.e_stop_latched
+    assert snapshot.control_state == "EMERGENCY_STOP"
+    assert not snapshot.passive_for_takeover
+    assert not snapshot.manual_armed
+    assert not snapshot.legacy_auto_active
+    assert core.command_pwm == (800, 800)
+    assert core.ownership.owner is FanCommandOwner.NONE
+
+    accepted = SafetyReadbackAdapter().update_fan(
+        snapshot_message(core), received_at=1.05
+    )
+    assert accepted.e_stop_latched
+    assert accepted.control_state == "EMERGENCY_STOP"
+
+
+def test_flight_adapter_remains_strict_about_inconsistent_estop_state() -> None:
+    adapter = SafetyReadbackAdapter()
+    inconsistent = fan_safety_message(
+        e_stop_latched=True,
+        control_state="SAFE_STOP",
+        passive_for_takeover=False,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="fan e-stop latch conflicts with control state",
+    ):
+        adapter.update_fan(inconsistent, received_at=1.0)
+
+
+def test_active_runtime_global_estop_revokes_both_and_preserves_fan_latch() -> None:
+    from std_msgs.msg import Bool
+
+    core = flight_owned_fan_core()
+    clock = MutableClock()
+    node = make_enabled_node(FakeController(), clock, authority_epoch=100)
+
+    def revoke_fan(request):
+        result = core.revoke_flight_ownership(
+            int(request.authority_epoch),
+            int(request.generation),
+        )
+        return response(
+            request,
+            success=result.success,
+            reason=result.reason_code,
+            sequence=6,
+        )
+
+    node._fan_revoke_client = FakeClient(revoke_fan)
+    try:
+        complete_handoff(node, clock, epoch=100)
+        assert node._authority.state is AuthorityState.ACTIVE
+
+        assert core.update_e_stop(True, 1.04)
+        node._on_e_stop(Bool(data=True))
+
+        assert node._authority.state is AuthorityState.INHIBITED
+        assert node._controller_inhibited
+        assert not node._command_dispatch_enabled
+        assert node._motor_revoke_client.requests
+        assert node._fan_revoke_client.requests
+        assert node._command_pub.messages == []
+        node._publish_authority_status()
+        assert not node._authority_status_pub.messages[-1].actuation_allowed
+        assert core.ownership.owner is FanCommandOwner.NONE
+        assert core.e_stop_latched
+        assert core.state is FanControlState.EMERGENCY_STOP
+        assert core.command_pwm == (800, 800)
+        SafetyReadbackAdapter().update_fan(
+            snapshot_message(core), received_at=1.05
+        )
+    finally:
+        node.destroy_node()
+
+
+def test_new_runtime_still_inhibits_on_lower_level_estop_readback() -> None:
+    from std_srvs.srv import Trigger
+
+    clock = MutableClock()
+    node = make_enabled_node(FakeController(), clock, authority_epoch=200)
+    try:
+        node._on_motor_safety(
+            motor_safety_message(
+                controller_state="EMERGENCY_STOP",
+                public_control_mode="EMERGENCY_STOP",
+                e_stop_latched=True,
+            )
+        )
+        node._on_fan_safety(
+            fan_safety_message(
+                e_stop_latched=True,
+                control_state="EMERGENCY_STOP",
+                passive_for_takeover=False,
+            )
+        )
+        assert node._on_prepare(Trigger.Request(), Trigger.Response()).success
+
+        clock.value = 10.01
+        node._control_tick()
+
+        assert node._last_runtime_snapshot.flight_state.system.e_stop_active is True
+        assert node._authority.state is AuthorityState.INHIBITED
+        assert node._controller_inhibited
+        assert node._last_error == "global_estop_active"
+        assert not node._command_dispatch_enabled
+        assert node._command_pub.messages == []
+    finally:
+        node.destroy_node()
