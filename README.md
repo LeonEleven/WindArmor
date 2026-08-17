@@ -30,8 +30,11 @@ Gate A0/A1、normal controller 的 Gate B feedback baseline 和 Flight DRY_RUN �
 冷启动当前位置保持的 B0 已通过。第一次 bounded Flight takeover 在 prepare 前因 fan
 manager 启动状态锁在 `DISABLED` 而停止；第二次尝试接受了 prepare，但没有取得
 `FLIGHT_CONTROL ACTIVE` 或有界电机运动证据，并在 E-STOP/rollback 期间暴露 fan
-`e_stop_latched` 与 control state 不一致。E-STOP dominance 软件修复已通过，B1 仍只
-处于等待单独授权重试、尚非硬件 PASS。
+`e_stop_latched` 与 control state 不一致。第三次尝试已到达 preflight READY 并启动
+ownership handoff，但 Flight Runtime 把 fan 正式的 `FLIGHT_WAITING` 误判为 unknown，
+随后 fail-closed inhibit，仍未进入 ACTIVE 或确认有界运动。E-STOP dominance 和 Flight
+fan state contract alignment 软件修复均已通过，B1 仍只处于等待单独授权重试、尚非
+硬件 PASS。
 这些状态不构成任何后续硬件操作授权。
 
 仓库另提供默认禁用的 `bounded_verification_controller`，仅用于该计划中的受控
@@ -594,7 +597,10 @@ ros2 service call /fans/auto_enable std_srvs/srv/SetBool "{data: true}"
 原有 `MANUAL_WAITING`、`MANUAL_ACTIVE`、`AUTO_WAITING`、`AUTO_ACTIVE`、
 `SAFE_STOP`、`DISABLED` 和 `EMERGENCY_STOP` 继续保留；Flight ownership 路径另有
 `FLIGHT_WAITING` 与 `FLIGHT_ACTIVE`，分别表示已 commit 后等待首条有效命令和正在
-通过既有 manager 输出 Flight 目标。
+通过既有 manager 输出 Flight 目标。Flight safety readback consumer 将这 11 个明确状态
+作为封闭词汇表；识别 Flight 状态不等于判定其永远安全，`FLIGHT_WAITING`/
+`FLIGHT_ACTIVE` 仍必须是 enabled 已真实观测且为 true、非 E-STOP、非 passive，且没有
+legacy MANUAL/AUTO owner。任意未知状态或 cross-field 冲突仍 fail-closed 拒绝。
 
 AUTO 使用 `max()` 合成姿态活动量：正负 pitch 都同时提高左右目标；左倾只
 增加左侧 roll 分量，右倾只增加右侧 roll 分量。任一姿态、电机模式或底层

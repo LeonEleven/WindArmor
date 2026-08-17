@@ -9,6 +9,25 @@ from typing import Any
 from ..core.preflight import FanSafetyReadback, MotorSafetyReadback
 
 
+_KNOWN_FAN_CONTROL_STATES = frozenset(
+    {
+        "SAFE_STOP",
+        "MANUAL_DISARMED",
+        "MANUAL_WAITING_FOR_NEUTRAL",
+        "MANUAL_WAITING",
+        "MANUAL_ACTIVE",
+        "AUTO_WAITING",
+        "AUTO_ACTIVE",
+        "FLIGHT_WAITING",
+        "FLIGHT_ACTIVE",
+        "DISABLED",
+        "EMERGENCY_STOP",
+    }
+)
+_FLIGHT_FAN_CONTROL_STATES = frozenset({"FLIGHT_WAITING", "FLIGHT_ACTIVE"})
+_PASSIVE_FAN_CONTROL_STATES = frozenset({"SAFE_STOP", "MANUAL_DISARMED"})
+
+
 @dataclass(frozen=True)
 class ReceivedMotorSafety:
     value: MotorSafetyReadback
@@ -141,17 +160,7 @@ class SafetyReadbackAdapter:
             previous=self.fan,
         )
         state = _text(message.control_state, "fan control_state")
-        if state not in {
-            "SAFE_STOP",
-            "MANUAL_DISARMED",
-            "MANUAL_WAITING_FOR_NEUTRAL",
-            "MANUAL_WAITING",
-            "MANUAL_ACTIVE",
-            "AUTO_WAITING",
-            "AUTO_ACTIVE",
-            "DISABLED",
-            "EMERGENCY_STOP",
-        }:
+        if state not in _KNOWN_FAN_CONTROL_STATES:
             raise ValueError("unknown fan control state")
         value = FanSafetyReadback(
             e_stop_latched=_boolean(message.e_stop_latched, "e_stop_latched"),
@@ -175,11 +184,19 @@ class SafetyReadbackAdapter:
             raise ValueError("fan e-stop latch conflicts with control state")
         if value.legacy_auto_active and not value.legacy_auto_requested:
             raise ValueError("active legacy fan AUTO requires a request")
+        if state in _FLIGHT_FAN_CONTROL_STATES and (
+            value.manual_armed or value.legacy_auto_requested
+        ):
+            raise ValueError("fan Flight state conflicts with legacy owner state")
+        if state in _FLIGHT_FAN_CONTROL_STATES and (
+            not value.enabled_observed or not value.enabled
+        ):
+            raise ValueError("fan Flight state requires enabled readback")
         if value.passive_for_takeover and (
             value.e_stop_latched
             or value.manual_armed
             or value.legacy_auto_requested
-            or state not in {"SAFE_STOP", "MANUAL_DISARMED"}
+            or state not in _PASSIVE_FAN_CONTROL_STATES
         ):
             raise ValueError("fan passive predicate conflicts with owner state")
         self.fan = ReceivedFanSafety(value, source_epoch, sequence, received)

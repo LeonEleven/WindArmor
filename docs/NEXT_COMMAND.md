@@ -2,67 +2,66 @@
 
 ## Task
 
-v0.4.0 Task 6.2.5 — Fan E-STOP State Preservation During Flight Rollback
+v0.4.0 Task 6.2.6 — Flight Fan Safety State Contract Alignment
 
 ## Objective
 
-修复 B1 bounded Flight takeover 实机重试中发现的 fan safety 状态一致性问题。
+修复 B1 bounded Flight takeover 第三次实机重试中发现的跨包 fan safety state contract 不一致。
 
-真实 B1 测试观察到 Flight Runtime 持续打印：
+真实硬件日志已经确认：
 
 ```text
-rejected fan safety observation:
-fan e-stop latch conflicts with control state
+DRY_RUN
+  ↓
+ARMING
+  ↓
+READY_TO_TAKEOVER
+preflight_ready=true
+  ↓
+ownership handoff starts
+  ↓
+fan safety observation:
+control_state = FLIGHT_WAITING
+  ↓
+Flight Runtime rejects:
+unknown fan control state
+  ↓
+INHIBITED
+last_inhibit_reason = invalid fan safety observation
 ```
 
-同一轮测试中：
+本次没有确认：
 
 ```text
-/flight_control/authority/prepare
+authority_state = ACTIVE
+command_authority = FLIGHT_CONTROL
+actuation_allowed = true
 ```
 
-返回：
+也没有确认：
 
 ```text
-success=True
-message='authority preparation started: generation=1; takeover_enabled=True'
+left_pitch ≈ +0.05 rad
 ```
 
-随后测试用：
+因此 B1 attempt #3 状态：
 
 ```text
-/e_stop=true
-```
+prepare accepted: YES
+preflight READY: YES
+ownership handoff started: YES
 
-终止。
+ACTIVE: NO
+bounded motor movement: NO EVIDENCE
 
-第二次重新启动 Flight Runtime 时又正确观察到：
-
-```text
-DRY_RUN controller inhibited;
-explicit reset-inhibit is required:
-global_estop_active
-```
-
-因此：
-
-```text
-B1 hardware PASS:
-NOT ESTABLISHED
-
-prepare accepted:
-YES
-
-confirmed ACTIVE:
-NO EVIDENCE
-
-confirmed bounded +0.05 rad movement:
-NO EVIDENCE
+failure:
+Flight SafetyReadbackAdapter does not recognize
+legitimate fan FLIGHT_WAITING state.
 ```
 
 本任务只修复：
 
-> fan E-STOP 已锁存后，Flight rollback / ownership revoke / safe-stop 等路径不得把 fan control state 从 EMERGENCY_STOP 改成 SAFE_STOP 或其他非 E-STOP 状态。
+> fan controller 已正式定义的 FLIGHT_WAITING / FLIGHT_ACTIVE 状态，与 Flight Runtime safety adapter 的允许状态集合不一致。
 
 ---
 
@@ -71,8 +70,8 @@ NO EVIDENCE
 当前 Git 基线：
 
 ```text
-75eafcb
-修复风扇启动首观测状态锁定
+5fa3810513dab65ff885954bf5af749b756bf0f8
+修复风扇急停回滚状态保持
 ```
 
 当前验证状态：
@@ -84,24 +83,22 @@ SW + HW PASS
 Task 6.2.3 cold-start hold:
 SW + HW PASS
 
-Task 6.2.4 fan passive startup:
+Task 6.2.4 fan startup ordering:
+SW PASS + real startup observation PASS
+
+Task 6.2.5 fan E-STOP preservation:
 SOFTWARE PASS
-HARDWARE startup observation PASS
 
-B1 bounded Flight takeover:
-INCONCLUSIVE
+B1 attempt #3:
+PREPARE ACCEPTED
+PREFLIGHT READY
+HANDOFF STARTED
+NO ACTIVE
+NO CONFIRMED ACTUATION
 
-prepare request:
-ACCEPTED
-
-confirmed FLIGHT_CONTROL ACTIVE:
-NO EVIDENCE
-
-confirmed bounded motor movement:
-NO EVIDENCE
+Blocker:
+fan FLIGHT_WAITING rejected as unknown state
 ```
-
-不要把本次 B1 标成 FAIL，因为未确认 ACTIVE 或 actuator command。
 
 ---
 
@@ -124,19 +121,18 @@ GPIO13 -> right ESC:
 DISCONNECTED
 ```
 
-禁止：
+不得：
 
-- 真实 CAN；
-- CyberGear 上电；
-- ESC/fan 上电；
-- GPIO/PWM 连接 ESC；
-- hardware launch；
-- Flight prepare；
-- Flight takeover；
-- E-STOP 实机测试；
-- actuator command。
+- 打开真实 CAN；
+- 给 CyberGear 上电；
+- 给 ESC/fan 上电；
+- 连接 GPIO/PWM 到 ESC；
+- 启动 hardware launch；
+- 调用真实 Flight prepare；
+- 执行 Flight takeover；
+- 执行 actuator command。
 
-全部使用 pure core / fake manager / mock ROS / in-memory tests。
+全部测试必须使用 pure/fake/mock/in-memory。
 
 ---
 
@@ -154,472 +150,747 @@ docs/LATEST_FEEDBACK.md
 docs/NEXT_COMMAND.md
 ```
 
-重点代码：
+重点检查：
 
 ```text
 src/windarmor_fan_controller/
   windarmor_fan_controller/fan_control.py
-  ownership / manager / node related code
+  ownership related code
   tests
 
 src/windarmor_flight_control/
-  windarmor_flight_control/runtime/node.py
   windarmor_flight_control/runtime/safety_adapter.py
+  windarmor_flight_control/runtime/node.py
   windarmor_flight_control/core/preflight.py
-  authority / rollback tests
+  runtime / ownership integration tests
+
+src/windarmor_interfaces/
+  fan / ownership / safety messages
 ```
+
+---
+
+# Hardware Evidence To Preserve
+
+B1 attempt #3 已观察到：
+
+```text
+authority_state:
+DRY_RUN
+→ ARMING
+→ READY_TO_TAKEOVER
+→ INHIBITED
+```
+
+其中：
+
+```text
+preflight_ready=true
+```
+
+后 Runtime 打印：
+
+```text
+rejected fan safety observation:
+unknown fan control state
+```
+
+随后：
+
+```text
+DRY_RUN controller inhibited;
+explicit reset-inhibit is required:
+invalid fan safety observation
+```
+
+因此本任务不要重新怀疑：
+
+```text
+motor feedback
+motor cold-start
+fan startup ordering
+preflight
+global e-stop observation
+```
+
+除非 regression 证明真实根因另有其因。
 
 ---
 
 # Confirm Root Cause Before Modification
 
-不要直接根据任务描述修改代码。
+先增加最小 regression。
 
-首先建立 regression，确认当前真实根因。
-
-重点审计以下路径：
+审计当前：
 
 ```text
-fan E-STOP handling
-force_safe_stop(...)
-accept_flight_safe_stop(...)
-revoke_flight_ownership(...)
-ownership timeout
-Flight rollback
-zero-generation / safety transitions
-enabled / motor-mode updates
+FanControlState
 ```
 
-当前强推断是：
+确认正式存在：
 
 ```text
-1. /e_stop=true
-
-2. fan core:
-   e_stop_latched=true
-   control_state=EMERGENCY_STOP
-
-3. Flight detects E-STOP and performs fail-closed rollback
-
-4. rollback/revoke reaches fan core
-
-5. one path calls force_safe_stop()
-   with default/non-E-STOP state
-
-6. e_stop_latched remains true
-   but control_state becomes SAFE_STOP
-
-7. Flight safety adapter rejects:
-   fan e-stop latch conflicts with control state
+FLIGHT_WAITING
+FLIGHT_ACTIVE
 ```
 
-必须用 pure/fake regression 证明或推翻这个序列。
+然后审计：
 
-如果实际根因不同：
+```text
+SafetyReadbackAdapter.update_fan(...)
+```
+
+确认当前合法状态集合遗漏这两个状态。
+
+必须先构造：
+
+```text
+FanSafetyState:
+  e_stop_latched=false
+  control_state=FLIGHT_WAITING
+  enabled_observed=true
+  enabled=true
+  manual_armed=false
+  legacy_auto_requested=false
+  legacy_auto_active=false
+  passive_for_takeover=false
+```
+
+当前 baseline 应得到：
+
+```text
+REJECT
+reason = unknown fan control state
+```
+
+再构造：
+
+```text
+control_state=FLIGHT_ACTIVE
+```
+
+当前 baseline 也应被错误拒绝。
+
+先证明，再修改。
+
+如果 regression 不能复现：
 
 ```text
 STOP
-report exact root cause
 ```
 
-然后仍只做最小范围修复。
+报告真实根因，不要照任务描述盲改。
 
 ---
 
-# Core Safety Invariant
+# Formal Fan State Contract
 
-建立一个明确 invariant：
+明确检查 fan controller 当前正式 public states。
 
-```text
-IF e_stop_latched == true
-
-THEN control_state MUST remain EMERGENCY_STOP
-
-UNTIL explicit reset_e_stop succeeds.
-```
-
-反向也保持当前 adapter contract：
-
-```text
-control_state == EMERGENCY_STOP
-```
-
-必须与当前项目定义的 E-STOP latch 语义一致。
-
-不要放宽 Flight safety adapter。
-
----
-
-# Required Behavior A — Flight Revoke During E-STOP
-
-复现：
-
-```text
-fan Flight ownership:
-reserved or committed
-
-/e_stop=true
-    ↓
-e_stop_latched=true
-control_state=EMERGENCY_STOP
-STOP PWM
-
-then:
-revoke_flight_ownership(...)
-```
-
-最终必须仍然：
-
-```text
-e_stop_latched=true
-control_state=EMERGENCY_STOP
-
-left_pwm=STOP
-right_pwm=STOP
-
-Flight owner removed
-authority/token cleared as current contract requires
-
-passive_for_takeover=false
-```
-
-ownership 可以撤销。
-
-**E-STOP state 不可以撤销。**
-
----
-
-# Required Behavior B — Flight Safe-stop During E-STOP
-
-复现：
-
-```text
-e_stop_latched=true
-control_state=EMERGENCY_STOP
-
-accept_flight_safe_stop(...)
-```
-
-或当前等价路径。
-
-结果必须仍：
-
-```text
-EMERGENCY_STOP
-STOP PWM
-e_stop_latched=true
-```
-
-safe-stop payload 不能把 emergency state 降级成：
+至少应包括当前实现已有的：
 
 ```text
 SAFE_STOP
 MANUAL_DISARMED
+MANUAL_WAITING_FOR_NEUTRAL
+MANUAL_WAITING
+MANUAL_ACTIVE
+AUTO_WAITING
+AUTO_ACTIVE
+FLIGHT_WAITING
+FLIGHT_ACTIVE
 DISABLED
+EMERGENCY_STOP
+```
+
+不要新增状态。
+
+不要改名。
+
+不要建立第二套 fan state enum。
+
+---
+
+# Required Fix
+
+Flight safety adapter 必须正式接受：
+
+```text
+FLIGHT_WAITING
+FLIGHT_ACTIVE
+```
+
+作为已知合法 fan control state。
+
+但：
+
+```text
+known state
+```
+
+不等于：
+
+```text
+always safe
+```
+
+现有所有 cross-field invariant 检查继续执行。
+
+不得只写：
+
+```text
+if state.startswith("FLIGHT_"):
+    accept
+```
+
+使用明确、封闭的合法集合。
+
+未知字符串仍必须拒绝。
+
+---
+
+# FLIGHT_WAITING Contract
+
+合法：
+
+```text
+control_state = FLIGHT_WAITING
+e_stop_latched = false
+passive_for_takeover = false
+```
+
+该状态表示 fan ownership/handoff 已进入 Flight session，
+但 executable Flight command 尚未建立。
+
+不得把：
+
+```text
 FLIGHT_WAITING
 ```
 
----
-
-# Required Behavior C — Ownership Timeout During E-STOP
-
-如果：
+解释为：
 
 ```text
-Flight command lease expires
-handoff lease expires
-owner timeout occurs
+passive_for_takeover=true
 ```
 
-同时：
+因为 reserve 之后已经不再是 legacy passive owner-ready 状态。
+
+同时必须保持：
 
 ```text
-e_stop_latched=true
-```
-
-则 timeout cleanup 可以：
-
-```text
-revoke owner
-clear token
-clear generation/session state
-STOP outputs
-```
-
-但最终状态仍必须：
-
-```text
-EMERGENCY_STOP
-```
-
----
-
-# Required Behavior D — Ordinary force_safe_stop
-
-审计：
-
-```text
-force_safe_stop(...)
-```
-
-如果这是多个路径的统一底层函数，优先在最小、明确的位置维护 invariant。
-
-允许实现类似：
-
-```text
-if self.e_stop_latched:
-    final_state = EMERGENCY_STOP
-else:
-    final_state = requested_state
-```
-
-但不要机械照抄此伪代码。
-
-必须根据现有 architecture 选择最干净的修法。
-
-要求：
-
-```text
-ordinary safety stop
-```
-
-不能覆盖：
-
-```text
-latched emergency stop
-```
-
----
-
-# Required Behavior E — Explicit reset_e_stop Is the Only Exit
-
-保持现有显式恢复契约。
-
-只有：
-
-```text
-reset_e_stop(...)
-```
-
-满足当前全部恢复条件后，才允许：
-
-```text
-e_stop_latched=false
-control_state leave EMERGENCY_STOP
-```
-
-继续要求当前已有条件，例如实际代码定义的：
-
-```text
-external E-STOP 已明确解除
-fan enabled observation fresh/legal
-motor mode legal
-no conflicting unsafe state
-```
-
-不要增加自动 reset。
-
-不要因为：
-
-```text
-enabled=true
-motor mode MANUAL
-Flight revoke
-new owner generation
-new zero generation
-```
-
-而自动离开 EMERGENCY_STOP。
-
----
-
-# Required Behavior F — enabled Updates During E-STOP
-
-测试：
-
-```text
-e_stop_latched=true
-control_state=EMERGENCY_STOP
-
-update_fan_enabled(true)
-update_fan_enabled(false)
-enabled timeout
-```
-
-无论这些 observation 怎样变化：
-
-```text
-E-STOP remains dominant
-```
-
-不得把 state 改成：
-
-```text
-SAFE_STOP
-DISABLED
-MANUAL_DISARMED
-```
-
-除非项目当前明确把某种更严重 terminal state 定义为高于 E-STOP；
-如果存在，必须报告并保持现有优先级。
-
----
-
-# Required Behavior G — Motor Mode Updates During E-STOP
-
-测试：
-
-```text
-EMERGENCY_STOP latched
-```
-
-随后 motor mode/readback：
-
-```text
-MANUAL
-AUTO
-ERROR
-DISABLED
-EMERGENCY_STOP
-```
-
-普通 mode update 不能解除 fan E-STOP。
-
-尤其不能出现：
-
-```text
-motor returns MANUAL
-    ↓
-fan becomes SAFE_STOP
-```
-
----
-
-# Required Behavior H — Zero-generation / Set-zero Observation
-
-本次 B1 前出现过：
-
-```text
-safety_reason:
-统一零点已变化；等待新姿态和重新授权
-```
-
-如果 E-STOP 已锁存后又发生：
-
-```text
-zero generation changed
-姿态重新授权失效
-```
-
-可以更新 reason / revoke owner / clear authorization。
-
-但不得：
-
-```text
-EMERGENCY_STOP -> SAFE_STOP
-```
-
-E-STOP 状态优先。
-
----
-
-# Required Behavior I — Safety Snapshot Truthfulness
-
-任何：
-
-```text
-e_stop_latched=true
-```
-
-的 published fan safety snapshot 必须满足：
-
-```text
-control_state=EMERGENCY_STOP
-passive_for_takeover=false
 manual_armed=false
 legacy_auto_active=false
 ```
 
-按当前 contract保留其他 truthful fields。
-
-不得为了让 Flight adapter接受而伪造：
-
-```text
-e_stop_latched=false
-```
+以及当前 fan core 的真实 ownership contract。
 
 ---
 
-# Required Behavior J — Flight Safety Adapter Must Stay Strict
+# FLIGHT_ACTIVE Contract
 
-不得修改 Flight safety adapter 来接受：
+合法：
+
+```text
+control_state = FLIGHT_ACTIVE
+e_stop_latched = false
+passive_for_takeover = false
+```
+
+它表示 fan 已进入 committed/executable Flight control path。
+
+Safety adapter 可以识别该状态，
+但仍需验证：
+
+```text
+E-STOP consistency
+manual/AUTO consistency
+enabled truth
+snapshot/readback consistency
+```
+
+不要因为 state=FLIGHT_ACTIVE 就跳过其他 safety validation。
+
+---
+
+# E-STOP Invariant
+
+Task 6.2.5 的 invariant 保持：
+
+```text
+IF e_stop_latched=true
+THEN control_state MUST be EMERGENCY_STOP
+```
+
+因此以下仍必须拒绝：
 
 ```text
 e_stop_latched=true
-control_state=SAFE_STOP
+control_state=FLIGHT_WAITING
 ```
 
-当前 rejection：
+以及：
 
 ```text
-fan e-stop latch conflicts with control state
+e_stop_latched=true
+control_state=FLIGHT_ACTIVE
 ```
 
-是正确的。
+不能因为本任务加入两个合法 state 就放宽 E-STOP 一致性。
 
-修复后目标是：
+---
+
+# Passive-for-takeover Invariant
+
+保持当前规则：
+
+只有正式 legacy-safe passive states 才允许：
 
 ```text
-fan publisher/core 不再产生这种矛盾状态
+passive_for_takeover=true
 ```
 
-而不是：
+例如当前 contract允许的：
 
 ```text
-Flight 接受矛盾状态
+SAFE_STOP
+MANUAL_DISARMED
+```
+
+不要把：
+
+```text
+FLIGHT_WAITING
+FLIGHT_ACTIVE
+```
+
+加入 passive state 集合。
+
+以下必须拒绝：
+
+```text
+FLIGHT_WAITING + passive_for_takeover=true
+FLIGHT_ACTIVE  + passive_for_takeover=true
 ```
 
 ---
 
-# Required Regression 1 — Exact Hardware Failure Shape
+# Manual / AUTO Conflict
 
-构建接近 B1 实际顺序的 fake test：
+构造 regression 确认：
 
 ```text
-fan normal startup
+FLIGHT_WAITING
+manual_armed=true
+```
+
+按当前 contract 必须被拒绝或被当前既有一致性规则拦截。
+
+同理：
+
+```text
+FLIGHT_ACTIVE
+legacy_auto_active=true
+```
+
+不得因为新增 known-state support 而被接受。
+
+不要新造规则；
+优先复用当前 adapter 的 cross-field consistency。
+
+---
+
+# Enabled Contract
+
+保持当前 truthful enabled contract。
+
+例如：
+
+```text
+FLIGHT_ACTIVE
+enabled_observed=true
 enabled=true
-SAFE_STOP/passive
-
-Flight reserve
-Flight commit
-
-then:
-/e_stop=true
-
-fan:
-EMERGENCY_STOP
-e_stop_latched=true
-
-Flight/runtime rollback:
-revoke ownership
-
-final snapshot:
-e_stop_latched=true
-control_state=EMERGENCY_STOP
-passive_for_takeover=false
-STOP PWM
-no Flight owner
 ```
 
-然后通过当前 Flight safety adapter 解析该 snapshot。
+可以继续评估。
+
+但：
+
+```text
+FLIGHT_ACTIVE
+enabled_observed=false
+```
+
+或当前定义下不可信的 enabled 状态，
+不得被本任务绕过。
+
+不要伪造：
+
+```text
+enabled=true
+```
+
+---
+
+# Unknown State Must Still Fail Closed
+
+增加明确 regression：
+
+```text
+control_state = "FLIGHT_SUPER_MODE"
+```
+
+或者其他不存在字符串。
 
 必须：
 
 ```text
-ACCEPTED
+REJECT
+reason = unknown fan control state
 ```
 
-不能再得到：
+不要使用宽松 prefix / suffix 匹配。
+
+---
+
+# Required Regression — Exact B1 Failure Shape
+
+建立 fake integration sequence：
+
+```text
+1. fan starts SAFE_STOP/passive
+
+2. Flight prepare
+
+3. preflight READY
+
+4. fan reserve succeeds
+
+5. fan core transitions:
+   SAFE_STOP -> FLIGHT_WAITING
+
+6. fan safety snapshot publishes:
+   control_state=FLIGHT_WAITING
+   e_stop_latched=false
+   passive_for_takeover=false
+
+7. Flight safety adapter consumes snapshot
+```
+
+修改前：
+
+```text
+REJECT unknown fan control state
+```
+
+修改后：
+
+```text
+ACCEPT
+```
+
+然后 Runtime handoff不得因为这一 snapshot进入：
+
+```text
+INHIBITED invalid fan safety observation
+```
+
+---
+
+# Required Regression — FLIGHT_ACTIVE
+
+继续 fake sequence：
+
+```text
+reserve
+→ commit
+→ first valid Flight command
+→ fan state = FLIGHT_ACTIVE
+```
+
+Safety adapter必须接受合法：
+
+```text
+FLIGHT_ACTIVE
+```
+
+snapshot。
+
+不要实际执行硬件。
+
+---
+
+# Required Runtime Integration Regression
+
+使用 fake motor/fan ownership endpoints模拟：
+
+```text
+DRY_RUN
+→ prepare
+→ ARMING
+→ READY_TO_TAKEOVER
+→ motor reserve
+→ fan reserve
+→ fan safety FLIGHT_WAITING
+→ motor commit
+→ fan commit
+→ owner readback valid
+→ atomic ACTIVE
+```
+
+必须证明：
+
+```text
+FLIGHT_WAITING safety observation
+```
+
+不再导致：
+
+```text
+invalid fan safety observation
+INHIBITED
+```
+
+最终 fake runtime可以进入：
+
+```text
+authority_state=ACTIVE
+command_authority=FLIGHT_CONTROL
+actuation_allowed=true
+```
+
+按当前架构完成。
+
+---
+
+# Do Not Fake ACTIVE
+
+Runtime regression 必须走真实现有：
+
+```text
+reserve
+commit
+readback
+cutoff
+atomic commit
+```
+
+路径。
+
+不要直接测试中赋值：
+
+```text
+runtime.state = ACTIVE
+```
+
+来绕过 ownership handoff。
+
+---
+
+# Atomic Ownership Must Stay Frozen
+
+不得修改：
+
+```text
+motor reserve
+fan reserve
+motor commit
+fan commit
+owner token matching
+authority generation
+atomic cutoff
+command lease
+handoff lease
+```
+
+本任务只修 safety state vocabulary contract。
+
+如果 handoff在修复 state allowlist后暴露另一个真实问题，
+先报告，不顺带 redesign。
+
+---
+
+# Search For Duplicated State Allowlists
+
+全仓搜索：
+
+```text
+SAFE_STOP
+MANUAL_DISARMED
+AUTO_ACTIVE
+EMERGENCY_STOP
+```
+
+以及：
+
+```text
+known fan states
+allowed fan states
+control_state
+```
+
+确认是否还有其他 consumer 复制了一份旧 fan-state allowlist。
+
+如果存在：
+
+- 只修正式 contract 对齐；
+- 不创建新的 architecture；
+- 不扩大语义。
+
+如果某处明确只允许 legacy states是有意设计，
+不要强行加入 Flight states；
+必须解释其职责差异。
+
+---
+
+# Preferred Contract Source
+
+如果仓库已有单一正式的：
+
+```text
+FanControlState
+```
+
+enum/constants，
+
+优先考虑让 safety adapter复用或从正式定义导出合法 state名称，
+避免以后再次出现两份手工 allowlist漂移。
+
+但：
+
+```text
+不要为了 DRY
+```
+
+做大规模 package dependency重构。
+
+如果直接小范围补上：
+
+```text
+FLIGHT_WAITING
+FLIGHT_ACTIVE
+```
+
+是更稳定、依赖更少的方案，
+可以采用。
+
+目标是：
+
+```text
+minimal fix
+```
+
+不是新建 shared-state framework。
+
+---
+
+# Preflight Must Stay Unchanged
+
+不得为了修这个问题修改 Flight preflight。
+
+B1 attempt #3 已经证明：
+
+```text
+preflight_ready=true
+```
+
+所以当前 preflight不是 blocker。
+
+不要删除：
+
+```text
+fan.enabled
+fan.passive_for_takeover
+manual/AUTO checks
+fan state consistency
+```
+
+---
+
+# Fan Core Must Stay Unchanged Unless Regression Proves Otherwise
+
+当前 fan core 正常进入：
+
+```text
+FLIGHT_WAITING
+```
+
+本身是正确行为。
+
+不要为了让旧 adapter通过而把它伪装回：
+
+```text
+SAFE_STOP
+```
+
+也不要让 reserve 后继续发布：
+
+```text
+passive_for_takeover=true
+```
+
+正确修复方向是 consumer理解正式 producer state，
+不是 producer伪装 legacy state。
+
+---
+
+# Bounded Verification Controller Freeze
+
+不得修改：
+
+```text
+test_motor_name=left_pitch
+motor_test_offset_rad=+0.05
+```
+
+controller逻辑。
+
+本次失败发生在 executable command前，
+没有证据表明 bounded controller有问题。
+
+---
+
+# Motor Subsystem Freeze
+
+不得修改：
+
+```text
+motor feedback acquisition
+cold-start hold
+set-zero
+motor ownership
+motor safety
+motor command envelope
+```
+
+B1 attempt #3 的 motor feedback仍然正常 zero baseline，
+且没有 +0.05 动作证据。
+
+不要动 motor。
+
+---
+
+# Fan E-STOP Fix Freeze
+
+Task 6.2.5 的修复不得回退。
+
+继续测试：
+
+```text
+FLIGHT_WAITING
+→ E-STOP
+→ EMERGENCY_STOP
+→ rollback
+```
+
+最终仍必须：
+
+```text
+e_stop_latched=true
+control_state=EMERGENCY_STOP
+```
+
+不能因为加入 FLIGHT state支持重新出现：
 
 ```text
 fan e-stop latch conflicts with control state
@@ -627,348 +898,100 @@ fan e-stop latch conflicts with control state
 
 ---
 
-# Required Regression 2 — Revoke Without E-STOP Still Works
+# Required Test Matrix
 
-不要为了保持 EMERGENCY_STOP 破坏正常 revoke。
+至少覆盖：
 
-场景：
-
-```text
-Flight owner active
-e_stop_latched=false
-revoke_flight_ownership()
-```
-
-应继续按当前 contract：
-
-```text
-STOP
-owner cleared
-normal safe/passive non-E-STOP state
-```
-
-不要让所有 revoke 都变成 EMERGENCY_STOP。
-
----
-
-# Required Regression 3 — Safe-stop Without E-STOP Still Works
-
-正常 Flight safe-stop：
-
-```text
-e_stop_latched=false
-```
-
-保持当前行为。
-
-不要把本修复变成：
-
-```text
-every safe_stop = emergency_stop
-```
-
----
-
-# Required Regression 4 — Timeout Without E-STOP
-
-normal command/handoff timeout：
-
-```text
-e_stop_latched=false
-```
-
-保持当前 fail-closed state 与 owner cleanup contract。
-
-本任务只增加：
-
-```text
-E-STOP already latched
-```
-
-时的 dominance。
-
----
-
-# Required Regression 5 — Explicit Reset
-
-完整序列：
-
-```text
-normal
-→ Flight owner
-→ E-STOP
-→ rollback/revoke
-→ remains EMERGENCY_STOP
-→ external E-STOP false observed
-→ explicit reset_e_stop
-```
-
-只有最后一步成功后：
-
-```text
-e_stop_latched=false
-```
-
-并进入当前正式定义的 safe post-reset state。
-
-随后：
-
-```text
-passive_for_takeover
-```
-
-必须按正常状态重新计算，
-不能自动恢复旧 Flight owner。
-
----
-
-# Required Regression 6 — No Old Authority Replay
-
-E-STOP 前假设：
-
-```text
-Flight epoch E
-generation G
-token T
-last command C
-```
-
-E-STOP + rollback + reset 后：
-
-不得恢复：
-
-```text
-E/G/T/C
-```
-
-不得重新发布旧 fan command。
-
-必须重新走：
-
-```text
-new reserve
-new commit
-new generation
-new Flight command
-```
-
----
-
-# Required Regression 7 — Flight Runtime Rollback Integration
-
-使用 fake motor/fan ownership endpoints测试 Runtime：
-
-```text
-prepare
-preflight ready
-reserve
-commit
-ACTIVE or partially committed state
-then global E-STOP
-```
-
-验证：
-
-```text
-Runtime fail closed
-fan revoke executed
-motor revoke executed as current contract requires
-actuation_allowed=false
-authority != FLIGHT_CONTROL
-controller inhibited appropriately
-```
-
-并且 fan final safety readback仍是：
-
-```text
-e_stop_latched=true
-EMERGENCY_STOP
-```
-
-不要通过重启 Runtime 来“解决”状态。
-
----
-
-# Required Regression 8 — Restart Does Not Clear Lower-level E-STOP
-
-明确锁定这次硬件测试观察到的行为：
-
-```text
-lower-level fan/motor E-STOP latched
-
-Flight Runtime process exits
-Flight Runtime process restarts
-```
-
-新的 Runtime必须仍看到：
-
-```text
-global_estop_active=true
-```
-
-并进入当前：
-
-```text
-controller inhibited
-explicit reset required
-```
-
-的 fail-closed路径。
-
-本 Task不得改变这一点。
+1. FLIGHT_WAITING legitimate snapshot accepted；
+2. FLIGHT_ACTIVE legitimate snapshot accepted；
+3. FLIGHT_WAITING + e_stop=true rejected；
+4. FLIGHT_ACTIVE + e_stop=true rejected；
+5. FLIGHT_WAITING + passive=true rejected；
+6. FLIGHT_ACTIVE + passive=true rejected；
+7. FLIGHT_WAITING + manual conflict；
+8. FLIGHT_ACTIVE + AUTO conflict；
+9. unknown state rejected；
+10. existing SAFE_STOP accepted；
+11. existing MANUAL states unchanged；
+12. existing AUTO states unchanged；
+13. DISABLED semantics unchanged；
+14. EMERGENCY_STOP semantics unchanged；
+15. Task 6.2.5 E-STOP dominance unchanged；
+16. exact B1 reserve -> FLIGHT_WAITING adapter regression；
+17. commit -> FLIGHT_ACTIVE adapter regression；
+18. Runtime handoff progresses past FLIGHT_WAITING；
+19. fake atomic ACTIVE reachable；
+20. no old epoch/generation replay；
+21. command lease semantics unchanged；
+22. handoff lease semantics unchanged；
+23. malformed fan snapshot still rejected；
+24. Flight preflight unchanged；
+25. bounded controller unchanged。
 
 ---
 
 # Logging
 
-修复后不要产生高频重复 warning：
+真实 B1 曾出现：
 
 ```text
 rejected fan safety observation:
-fan e-stop latch conflicts with control state
+unknown fan control state
 ```
 
-因为矛盾状态本身不应再生成。
+修复后合法：
 
-但真正收到其他 malformed/inconsistent safety observation 时，
-Flight adapter warning仍应保留。
+```text
+FLIGHT_WAITING
+FLIGHT_ACTIVE
+```
 
-不要简单 rate-limit 或删除 warning 来掩盖问题。
+不应再产生该 warning。
+
+真正 arbitrary/unknown state仍应产生明确 reject warning。
+
+不要删除 warning。
+
+不要仅做 rate-limit。
 
 ---
 
-# B1 Test Recording Improvement
+# Documentation
 
-同时更新：
+更新：
 
 ```text
 docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md
+docs/LATEST_FEEDBACK.md
 ```
 
-把下一次 B1 的 observation 方法改掉。
-
-不要再要求用户肉眼追：
+记录 B1 attempt #3：
 
 ```text
-ros2 topic echo /flight_control/authority/status
-ros2 topic echo /motors/feedback
-```
+prepare accepted: YES
+preflight READY: YES
+handoff started: YES
 
-高速刷屏。
+fan entered:
+FLIGHT_WAITING
 
-下一次 B1 必须使用日志文件持续记录，例如：
+Flight adapter:
+REJECTED legitimate FLIGHT_WAITING as unknown
 
-```bash
-ros2 topic echo /flight_control/authority/status \
-  > /tmp/windarmor_b1_authority.log
+Runtime:
+INHIBITED
 
-ros2 topic echo /motors/feedback \
-  > /tmp/windarmor_b1_feedback.log
-```
+ACTIVE:
+NO
 
-必要时：
-
-```text
-stdbuf
-timeout
-ros2 bag
-```
-
-只能选择当前环境可靠、简单的方式。
-
-目标：
-
-```text
-test结束后再分析 ACTIVE区间
-```
-
-而不是人工追屏。
-
----
-
-# B1 E-STOP Timing Improvement
-
-更新验证计划。
-
-禁止再次使用：
-
-```bash
-sleep 3 && publish e_stop
-```
-
-在 `prepare` 前启动计时，
-因为那不是：
-
-```text
-ACTIVE duration <= 3 sec
-```
-
-而只是：
-
-```text
-wall-clock from timer start
-```
-
-下一次 B1 应采用更清晰方式。
-
-最低要求：
-
-1. `prepare` 前急停终端就绪；
-2. authority日志持续记录；
-3. 进入 ACTIVE 后开始计算 bounded actuation window；
-4. 最长 3 秒；
-5. 用户可更早手动 E-STOP；
-6. 如果未进入 ACTIVE，不得把 prepare 后 3 秒误当成 ACTIVE test。
-
-如果纯 shell 自动化无法可靠以 ACTIVE transition作为 timer trigger，
-不要增加复杂脚本。
-
-允许采用：
-
-```text
-用户看到明确 ACTIVE event/log后
-立即开始 3-second stop timer
-```
-
-但必须结合文件记录，避免状态证据丢失。
-
-不要为此重构 Runtime。
-
----
-
-# Documentation Status
-
-更新硬件计划记录：
-
-```text
-B1 retry attempt #2:
-
-prepare accepted:
-YES
-
-confirmed ACTIVE:
+bounded motor movement:
 NO EVIDENCE
-
-confirmed bounded motor motion:
-NO EVIDENCE
-
-E-STOP:
-TRIGGERED
-
-Flight Runtime restart:
-correctly inhibited by global_estop_active
-
-new blocker:
-fan safety readback became internally inconsistent during E-STOP/rollback
-
-observed warning:
-fan e-stop latch conflicts with control state
 ```
 
-修复后只写：
+Task完成后只写：
 
 ```text
-Task 6.2.5:
+Task 6.2.6:
 SOFTWARE PASS
 
 B1:
@@ -982,8 +1005,87 @@ NOT HARDWARE PASS
 Gate A
 Task 6.2.2 hardware
 B0
-Task 6.2.4 startup test
+Task 6.2.4 startup
+Task 6.2.5 hardware scenario
 ```
+
+---
+
+# Next B1 Recording
+
+保留最新已经验证可用的文件记录方式：
+
+```bash
+stdbuf -oL ros2 topic echo \
+  /flight_control/authority/status \
+  windarmor_interfaces/msg/FlightAuthorityStatus \
+  > /tmp/windarmor_b1_authority.log
+
+stdbuf -oL ros2 topic echo \
+  /motors/feedback \
+  windarmor_interfaces/msg/MotorFeedbackArray \
+  > /tmp/windarmor_b1_feedback.log
+```
+
+下一次继续从：
+
+```text
+prepare 前
+```
+
+开始记录。
+
+---
+
+# Next ACTIVE Timing
+
+继续保持：
+
+```text
+ACTIVE max = 3 sec
+```
+
+但是：
+
+```text
+只有明确检测到 authority_state=ACTIVE
+```
+
+后才开始 3 秒窗口。
+
+如果 10 秒内没有 ACTIVE：
+
+```text
+E-STOP
+NO ACTIVE
+```
+
+不得自动重复 prepare。
+
+---
+
+# Hardware Parameters Remain Frozen
+
+下一次 B1仍然：
+
+```text
+test_motor_name = left_pitch
+
+motor_test_offset_rad = +0.05
+
+other motors =
+captured baseline hold
+
+fan_left_test_command = 0.0
+fan_right_test_command = 0.0
+
+ESC power = OFF
+
+GPIO12 -> ESC = DISCONNECTED
+GPIO13 -> ESC = DISCONNECTED
+```
+
+本 Task不得改变这些参数。
 
 ---
 
@@ -995,23 +1097,22 @@ Task 6.2.4 startup test
 - FlightCommand API；
 - CommandAuthority；
 - ControllerState；
-- motor feedback acquisition；
-- motor cold-start hold；
-- motor ownership；
-- fan startup first-observation fix；
-- fan normalized command；
+- Flight preflight；
+- Flight atomic handoff architecture；
+- motor subsystem；
+- fan startup fix；
+- fan E-STOP fix；
+- fan PWM normalization；
 - bounded verification controller；
-- atomic owner reserve/commit architecture；
-- preflight safety rules。
+- soft limits。
 
 不得增加：
 
 ```text
-motor-only authority
+motor-only Flight authority
 fan bypass
-test-only E-STOP bypass
-automatic reset E-STOP
-automatic legacy owner reclaim
+test bypass
+fake fan safety state
 ```
 
 ---
@@ -1051,134 +1152,101 @@ colcon test-result --verbose
 
 ---
 
-# Required Test Matrix
-
-至少覆盖：
-
-1. Flight reserved -> E-STOP；
-2. Flight committed -> E-STOP；
-3. E-STOP -> Flight revoke；
-4. E-STOP -> Flight safe-stop；
-5. E-STOP -> handoff timeout；
-6. E-STOP -> command timeout；
-7. E-STOP -> enabled=true；
-8. E-STOP -> enabled=false；
-9. E-STOP -> enabled stale；
-10. E-STOP -> motor MANUAL；
-11. E-STOP -> motor AUTO；
-12. E-STOP -> motor ERROR；
-13. E-STOP -> zero-generation change；
-14. snapshot always EMERGENCY_STOP while latched；
-15. passive_for_takeover=false while latched；
-16. Flight safety adapter accepts corrected snapshot；
-17. normal revoke without E-STOP unchanged；
-18. normal safe-stop without E-STOP unchanged；
-19. normal timeout without E-STOP unchanged；
-20. explicit reset required；
-21. reset does not restore old owner；
-22. old epoch/generation/token not replayed；
-23. old fan command not replayed；
-24. Runtime restart sees lower-level E-STOP；
-25. global E-STOP inhibits Flight as before。
-
----
-
 # Stop Conditions
 
-停止并报告，如果发现必须：
+如果发现必须：
 
-- 放宽 Flight safety adapter；
-- 自动清除 E-STOP；
-- 让 ownership revoke优先于 E-STOP；
-- 修改 authority架构；
-- 增加新的 public state；
-- 改 Flight API；
-- 改 motor subsystem；
-- 用日志 rate-limit掩盖 inconsistent state；
-- 依赖真实硬件才能复现；
-- 做架构级 redesign。
+- 修改 fan core 正确的 FLIGHT_WAITING 语义；
+- 把 FLIGHT state伪装为 SAFE_STOP；
+- 放宽 E-STOP invariant；
+- 放宽 passive_for_takeover；
+- 删除 unknown-state rejection；
+- 修改 preflight；
+- 修改 motor subsystem；
+- 修改 authority architecture；
+- 增加 test bypass；
+- 使用真实硬件才能完成；
+
+则停止并报告。
 
 ---
 
 # Expected Result
 
-目标序列：
+修复后 fake B1：
 
 ```text
-Flight owner active
+SAFE_STOP
     ↓
-/e_stop=true
+prepare
     ↓
-fan:
-e_stop_latched=true
-control_state=EMERGENCY_STOP
-STOP PWM
+ARMING
     ↓
-Runtime rollback
+preflight READY
     ↓
-fan owner revoked
-tokens/generation cleared
+fan reserve
     ↓
-fan STILL:
-e_stop_latched=true
-control_state=EMERGENCY_STOP
-STOP PWM
-passive_for_takeover=false
+FLIGHT_WAITING
     ↓
-Flight safety adapter accepts truthful readback
+SafetyReadbackAdapter ACCEPT
     ↓
-explicit reset_e_stop required
+commit
+    ↓
+owner readback valid
+    ↓
+atomic ACTIVE
+    ↓
+FLIGHT_ACTIVE safety state
+    ↓
+SafetyReadbackAdapter ACCEPT
 ```
 
-绝对不能再次出现：
+而：
 
 ```text
-e_stop_latched=true
-control_state=SAFE_STOP
+unknown arbitrary state
+```
+
+仍然：
+
+```text
+REJECT
+```
+
+并且：
+
+```text
+E-STOP
+```
+
+仍保持最高优先级：
+
+```text
+EMERGENCY_STOP
 ```
 
 ---
 
-# Next Hardware Step
+# Hardware Status After Task
 
-软件审核通过后：
+只允许更新为：
 
 ```text
-B1 bounded Flight takeover retry
+Task 6.2.6:
+SOFTWARE PASS
+
+B1 attempt #3:
+INCONCLUSIVE / FAIL-CLOSED BEFORE ACTIVE
+
+B1 next:
+READY FOR RETRY
+NOT HARDWARE PASS
 ```
 
-参数保持：
+不得声称：
 
 ```text
-test_motor_name = left_pitch
-motor_test_offset_rad = +0.05
-
-other motors:
-captured baseline hold
-
-fan commands:
-0.0 / 0.0
-
-ESC power:
-OFF
-
-GPIO12/13 -> ESC:
-DISCONNECTED
-```
-
-下一次使用文件记录：
-
-```text
-authority/status
-motors/feedback
-```
-
-并修正 ACTIVE 3 秒计时流程。
-
-任何真实 `prepare`：
-
-```text
-必须等待用户再次单独授权
+Flight bounded actuation hardware PASS
 ```
 
 ---
@@ -1195,41 +1263,41 @@ docs/LATEST_FEEDBACK.md
 
 ## Hardware Observation
 
-- B1 prepare accepted；
-- no confirmed ACTIVE；
-- no confirmed bounded movement；
-- E-STOP triggered；
-- fan safety conflict warning；
-- Runtime restart correctly inhibited by global E-STOP。
+- ARMING reached；
+- preflight READY reached；
+- FLIGHT_WAITING produced；
+- adapter rejected it as unknown；
+- Runtime INHIBITED；
+- no ACTIVE；
+- no confirmed +0.05 rad actuation。
 
 ## Root Cause
 
-必须说明：
-
-- fake reproduction；
-- exact path that changed state；
-- whether initial inference was correct or not。
+- producer formal states；
+- consumer stale allowlist；
+- exact regression reproduction。
 
 ## Implementation
 
-- E-STOP dominance invariant；
-- affected fan cleanup paths；
-- reset contract unchanged。
+- FLIGHT_WAITING handling；
+- FLIGHT_ACTIVE handling；
+- unknown-state rejection retained；
+- cross-field checks retained。
 
 ## Safety
 
-- ownership revoke；
-- safe-stop；
-- lease timeout；
-- enabled/motor/zero updates；
-- no auto reset；
-- no old command/authority replay。
+- E-STOP invariant；
+- passive invariant；
+- manual/AUTO conflict；
+- enabled truth；
+- no authority bypass。
 
 ## Tests
 
 - exact commands；
-- test counts；
-- workspace result；
+- regression counts；
+- package counts；
+- workspace counts；
 - CI result。
 
 ## Hardware Status
@@ -1239,17 +1307,15 @@ docs/LATEST_FEEDBACK.md
 ```text
 B1 hardware:
 NOT PASS
-READY FOR RETRY ONLY
 ```
 
 ## Next Step
 
 ```text
 B1 bounded Flight takeover retry
-with file-based observation
 ```
 
-等待新的硬件授权。
+等待用户新的单独硬件授权。
 
 ## Git
 
