@@ -11,12 +11,39 @@ def source(name: str) -> str:
     )
 
 
+def declared_parameter_defaults(name: str) -> dict[str, object]:
+    tree = ast.parse(source(name))
+    defaults = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or len(node.args) < 2:
+            continue
+        if not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr != "declare_parameter":
+            continue
+        parameter_name = ast.literal_eval(node.args[0])
+        defaults[parameter_name] = ast.literal_eval(node.args[1])
+    return defaults
+
+
 def test_bottom_controller_only_accepts_internal_command_topic() -> None:
     fan_node = source("fan_node.py")
     assert '"/fans/command_pwm"' in fan_node
     assert '"/fans/pwm"' not in fan_node
     assert '"/fans/left/pwm"' not in fan_node
     assert '"/fans/right/pwm"' not in fan_node
+
+
+def test_default_fan_gpio_mapping_matches_hardware_contract() -> None:
+    defaults = declared_parameter_defaults("fan_node.py")
+    assert defaults["left_gpio"] == 12
+    assert defaults["right_gpio"] == 26
+
+    config = (PACKAGE_ROOT / "config" / "fan_params.yaml").read_text(
+        encoding="utf-8"
+    )
+    assert "    left_gpio: 12\n" in config
+    assert "    right_gpio: 26\n" in config
 
 
 def test_manager_owns_public_topics_and_does_not_import_gpio() -> None:

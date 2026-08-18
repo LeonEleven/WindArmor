@@ -49,7 +49,7 @@ def test_observation_only_launch_is_valid_and_excludes_actuator_nodes() -> None:
     assert 'executable="fan_keyboard"' not in source
     assert '"flight_takeover_enabled": False' in source
     assert 'DeclareLaunchArgument("flight_takeover_enabled"' not in source
-    assert "GPIO12" not in source and "GPIO13" not in source
+    assert all(gpio not in source for gpio in ("GPIO12", "GPIO13", "GPIO26"))
 
 
 def test_observation_only_launch_constructs_real_jazzy_lifecycle_nodes(

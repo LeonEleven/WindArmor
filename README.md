@@ -293,12 +293,15 @@ fallback 到 `0.0`，也不会自动 set-zero。成功后 `current_targets`、`d
 | 风扇 | BCM GPIO | 树莓派物理引脚 |
 |---|---:|---:|
 | 左风扇 PWM | GPIO12 | 32 |
-| 右风扇 PWM | GPIO13 | 33 |
+| 右风扇 PWM | GPIO26 | 37 |
 | GND | — | 34 或其他 GND |
 
-GPIO12 是原单风扇项目已验证的连接。GPIO13 是为第二路风扇设置的默认值，
-首次上电前必须确认它确实接到了第二个电调的信号线；如实际接线不同，请修改
-`src/windarmor_fan_controller/config/fan_params.yaml`。
+GPIO12 是原单风扇项目已验证的连接。右风扇不再使用旧映射 GPIO13（物理 33
+脚），因为 Waveshare 2-CH CAN HAT+ 的 CAN_1 INT_1 默认占用 BCM GPIO13；当前
+Raspberry Pi 5 + 该 CAN HAT 组合不得同时把 GPIO13 用作右 ESC PWM。本项目选择将
+右风扇改到 GPIO26（物理 37 脚），而不修改 HAT 上 INT_1 的 0Ω 电阻或设备树中断
+配置。首次上电前仍须确认实际接线。官方参考：
+[Waveshare 2-CH CAN HAT+](https://www.waveshare.net/wiki/2-CH_CAN_HAT%2B)。
 
 ## 安装与构建
 
@@ -726,7 +729,7 @@ ros2 launch windarmor_fan_controller fans.launch.py
 因此不能再只靠独立风扇 launch 和后台 PWM 心跳进入手动输出。统一
 `windarmor.launch.py` 继续覆盖该兼容参数为 `true`。
 
-单独运行 `fan_controller` 只用于已授权的底层维护：它会占用 GPIO12/13、
+单独运行 `fan_controller` 只用于已授权的底层维护：它会占用 GPIO12/26、
 初始化电调，只订阅内部 `/fans/command_pwm`，且运行前必须确认管理器未运行。
 它不是正常公共控制方式；正式操作应使用 `fans.launch.py` 或
 `windarmor.launch.py`。

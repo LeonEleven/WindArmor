@@ -120,12 +120,28 @@ Z+ -> 垂直向上
 | 通道 | BCM GPIO | Raspberry Pi 物理引脚 |
 |---|---:|---:|
 | 左风扇 PWM | GPIO12 | 32 |
-| 右风扇 PWM | GPIO13 | 33 |
+| 右风扇 PWM | GPIO26 | 37 |
 | GND | — | 34 或其他 GND |
 
-GPIO12 来自原单风扇项目已经验证的连接。GPIO13 是当前第二路风扇默认配置；首次
-带电前仍必须物理确认它实际连接到右风扇电调信号线，不能把仓库默认值视为该接线
-已经完成实机确认。任何 GPIO/PWM/ESC 操作仍需遵守 `AGENTS.md` 的硬件授权门槛。
+GPIO12 来自原单风扇项目已经验证的连接。右风扇不再使用旧映射 GPIO13（物理 33
+脚）：Waveshare 2-CH CAN HAT+ 的 CAN_1 INT_1 默认占用 BCM GPIO13，因此在当前
+Raspberry Pi 5 + 该 CAN HAT 硬件组合下，GPIO13 不适合同时承担右 ESC PWM。本项目
+选择将右风扇信号移到 GPIO26（物理 37 脚），而不是修改 HAT 上 INT_1 的 0Ω 电阻
+和设备树中断配置。官方参考：
+[Waveshare 2-CH CAN HAT+](https://www.waveshare.net/wiki/2-CH_CAN_HAT%2B)。
+
+该结论来自以下真实人工诊断证据，不应扩展解释为 GPIO13 芯片损坏：右 ESC 接在
+GPIO13 时持续鸣叫且不接受油门；两套 ESC/fan 交叉后均可在 GPIO12 工作、均不能在
+GPIO13 工作；RIGHT `/fans/status_pwm` 软件路由正常，lgpio 也成功 claim GPIO13。
+绕过 ROS 和 gpiozero 后，同一套 ESC/fan 的 direct lgpio 结果为：GPIO12 在 800 us /
+50 Hz 正常解锁，GPIO13 在相同信号下仍鸣叫；GPIO26 在 800 us / 50 Hz 正常解锁，
+1210 us 持续约 1 秒时产生 bounded response，回到 800 us 后停止。因此工程分类为
+硬件引脚分配冲突、GPIO13 不适合当前硬件栈；GPIO26 replacement channel 的 direct
+hardware verification 为 PASS。
+
+首次带电前仍必须物理确认 GPIO12/pin 32 为左风扇、GPIO26/pin 37 为右风扇；不能
+把仓库默认值视为接线已完成实机确认。任何 GPIO/PWM/ESC 操作仍需遵守
+`AGENTS.md` 的硬件授权门槛。
 
 ## Measurement limitations
 

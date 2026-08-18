@@ -33,7 +33,7 @@ class DualFanController(Node):
         super().__init__("fan_controller")
 
         self.declare_parameter("left_gpio", 12)
-        self.declare_parameter("right_gpio", 13)
+        self.declare_parameter("right_gpio", 26)
         self.declare_parameter("min_pwm_us", 800)
         self.declare_parameter("max_pwm_us", 2200)
         self.declare_parameter("stop_pwm_us", 800)
