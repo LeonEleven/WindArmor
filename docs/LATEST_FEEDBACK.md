@@ -1,202 +1,186 @@
-# 最新反馈：v0.4.0 Task 6.2.7 Fan Shutdown + Gate C E-STOP Watchdog
+# 最新反馈：RIGHT fan GPIO26 引脚冲突修复
 
 > 本文件只保留当前最新任务反馈。
 >
-> 日期：2026-08-17
+> 日期：2026-08-18
 
-## B1 Final Functional Result
+## 结果
 
-```text
-B1 bounded Flight functional hardware verification:
-HARDWARE PASS
-```
-
-既有 closure run 已确认 prepare、ARMING、READY_TO_TAKEOVER、atomic ACTIVE、
-`command_authority=FLIGHT_CONTROL`、motor/fan committed、owner token 匹配、atomic cutoff
-存在及 `actuation_allowed=true`。`left_pitch` 达到 baseline `+0.05 rad`，其他三轴保持
-baseline；相关 feedback 均为 valid/fresh/healthy、`fault_flags=0`。E-STOP 到达 lower-level
-后，motor 从 `AUTO_RUNNING` 进入 `EMERGENCY_STOP`，motor/fan latch 均为 true，fan
-control state 为 `EMERGENCY_STOP`，Flight 进入 INHIBITED/NONE、actuation disabled，最终
-motor/fan owner 均为 NONE；未观察到 shake 或异常声音。
-
-上述是用户提供的既有实机证据。本 Task 6.2.7 没有重跑 B1。
-
-## Timing Deviation
+已确认并记录 RIGHT fan 旧映射 BCM GPIO13 与 Waveshare 2-CH CAN HAT+ 的
+CAN_1 INT_1 默认 GPIO13 之间的硬件引脚分配冲突。WindArmor 的正式软件映射已改为：
 
 ```text
-B1 functional result: PASS
-procedural ACTIVE <= 3.0 sec: NOT MET in closure run
+LEFT fan:  BCM GPIO12 / physical pin 32
+RIGHT fan: BCM GPIO26 / physical pin 37
 ```
 
-旧临时 watchdog 在检测到 ACTIVE 后先 sleep 2.5 秒，随后才启动新的
-`ros2 topic pub --once`。ROS process startup 和 DDS discovery 增加了显著延迟，导致实际
-`/e_stop` publication 晚于 3 秒；lower-level 真正收到 E-STOP 后的 motor stop、fan stop
-和状态转换很快，因此不能写成 Flight E-STOP failure。严格 `<3 sec` 证据将在 Gate C
-E-STOP 子场景使用预热 publisher 顺便闭合，不为此重跑 B1 functional test。
-
-## Fan Shutdown Root Cause
-
-修改生产实现前增加了真实 rclpy context regression：构造 `FanCommandManager` 后先执行
-`rclpy.shutdown()`，再调用 `destroy_node()`。旧实现稳定复现：
+节点默认参数与权威 YAML 一致，新增纯软件回归测试锁定该映射。PWM 范围、normalized
+mapping、E-STOP、ownership、Flight API、motor authority 和 fan authority 均未改变。
 
 ```text
-destroy_node
--> force_safe_stop
--> _finish_observation
--> _publish_command
--> Publisher.publish
--> RCLError: publisher's context is invalid
+WindArmor software mapping fix: PASS
+GPIO26 replacement fan channel direct hardware verification: PASS
+B2: PAUSED / PENDING
+Gate B: NOT COMPLETE
+Gate C: NOT STARTED
 ```
 
-因此根因是 shutdown ordering：SIGINT/launch teardown 已先使 node context invalid，manager
-的 finally cleanup 仍无条件发布；不是 fan state machine 或普通 command path 错误。旧实现
-专项结果为 1 failed，异常与实机 stack 一致。
+GPIO26 direct hardware PASS 来自本任务开始前用户已经完成并提供的人工实机证据；本次
+Codex 任务没有运行或重复任何硬件测试。
 
-另一个 `Cannot shutdown a ROS adapter that is not running` 字符串只存在于 Jazzy
-`launch_ros.ros_adapters.ROSAdapter.shutdown()` 的重复 shutdown guard，不来自本仓库 fan
-manager。现有证据不能证明它与 invalid publisher 是同一缺陷，因此本任务记录但不扩展
-修改 launch framework。
+## 问题证据与工程分类
 
-## Implementation
+### 症状与交叉测试
 
-`fan_command_manager.destroy_node()` 现在具有窄范围 lifecycle guard：
+- RIGHT ESC 接在 GPIO13 时持续鸣叫，不接受油门；LEFT channel 正常。
+- 两套 ESC/fan 交叉后，任一 ESC/fan 接 GPIO12 均能正常工作，接 GPIO13 均失败。
+- 更换 GND 没有解决问题，故障跟随 GPIO13 path，而不跟随 ESC/fan。
 
-- cleanup 只启动一次，重复 destroy 不重新发布或恢复旧 command；
-- 始终在内存 core 中执行 safe-stop，清 owner、token 和旧命令；
-- context 有效时仍发布既有最终 STOP 和只读状态；
-- context 已无效时跳过全部 ROS publish，再销毁资源；
-- `finally` 保证 ROS 资源销毁；有效 context 下的其他 publish error 仍向上暴露，不做
-  arbitrary exception swallowing。
+### 软件与 GPIO 证据
 
-新增 `scripts/flight_estop_watchdog.py`，publisher、authority subscription 和 timer 在启动
-时一次创建。它确认 `/e_stop` 至少有一个 matched subscriber 后才报告 READY；只在首次
-同时观察到 ACTIVE、FLIGHT_CONTROL、`actuation_allowed=true` 后启动 monotonic 计时，
-默认 2.0 秒后由同一 publisher 发布一次 E-STOP。10 秒内没有 ACTIVE 时也 fail-closed
-发布一次并报告 `NO ACTIVE WITHIN TIMEOUT`。`--delay-sec` 仅允许 `0 < value < 3.0`。
+- RIGHT manual command 会正确改变 `/fans/status_pwm` 第二路，第一路保持 800 us，说明
+  `fan_keyboard -> fan_command_manager -> fan_node` 的左右 routing 正常。
+- GPIO12 和 GPIO13 均被 lgpio 成功 claim，LEFT/RIGHT 共用同一套 `_set_output()` /
+  `_apply_pair()` 实现；不是 RIGHT 软件通道遗漏或未初始化。
 
-watchdog 可选等待 Flight 回报 `global_e_stop_active=true` 且 actuation disabled，并输出
-ACTIVE-to-publish、publish-to-inhibit monotonic 时间。它不调用 prepare/reset，不 reserve/
-commit/revoke owner，也不发送 motor/fan command；未加入任何正常 launch。
-
-修改文件：
-
-- `src/windarmor_fan_controller/windarmor_fan_controller/fan_command_manager.py`；
-- `src/windarmor_fan_controller/test/test_fan_shutdown.py`；
-- `scripts/flight_estop_watchdog.py`；
-- `src/windarmor_flight_control/test/test_flight_estop_watchdog.py`；
-- `scripts/ci_software.sh`；
-- `README.md`；
-- `docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md`；
-- `docs/LATEST_FEEDBACK.md`；
-- 任务开始前用户已有的 `docs/NEXT_COMMAND.md` 内容由实现过程保留。
-
-## Gate C Watchdog
-
-在未来单独获授权的 Gate C E-STOP 子场景中，必须在 prepare 前运行：
-
-```bash
-source /opt/ros/jazzy/setup.bash
-source install/setup.bash
-python3 scripts/flight_estop_watchdog.py
-```
-
-只有看到 `WATCHDOG READY` 后才可由另一终端执行单独授权的 prepare。watchdog 不适用于
-C1 stale-input、C2 command-timeout 或 C3 Runtime-shutdown 子场景，因为自动 E-STOP 会
-干扰这些独立 fail-closed 原因。不得退回临时启动 `ros2 topic pub --once` 来测量严格
-timing，也不得自动 retry prepare。
-
-## Safety
-
-- production Flight API、authority、preflight、takeover、reserve/commit/cutoff、lease、
-  bounded controller 和 Runtime timing 均未修改；
-- motor controller、feedback、cold-start、set-zero 和 command envelope 未修改；
-- fan state machine、E-STOP dominance、normalized PWM 和 startup semantics 未修改；
-- context 有效时的最终 STOP publication 没有删除；无效 context 只禁止必然失败的 ROS
-  publish，内存 cleanup 仍执行；
-- watchdog 只有 observe authority 和 publish `/e_stop=true` 两项权限，不 reset safety、
-  不取得 authority、不产生 actuator command，也不成为 production interlock。
-
-## Tests
-
-修复前 reproduction：
-
-```bash
-source /opt/ros/jazzy/setup.bash
-source install/setup.bash
-python3 -m pytest -p no:cacheprovider \
-  src/windarmor_fan_controller/test/test_fan_shutdown.py::test_destroy_after_context_shutdown_does_not_publish_or_raise -q
-```
-
-旧实现结果：1 failed，准确复现 invalid-context RCLError。
-
-专项验证：
-
-```bash
-python3 -m pytest -p no:cacheprovider \
-  src/windarmor_fan_controller/test/test_fan_shutdown.py \
-  src/windarmor_flight_control/test/test_flight_estop_watchdog.py -q
-```
-
-结果：22 passed，其中 shutdown 5 项、watchdog 17 项。
-
-规定的完整验证：
-
-```bash
-source /opt/ros/jazzy/setup.bash
-colcon build --symlink-install
-source install/setup.bash
-python3 -m pytest src/windarmor_fan_controller/test -q
-python3 -m pytest src/windarmor_flight_control/test -q
-colcon test --packages-select \
-  imu_cybergear_ros2 windarmor_fan_controller windarmor_interfaces \
-  windarmor_flight_control windarmor_bringup
-colcon test-result --verbose
-./scripts/ci_software.sh
-```
-
-结果：
-
-- manual build：5 packages finished；
-- fan pytest：158 passed；
-- Flight pytest：292 passed；
-- manual colcon：917 tests、0 errors、0 failures、0 skipped；
-- isolated CI：exit 0；safety、whitespace、compile、五包 build 全部通过；motor 431 passed、
-  fan 158 passed、Flight + interfaces 300 passed；最终 917 tests、0 errors、0 failures、
-  0 skipped。
-
-全部新增测试使用 pure logic、invalid in-process context 或 capture publisher；没有连接
-真实 CAN、串口、GPIO/PWM 或 actuator。
-
-## Hardware
+### Direct hardware evidence
 
 ```text
-No hardware used in Task 6.2.7
-
-Task 6.2.7:
-SOFTWARE PASS
-
-Gate C:
-READY FOR HARDWARE VERIFICATION
-NOT AUTHORIZED
+direct lgpio GPIO12, 800 us @ 50 Hz: ARMED NORMAL
+direct lgpio GPIO13, 800 us @ 50 Hz: STILL BEEPING
+direct lgpio GPIO26, 800 us @ 50 Hz: ARMED NORMAL
+direct lgpio GPIO26, 1210 us @ 50 Hz, ~1 s: BOUNDED RESPONSE
+GPIO26 return to 800 us: STOPPED
 ```
 
-本任务没有启动 hardware node/launch、Flight prepare 或 takeover，没有访问 `/dev/*`、
-SocketCAN、can10、GPIO12/13、PWM 或 ESC，没有给 motor/fan 通电，也没有发送真实
-actuator command。
+Waveshare 官方资料说明 2-CH CAN HAT+ 的 CAN_1 INT_1 默认使用 BCM GPIO13。项目选择
+把 RIGHT fan 改到 GPIO26，而不修改 HAT 上 INT_1 的 0Ω 电阻或设备树中断配置：
+[Waveshare 2-CH CAN HAT+](https://www.waveshare.net/wiki/2-CH_CAN_HAT%2B)。
 
-## Next
+因此根因分类为：
 
 ```text
-Gate C fail-closed hardware verification
+hardware pin assignment conflict /
+GPIO13 unsuitable in the current Raspberry Pi 5 + Waveshare 2-CH CAN HAT+ stack
 ```
 
-按 C1–C4 子场景分别等待新的单独硬件授权和完整十项带电门槛。预热 watchdog 只准备了
-工具，不构成任何真实 prepare、E-STOP timing test 或其他 Gate C 执行授权。
+现有证据不证明 Raspberry Pi GPIO13 silicon 损坏，不作该结论。
 
-## Git
+## 修改内容
 
-- task-start HEAD：`3e94b5bc3bf2aa20368031c65a25165ac6d9a602`；
-- branch：`master...origin/master`，任务开始时无已知 ahead/behind；
-- 用户本次明确授权将本任务用中文 commit 并 push 到 GitHub；
-- 不创建或移动 tag；stable tags `v0.3.0/v0.3.1/v0.3.2` 保持不变；
-- 未执行 checkout/reset/clean。
+- `src/windarmor_fan_controller/config/fan_params.yaml`：`right_gpio` 从 13 改为 26，
+  LEFT 保持 12，所有 PWM 参数保持不变。
+- `src/windarmor_fan_controller/windarmor_fan_controller/fan_node.py`：默认
+  `right_gpio` 从 13 改为 26。
+- `src/windarmor_fan_controller/test/test_interface_routing.py`：增加静态 regression，
+  同时验证节点默认值和 YAML 均为 LEFT 12 / RIGHT 26，不实例化 GPIO。
+- `src/windarmor_bringup/test/test_launch_syntax.py`：确认 observation-only launch 不硬编码
+  GPIO12、GPIO13 或 GPIO26。
+- `README.md`、`docs/HARDWARE_REFERENCE.md`：更新当前接线并记录症状、交叉测试、
+  direct lgpio 证据、Waveshare 冲突和解决方案。
+- `docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md`：更新当前 GPIO12/26 契约；保留 B1
+  发生时旧 GPIO12/13 断线边界的历史事实；明确 B2 仍 pending、Gate C 不得开始。
+- `AGENTS.md`：把未授权 fan GPIO 操作禁令同步到 GPIO12/26，并保留 GPIO13 的 CAN HAT
+  中断用途约束。
+- `docs/NEXT_COMMAND.md`：保留任务开始前用户提供的当前任务文档。
+- `docs/LATEST_FEEDBACK.md`：替换为本次最新反馈。
+
+没有修改：
+
+```text
+min_pwm_us = 800
+max_pwm_us = 2200
+stop_pwm_us = 800
+fan_stop_pwm_us = 800
+fan_start_pwm_us = 1200
+fan_auto_max_pwm_us = 1400
+flight_fan_max_pwm_us = 1400
+rise_step_pwm_us = 10
+fall_step_pwm_us = 20
+```
+
+## 纯软件验证
+
+所有实际执行的成功测试均为 pure/fake/mock 或静态检查，不访问真实 CAN、GPIO、串口、
+ESC、CyberGear、IMU 或其他硬件 I/O。
+
+1. 首次直接运行源码目录测试：
+
+   ```bash
+   source /opt/ros/jazzy/setup.bash
+   python3 -m pytest \
+     src/windarmor_fan_controller/test \
+     src/windarmor_bringup/test -q
+   ```
+
+   结果：在 collection 阶段因尚未加载工作区 `install/setup.bash` 而终止，
+   `ModuleNotFoundError: windarmor_fan_controller`；没有测试被执行，也没有硬件访问。
+
+2. 仓库统一软件 CI：
+
+   ```bash
+   source /opt/ros/jazzy/setup.bash
+   ./scripts/ci_software.sh
+   ```
+
+   结果：PASS。
+
+   ```text
+   CI safety check: PASS
+   Git whitespace check: PASS
+   Python compile: PASS
+   colcon build: 5 packages PASS
+   motor package pytest: 431 passed
+   fan safety regression: 159 passed
+   Flight and interface software tests: 300 passed
+   full workspace colcon test: 918 tests, 0 errors, 0 failures, 0 skipped
+   ```
+
+3. 使用本次构建的 install 环境重跑目标包：
+
+   ```bash
+   source /opt/ros/jazzy/setup.bash
+   source install/setup.bash
+   python3 -m pytest \
+     src/windarmor_fan_controller/test \
+     src/windarmor_bringup/test -q
+   ```
+
+   结果：`186 passed`。
+
+4. `git diff --check`：PASS。
+
+风扇 unit、routing、shutdown、E-STOP 和 bringup/release contract 软件覆盖均包含在上述
+通过结果中。
+
+## Git 状态
+
+```text
+baseline: a3978c4101cef8a21071b2867fd820faa42b3127
+branch: fix/right-fan-gpio26
+implementation commit: f0cc341 (修复右侧风扇与 CAN HAT 的 GPIO13 冲突)
+```
+
+实现提交后仅本文件等待反馈归档提交；归档完成后的最终 `git status` 和 HEAD 由最终
+回复报告。未创建 tag、GitHub Release，也未修改 v0.3.x tags。
+
+## 硬件与剩余风险
+
+本任务只修改仓库文件并执行纯软件验证；没有启动 `ros2 launch`、`ros2 run`、topic /
+service 硬件命令，没有配置 CAN，没有操作 GPIO12、GPIO13 或 GPIO26，没有输出 PWM，
+没有给 ESC/fan 或 CyberGear 通电。
+
+新的 WindArmor runtime GPIO12/26 mapping 尚未完成双路 ROS sanity test，也没有完成正式
+B2 Flight test。下一步仍需在新的独立十项带电授权下执行 LEFT GPIO12 + RIGHT GPIO26
+双风扇 manual hardware sanity test；该测试 PASS 后才能恢复 B2。当前不得开始 Gate C。
+
+最终目标映射：
+
+```text
+RIGHT fan final mapping: GPIO26 / BCM26 / physical pin 37
+GPIO26 direct hardware verification: PASS
+WindArmor software mapping fix: PASS
+B2: PENDING
+Gate B: NOT COMPLETE
+Gate C: NOT STARTED
+```
