@@ -361,6 +361,64 @@ def test_active_safe_stop_is_transported_then_revokes_both():
         node.destroy_node()
 
 
+def test_active_required_input_stale_rolls_back_before_controller_update():
+    names = ("left_lift", "left_pitch", "right_pitch", "right_lift")
+    command = FlightCommand(
+        motor_positions_rad={name: 0.1 for name in names},
+        fan_commands=FanCommand(0.2, 0.2),
+    )
+    clock = MutableClock()
+    controller = FakeController(command)
+    node = make_enabled_node(controller, clock)
+    try:
+        complete_handoff(node, clock)
+
+        fresh = active_snapshot(44)
+        node._aggregator.build_runtime_snapshot = lambda _now: fresh
+        clock.value = 10.03
+        node._control_tick()
+        update_count = len(controller.updates)
+        envelope_count = len(node._command_pub.messages)
+        assert envelope_count == 1
+        assert not node._command_pub.messages[-1].request_safe_stop
+
+        stale_state = replace(
+            fresh.flight_state,
+            sequence=45,
+            imu=replace(
+                fresh.flight_state.imu,
+                fresh=False,
+                sample_age_sec=0.21,
+            ),
+            system=replace(
+                fresh.flight_state.system,
+                required_inputs_fresh=False,
+            ),
+        )
+        stale = replace(fresh, flight_state=stale_state)
+        node._aggregator.build_runtime_snapshot = lambda _now: stale
+        clock.value = 10.04
+        node._control_tick()
+
+        assert len(controller.updates) == update_count
+        assert len(node._command_pub.messages) == envelope_count
+        assert node._authority.state is AuthorityState.INHIBITED
+        assert node._last_error == "required_inputs_stale"
+        assert not node._command_dispatch_enabled
+        assert node._last_command_sequence is None
+        assert node._last_valid_command_at is None
+        assert node._envelope_sequencer._authority_epoch is None
+        assert node._handoff.state is HandoffState.FAILED
+        assert not node._handoff.committed
+        assert len(node._motor_revoke_client.requests) == 1
+        assert len(node._fan_revoke_client.requests) == 1
+        status = node._authority_status_pub.messages[-1]
+        assert status.last_inhibit_reason == "required_inputs_stale"
+        assert not status.actuation_allowed
+    finally:
+        node.destroy_node()
+
+
 @pytest.mark.parametrize("failure", ["safety", "algorithm"])
 def test_active_safety_or_algorithm_failure_revokes_and_inhibits(failure):
     clock = MutableClock()

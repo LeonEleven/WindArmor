@@ -1,4 +1,4 @@
-# 最新反馈：Gate C 证据方案收敛
+# 最新反馈：C1 stale-input contract audit
 
 > 本文件只保留当前最新任务反馈。
 >
@@ -6,80 +6,84 @@
 
 ## Result
 
-本次完成 Gate C fail-closed verification 的 evidence/design review：
-
 ```text
+task-start branch: master
+task-start HEAD: 7b3f7d77c27f220f26f8f5f28b67f6a32a2ececb
 Gate B: COMPLETE
 Gate C: NOT EXECUTED / NOT AUTHORIZED
 ```
 
-本次只修改文档，没有执行真实硬件，没有启动硬件 node/launch，没有配置 CAN、访问
-串口/IMU、操作 GPIO/PWM/CyberGear/ESC/fan、publish `/e_stop`、调用 authority prepare
-或执行 lifecycle transition。pure software/static validation 不能表述为 Gate C 实机验证。
+本次只完成 Gate C / C1 stale required input 的 software/document contract audit，不构成
+C1 hardware PASS，也不授权任何 Gate C trigger。
 
-## Evidence workflow 收敛
+## Confirmed Runtime contract
 
-- `record_gate_evidence.py` continuous recorder 继续作为长期通用 verification
-  infrastructure，优先保存 transient ROS history。
-- operator physical observation 始终独立存在；场景结束后默认人工离线审查 trigger、
-  continuous ROS、物理观察和 no-automatic-recovery 四类证据。
-- 只有人工判定容易出错、条件复杂且重复执行价值明显时，才考虑 gate-specific analyzer；
-  analyzer 不能替代 physical observation，也不能单独宣布 hardware PASS。
-- 本次没有新增 Gate C analyzer、recorder、config 或其他 verification framework。
-- `analyze_b2_evidence.py` 和对应测试属于 v0.4.0 verification-cycle scoped tooling，暂时
-  保留到 Gate C、Gate D 和 v0.4.0 release cycle 收口；形成正式 tag/release 后，再通过
-  独立 cleanup task 判断是否从未来 master 删除。Git tag/history 承担历史可追溯性。
-
-## Gate C evidence responsibilities
-
-- C1：lifecycle CLI/transition 和 IMU sample cessation 共同证明 stale-input trigger；默认
-  recorder 不足，未来使用不提交仓库的本地完整 topic config，在默认八项之外加入
-  `/imu/data_raw` 和 `/imu_driver_node/transition_event`。`--config` 与 `--topic` 都会替换
-  默认 topic 集，不能只列额外项。
-- C2：带 PID 的 stopped-process transcript 与 command cessation 证明 Runtime pause；两路
-  lease timeout 和 ownership transition 的 required historical evidence 由 continuous
-  recorder 提供。人工 `ros2 topic echo` 仅为 optional live observation，其缺失或未追上
-  瞬态不能推翻有效 continuous history。
-- C3：旧/新 PID 和 terminal transcript 证明 graceful stop 与新 process/session；recorder
-  跨 restart 保存 revoke、halt/stop、新 epoch、DRY_RUN/NONE 和 stale authority 隔离证据。
-- C4a：lifecycle CLI 证明 owner-loss trigger；recorder 保存 motor node inactive、owner
-  release、Runtime inhibit、motor halt 和 fan stop/revoke。
-- C4b：预热 watchdog 的 stdout/stderr 与真实 exit status 是正式 timing evidence；必须
-  保存 ready、ACTIVE detected、E-STOP published、ACTIVE-to-publish、Flight observed
-  E-STOP/inhibit 和 publish-to-inhibit 字段。exit code 0 本身不是 PASS；字段缺失为
-  `NOT VERIFIED`/FAIL。continuous recorder 仍负责 ROS topic history。
-- 每个子场景都要求人工观察 actuator 是否及时停止、未批准 motor movement、错侧/继续
-  旋转的 fan，以及异常声音、振动、气味和温升。
-- 每个子场景都要求证明 fault 清除、Runtime restart、lifecycle 恢复或 transport reconnect
-  不会自动恢复 ACTIVE、旧 epoch/generation/token/target、legacy owner 或 actuator 动作。
-
-Gate C 的 motor logical axis、offset、LEFT/RIGHT fan command、powered actuator combination
-和最大 ACTIVE 持续时间对 C1/C2/C3/C4a/C4b 均保持：
+当前 ACTIVE stale-input 的实际路径为：
 
 ```text
-TO BE SET BEFORE EXECUTION
+build_runtime_snapshot()
+→ IMU freshness 参与 required_inputs_fresh
+→ _active_gate_reason()
+→ _handoff_safety_reason() returns required_inputs_stale
+→ _rollback_handoff()
+→ local executable dispatch/tracking/authority/sequencer fail closed
+→ best-effort motor and fan owner revoke
+→ control tick returns before controller.update()
 ```
 
-B1/B2 历史值只能作为未来讨论参考，不能成为 Gate C 授权值。
+`_rollback_handoff()` 在调用任何外部 revoke 前，先关闭 command dispatch、使 handoff 和
+command tracking 失效、清除 committed owner tracking、进入 Runtime INHIBITED，并通过
+`_inhibit()` 使 envelope sequencer 失效。随后才分别尝试 motor/fan revoke；即使 cleanup
+异常，lower-level command lease/backstop 仍承担 fail-closed 后盾。
 
-## 修改文件
+C1 因此不再要求 controller 返回 `FlightCommand.safe_stop()`，也不要求 executable command
+topic 额外出现 `request_safe_stop=true` frame。controller 主动 safe-stop 与 Runtime safety
+gate 在 controller update 前 rollback 是两条不同安全路径。
 
-本次修改：
+C1 required evidence 已校准为：ACTIVE 前存在合法 bounded command；IMU lifecycle transition
+和 `/imu/data_raw` cessation 证明 trigger；required input 变 stale；stale 后 command cutoff、
+无旧 target 生成/replay；Runtime `ACTIVE → INHIBITED`；motor/fan owner
+`FLIGHT_CONTROL → NONE`；actuator software/physical state 回到安全状态。
+`flight_imu_freshness_sec=0.2` 仅作为 freshness threshold，不扩展为新的精确 hardware timing
+SLA。
+
+## Regression coverage
+
+审查发现原有测试分别覆盖 IMU freshness aggregation、稳定的 `required_inputs_stale`
+preflight reason、controller 主动 safe-stop transport，以及泛化 ACTIVE safety failure
+rollback，但没有精确锁定以下完整不变量：
+
+```text
+ACTIVE + required_inputs_fresh=false
+→ rollback before controller.update
+→ no new executable envelope
+```
+
+因此在现有 `test_runtime_handoff.py` 中增加一个最小 pure software regression test，明确
+验证：controller update count 不增加；不新增 executable envelope/safe-stop frame；authority
+INHIBITED；command dispatch、command tracking 和 envelope sequencer 失效；两路 owner
+revoke 都被尝试。没有新增 framework 或 integration harness。
+
+## Modified files
 
 ```text
 docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md
 docs/LATEST_FEEDBACK.md
+src/windarmor_flight_control/test/test_runtime_handoff.py
 ```
+
+Runtime production code changes：`NONE`。
 
 任务开始时已有的 `docs/NEXT_COMMAND.md` 修改属于用户工作区内容，本次按其执行但不覆盖
 或回退。
 
 ## Validation
 
-本次只运行 pure software/static validation：
+本次只运行 pure/fake/mock/static validation：
 
 ```bash
 git diff --check
+python3 -m pytest src/windarmor_flight_control/test/test_runtime_handoff.py -q
 ./scripts/ci_software.sh
 ```
 
@@ -87,6 +91,7 @@ git diff --check
 
 ```text
 git diff --check: PASS
+C1 targeted runtime handoff tests: 27 passed
 CI safety check: PASS
 Git whitespace check: PASS
 Python compile: PASS
@@ -94,19 +99,21 @@ hardware verification tooling tests: 26 passed
 colcon build: 5 packages PASS
 motor package pytest: 431 passed
 fan safety regression: 159 passed
-Flight and interface software tests: 300 passed
-full workspace colcon test: 918 tests, 0 errors, 0 failures, 0 skipped
+Flight and interface software tests: 301 passed
+full workspace colcon test: 919 tests, 0 errors, 0 failures, 0 skipped
 ```
 
 这些检查均不构成硬件验证。
 
-## Hardware impact and remaining work
+## Hardware and next step
 
-- Gate B 保持 `COMPLETE`。
-- Gate C 保持 `NOT EXECUTED / NOT AUTHORIZED`；没有执行任何 Gate C trigger。
-- Gate C actuator values 和最大持续时间尚未决定，全部等待未来明确授权。
-- 下一步是在本次 review 完成后，由用户决定是否开始第一个 Gate C 硬件子场景；本任务
-  不执行 Gate C，也不自动申请或推定硬件授权。
+- 没有启动硬件 node/launch，没有配置 CAN，没有访问真实 IMU/串口，没有 lifecycle 操作
+  真实 IMU，没有操作 GPIO/PWM/CyberGear/ESC/fan，没有 authority prepare，没有 publish
+  `/e_stop`，也没有执行任何 Gate C trigger。
+- C1 motor axis、offset、fan command、powered actuator combination 和最大 ACTIVE duration
+  继续保持 `TO BE SET BEFORE EXECUTION`，均未授权。
+- 下一步仍是用户审查本次 C1 contract 修改后，再讨论 C1 hardware boundary；本任务不执行
+  C1。
 
 ## Git limits
 
