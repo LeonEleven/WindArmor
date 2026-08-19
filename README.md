@@ -25,8 +25,13 @@ ownership client 或可执行 command publisher，不改变 v0.3.2 的电机、�
 或安全运行语义。Flight combined takeover 已完成 B1 bounded functional hardware
 verification：atomic ACTIVE、`command_authority=FLIGHT_CONTROL`、`left_pitch +0.05 rad`、
 其他三轴 baseline hold、motor/fan E-STOP、owner release 和 E-STOP 后
-`actuation_allowed=false` 均有实机证据；fan/ESC 在该场景保持断电。Gate C fail-closed、
-B2 fan bounded 和 Gate D 最终回归仍未完成。
+`actuation_allowed=false` 均有实机证据；fan/ESC 在该场景保持断电。随后 B2 也已取得
+operator-provided hardware PASS：LEFT command `0.05` 的 continuous PWM 从 `(800,800)`
+有界达到 1210/800 us 并最终回到 `(800,800)`，四 motor baseline hold、无意外运动，
+E-STOP 后 authority/owners/latches 和 LEFT physical stop 均通过。RIGHT command 保持
+`0.0 / 800 us`，但 RIGHT ESC 在该次最终 B2 session 中独立断电，不把它表述为 powered
+physical Flight verification。Gate B 现为 COMPLETE；Gate C fail-closed 和 Gate D 最终
+回归仍未完成。
 分阶段验证协议见
 [v0.4.0 Hardware Verification Plan](docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md)。
 Gate A0/A1、normal controller 的 Gate B feedback baseline、Flight DRY_RUN、冷启动
@@ -36,7 +41,7 @@ procedural `ACTIVE <= 3.0 sec`：watchdog 在 ACTIVE 后等待 2.5 秒才临时�
 lower-level 收到 E-STOP 后的停止和状态转换本身很快。该 timing 证据将在 Gate C 使用
 预创建 publisher 的 watchdog 顺便闭合，不为此重跑 B1 functional test。Task 6.2.7 的
 shutdown cleanup 和 watchdog 已通过纯软件验证，Gate C 仅处于等待新授权的
-`READY FOR HARDWARE VERIFICATION`。
+`NEXT / READY FOR HARDWARE VERIFICATION / NOT AUTHORIZED`，本次未执行 Gate C。
 这些状态不构成任何后续硬件操作授权。
 
 仓库另提供默认禁用的 `bounded_verification_controller`，仅用于该计划中的受控
@@ -647,6 +652,38 @@ fan_response_curve: "smoothstep"
 ```bash
 ros2 topic pub --once /e_stop std_msgs/msg/Bool "{data: true}"
 ```
+
+### Hardware verification continuous evidence
+
+仓库提供只读 evidence recorder，把 authority、Flight command、motor feedback、安全
+状态、ownership 和 fan PWM 持续写入同一个带时间戳的 session。它只管理
+`ros2 topic echo` subscriber，不 publish、不调用 service，也不控制 E-STOP、authority、
+CAN、GPIO、PWM、motor 或 fan。未来已获授权的硬件 gate 可在独立 Terminal C 启动：
+
+```bash
+python3 scripts/hardware_verification/record_gate_evidence.py \
+  --output-root ~/windarmor_evidence
+```
+
+看到 `READY` 后再执行独立的 gate trigger/watchdog。结束时按 `Ctrl+C`，工具会统一停止
+children 并在 `manifest.json` 记录 topic/file mapping、开始/停止时间、样本状态和退出码。
+可用 JSON config 或重复的 `--topic NAME=/topic:package/msg/Type` 替换默认 topic 集。
+
+B2 software analyzer 离线读取该 session：
+
+```bash
+python3 scripts/hardware_verification/analyze_b2_evidence.py <SESSION_DIR>
+```
+
+它只判定 required software evidence，不能替代 operator 的物理观察，也不能单独宣布
+hardware PASS。continuous `fan_pwm.log` 的最终 `(800,800)` 是 required evidence；optional
+`post_fan_pwm.txt` 缺失或为空只报告 non-blocking supplemental warning，不再造成
+false-negative。若 optional snapshot 含有与 stop 冲突的有效 PWM，analyzer 仍会
+fail-closed。
+
+`ros2 topic echo ... --once` 只等待订阅后的下一条消息，适合稳态抽查，不适合作为
+ACTIVE、handoff、ownership 或 command transition 的唯一历史证据。瞬态验证应使用
+continuous recorder，避免人工追高速 topic 或临时 awk/grep pipeline。
 
 ### Gate C 预热 E-STOP watchdog
 

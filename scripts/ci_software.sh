@@ -71,7 +71,14 @@ run_stage() {
         src/windarmor_flight_control/launch/*.py \
         scripts/check_ci_safety.py \
         scripts/check_git_whitespace.py \
-        scripts/flight_estop_watchdog.py
+        scripts/flight_estop_watchdog.py \
+        scripts/hardware_verification/record_gate_evidence.py \
+        scripts/hardware_verification/analyze_b2_evidence.py
+      ;;
+    tooling-tests)
+      section "Hardware verification tooling tests"
+      "${WINDARMOR_CI_PYTHON}" -m pytest \
+        scripts/hardware_verification/test -q
       ;;
     build)
       section "Colcon build"
@@ -126,7 +133,7 @@ run_stage() {
 }
 
 if [[ $# -gt 1 ]]; then
-  echo "Usage: $0 [safety|whitespace|py-compile|build|motor-tests|fan-tests|flight-tests|full-tests|test-result]" >&2
+  echo "Usage: $0 [safety|whitespace|py-compile|tooling-tests|build|motor-tests|fan-tests|flight-tests|full-tests|test-result]" >&2
   exit 2
 fi
 
@@ -134,7 +141,7 @@ if [[ $# -eq 1 ]]; then
   run_stage "$1"
 else
   for stage in \
-    safety whitespace py-compile build motor-tests fan-tests flight-tests full-tests test-result
+    safety whitespace py-compile tooling-tests build motor-tests fan-tests flight-tests full-tests test-result
   do
     run_stage "${stage}"
   done

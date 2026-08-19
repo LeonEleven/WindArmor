@@ -62,6 +62,9 @@ jobs:
       - name: Compile Python sources
         run: ./scripts/ci_software.sh py-compile
 
+      - name: Test hardware verification tooling
+        run: ./scripts/ci_software.sh tooling-tests
+
       - name: Build five ROS packages
         run: ./scripts/ci_software.sh build
 

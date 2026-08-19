@@ -142,6 +142,7 @@ def test_workflow_runs_every_required_software_stage() -> None:
         "safety",
         "whitespace",
         "py-compile",
+        "tooling-tests",
         "build",
         "motor-tests",
         "fan-tests",

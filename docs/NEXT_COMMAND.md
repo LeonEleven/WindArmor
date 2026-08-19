@@ -1,963 +1,1311 @@
-# WindArmor — 修复 RIGHT fan GPIO13 / Waveshare 2-CH CAN HAT+ 引脚冲突
+# WindArmor — Gate B Closure + Hardware Verification Evidence Tooling
 
-## 1. 任务性质
+## 0. Task intent
 
-这是一个已经通过真实硬件诊断确认的：
+本任务有两个目标：
 
-```text
-targeted hardware pin-assignment fix
-```
+1. 根据已经由用户真实硬件执行并提供的 B2 evidence，正式关闭 B2 / Gate B。
+2. 把本次 B2 中已经验证有效的 continuous recorder + evidence analyzer 固化为仓库工具，避免 Gate C 继续依赖人工追高速 topic、临时 awk、多段易出错 shell pipeline。
 
-不是 Flight architecture redesign。
-
-不要创建：
+本任务属于：
 
 ```text
-Task 6.2.8
+Gate B closure
++
+hardware-verification tooling cleanup
 ```
 
-不要修改：
+不是：
 
 ```text
-Flight authority architecture
-FlightController API
-motor authority
-fan authority
-E-STOP architecture
-CAN protocol
-CyberGear driver
-Flight algorithm
+Flight architecture redesign
+新的 Task 6.2.x
+Gate C hardware execution
 ```
 
-本任务只解决：
-
-```text
-RIGHT fan 当前 BCM GPIO13
-与 Waveshare 2-CH CAN HAT+ CAN_1 INT_1 默认 GPIO13
-之间的硬件引脚冲突
-```
-
-目标映射改为：
-
-```text
-LEFT fan:
-BCM GPIO12
-physical pin 32
-
-RIGHT fan:
-BCM GPIO26
-physical pin 37
-```
+不要创建 Task 6.2.8。
 
 ---
 
-# 2. 当前代码基线
+# 1. Git / branch absolute rules
 
-当前已知开发基线：
+开始前按照 `AGENTS.md` 做 baseline 检查。
 
-```text
-master
+必须首先记录：
 
-a3978c4101cef8a21071b2867fd820faa42b3127
+```bash
+git status --short --branch
+git branch --show-current
+git rev-parse HEAD
+git log -5 --oneline --decorate
 ```
 
-开始前先按照 `AGENTS.md` 执行 repository baseline 检查。
+## 1.1 禁止擅自创建或切换分支
 
-当前工作流允许：
+本任务明确禁止：
 
 ```text
-docs/NEXT_COMMAND.md
-docs/LATEST_FEEDBACK.md
+git switch
+git switch -c
+git checkout
+git checkout -b
+git branch <new>
 ```
 
-存在预期修改。
+以及任何：
 
-除这些 workflow 文档外，如发现任何未预期源码/config 修改：
+```text
+feature/*
+fix/*
+docs/*
+dev
+develop
+```
+
+分支的创建或切换。
+
+必须：
+
+```text
+stay on the branch that exists when the task begins
+```
+
+如果开始时 branch / working tree 状态存在风险或与预期不符：
 
 ```text
 STOP
 报告
 ```
 
-不要使用：
+不要自行切分支解决。
+
+同样禁止：
 
 ```text
+git merge
+git rebase
+git stash
 git reset
 git restore
 git clean
-git stash
 ```
 
-去隐藏现场状态。
+未经明确授权不要改变 Git history。
 
----
-
-# 3. 已确认的硬件背景
-
-平台：
+不要：
 
 ```text
-Raspberry Pi 5
-Ubuntu 24.04
-ROS 2 Jazzy
-
-Waveshare 2-CH CAN HAT+
+tag
+GitHub Release
+修改 stable tags
+创建 v0.4.0 tag
 ```
 
-WindArmor 当前 fan mapping：
+## 1.2 commit / push
+
+遵循当前 `AGENTS.md` 对 commit / push 的正式规则。
+
+但无论如何：
 
 ```text
-LEFT:
-GPIO12 / physical pin 32
-
-RIGHT:
-GPIO13 / physical pin 33
+禁止为了本任务创建新分支。
 ```
 
-Waveshare 官方 2-CH CAN HAT+ 文档说明：
+如果 `AGENTS.md` 没有明确允许自动 push：
 
 ```text
-CAN_0 INT_0 default:
-BCM GPIO22
-
-CAN_1 INT_1 default:
-BCM GPIO13
-```
-
-官方说明中：
-
-```text
-INT_1 默认焊接 PIN13
-```
-
-Ubuntu / Raspberry Pi 5 推荐设备树配置也包含：
-
-```text
-dtoverlay=mcp2515,spi1-2,oscillator=16000000,interrupt=13
-```
-
-官方还说明：
-
-如果要把 HAT 的 INT_1 从 GPIO13 改到例如 GPIO24，需要：
-
-```text
-修改 PCBA 对应 0Ω 电阻焊接位置
-+
-修改 /boot/firmware/config.txt interrupt pin
-```
-
-本项目本次明确选择：
-
-```text
-不修改 Waveshare HAT 硬件
-不修改 CAN interrupt routing
-
-改 RIGHT fan GPIO
-```
-
-官方参考：
-
-```text
-https://www.waveshare.net/wiki/2-CH_CAN_HAT%2B
+不要自行扩大权限；
+完成修改、测试和 LATEST_FEEDBACK 后报告状态。
 ```
 
 ---
 
-# 4. 已完成的真实硬件诊断证据
+# 2. Mandatory latest-feedback rule
 
-以下是本次问题出现后的真实人工硬件证据。
-
-## 4.1 原始故障
-
-重新连接 RIGHT fan 后：
+这是今后的固定项目规则：
 
 ```text
-ros2 launch windarmor_bringup windarmor.launch.py
+每一个 Codex task 在最终回复用户之前，
+必须更新：
+
+docs/LATEST_FEEDBACK.md
 ```
 
-表现：
+`docs/LATEST_FEEDBACK.md`：
 
 ```text
-LEFT ESC:
-正常识别控制信号，不持续滴滴
-
-RIGHT ESC:
-持续滴滴，无法正常控制
+只保留当前最新一次任务反馈
 ```
 
-使用：
+不要把旧任务报告持续追加进去。
+
+本任务结束前必须真实记录：
 
 ```text
-ros2 run windarmor_fan_controller fan_keyboard
+Task / Scope
+Result
+B2 evidence
+Gate state
+Files changed
+Tests
+Hardware execution
+Git branch
+HEAD / commit（如有）
+working tree
+remaining blockers
+next step
 ```
 
-结果：
+如果本任务没有执行硬件：
+
+必须明确写：
+
+```text
+No hardware executed by Codex in this task.
+```
+
+不要把用户此前执行的 hardware evidence 描述成 Codex 自己执行的测试。
+
+---
+
+# 3. B2 operator-provided hardware evidence
+
+以下证据来自用户在 Raspberry Pi 5 + WindArmor 真实硬件上完成的一次独立授权 B2 session。
+
+Codex 本任务只负责如实记录和整理，不重新执行。
+
+## 3.1 B2 configuration
+
+最终 hardware mapping：
 
 ```text
 LEFT fan:
-可以正常提高 PWM 并转动
-
-RIGHT fan:
-无法正常响应
-```
-
----
-
-# 5. ESC / fan 交叉测试
-
-将两个 ESC/fan 与 GPIO 输出互换：
-
-```text
-原 RIGHT ESC/fan → GPIO12:
-正常工作
-
-原 LEFT ESC/fan → GPIO13:
-仍无法工作
-```
-
-因此：
-
-```text
-故障不跟随 ESC/fan
-
-故障跟随 GPIO13 path
-```
-
-更换 GND 接点没有解决问题。
-
----
-
-# 6. WindArmor 软件 routing 验证
-
-在：
-
-```text
-ESC power OFF
-CyberGear power OFF
-```
-
-状态下使用：
-
-```text
-fan_keyboard
-+
-/fans/status_pwm
-```
-
-验证：
-
-```text
-LEFT manual command:
-第一路 PWM 正常变化
-第二路保持 800
-
-RIGHT manual command:
-第一路保持 800
-第二路 PWM 正常变化
-```
-
-因此：
-
-```text
-fan_keyboard
-→ fan_command_manager
-→ /fans/command_pwm
-→ fan_node
-```
-
-LEFT / RIGHT 软件 routing 均正常。
-
-不要将此问题归因于：
-
-```text
-Flight command routing
-Flight authority
-fan command manager channel ordering
-```
-
----
-
-# 7. GPIO driver 静态及运行时证据
-
-当前 fan implementation 使用：
-
-```text
-gpiozero.Servo
-+
-gpiozero.pins.lgpio.LGPIOFactory
-```
-
-LEFT 和 RIGHT 走同一套 `_set_output()` / `_apply_pair()` 路径。
-
-当前 Raspberry Pi 5 GPIO controller：
-
-```text
-gpiochip4:
-pinctrl-rp1
-```
-
-实际 line：
-
-```text
-GPIO12 = gpio-581
-GPIO13 = gpio-582
-GPIO26 = gpio-595
-```
-
-fan node 运行时：
-
-```text
-gpio-581 (GPIO12 |lg) out ...
-gpio-582 (GPIO13 |lg) out ...
-```
-
-说明：
-
-```text
-GPIO12 被 lgpio 成功 claim
-GPIO13 也被 lgpio 成功 claim
-```
-
-所以这不是简单的：
-
-```text
-GPIO13 没有被初始化
-GPIO13 software channel missing
-GPIO13 被 fan_node 忽略
-```
-
----
-
-# 8. direct lgpio GPIO12 / GPIO13 硬件对照
-
-停止 ROS fan stack 后，直接使用：
-
-```python
-lgpio.gpio_claim_output(...)
-lgpio.tx_servo(...)
-```
-
-并使用：
-
-```text
-800 us
-50 Hz
-```
-
-测试同一个已知正常的 ESC/fan。
-
-所有其他条件保持一致：
-
-```text
-same ESC
-same fan
-same signal wire
-same GND
-same ESC power
-```
-
-结果：
-
-```text
-GPIO12 / physical pin 32:
-
-800 us @ 50 Hz
-→ ESC ARMED NORMAL
-```
-
-而：
-
-```text
-GPIO13 / physical pin 33:
-
-800 us @ 50 Hz
-→ STILL BEEPING
-```
-
-因此即使绕过：
-
-```text
-ROS
-fan_keyboard
-fan_command_manager
-fan_node
-gpiozero.Servo
-```
-
-GPIO13 仍无法作为当前 ESC 的有效控制通道。
-
-结合 Waveshare HAT+ 官方 GPIO13 INT_1 使用情况：
-
-```text
-GPIO13 不适合作为当前 WindArmor 硬件堆栈中的 RIGHT fan output
-```
-
----
-
-# 9. GPIO26 替代通道实机验证
-
-随后在：
-
-```text
-BCM GPIO26
-physical pin 37
-gpiochip4 line 26 / gpio-595
-```
-
-执行 direct lgpio hardware verification。
-
-GPIO26 当时没有其他 consumer。
-
-使用同一个：
-
-```text
-ESC
-fan
-signal wire
-GND
-power
-```
-
-测试：
-
-```text
-800 us @ 50 Hz
-→ ARMED NORMAL
-```
-
-随后：
-
-```text
-1210 us @ 50 Hz
-持续约 1 秒
-→ BOUNDED RESPONSE
-```
-
-最后：
-
-```text
-回到 800 us
-→ STOPPED
-```
-
-正式硬件结果：
-
-```text
-GPIO26 replacement fan channel:
-HARDWARE PASS
-```
-
-因此新的 physical mapping 已有真实硬件证据：
-
-```text
-LEFT:
-GPIO12 / pin 32
-
-RIGHT:
-GPIO26 / pin 37
-```
-
----
-
-# 10. 本任务目标
-
-实现最小 targeted fix：
-
-```text
-RIGHT fan:
-BCM GPIO13
-→
-BCM GPIO26
-```
-
-并完整记录本次问题原因和验证过程。
-
-要求：
-
-```text
-不改变 fan command semantics
-不改变 PWM range
-不改变 normalized mapping
-不改变 E-STOP
-不改变 ownership
-不改变 Flight API
-```
-
----
-
-# 11. Repository audit
-
-首先全仓库搜索：
-
-```text
-right_gpio
-
-GPIO13
-gpio13
-
-physical pin 33
-pin 33
-
-BCM13
-
-GPIO12
-GPIO26
-fan pin
-fan mapping
-```
-
-判断每个引用属于：
-
-```text
-authoritative config
-
-driver default
-
-README
-
-hardware documentation
-
-test expectation
-
-historical document
-
-generated/build artifact
-```
-
-不要机械替换所有 `GPIO13`。
-
-例如：
-
-```text
-Waveshare HAT 的 INT_1 = GPIO13
-```
-
-应该保留并记录为冲突原因，而不是改成 GPIO26。
-
----
-
-# 12. 必须修改的 runtime mapping
-
-确认当前 authority 后，将实际 RIGHT fan mapping 从：
-
-```text
-right_gpio: 13
-```
-
-改为：
-
-```text
-right_gpio: 26
-```
-
-至少检查：
-
-```text
-src/windarmor_fan_controller/config/fan_params.yaml
-```
-
-以及：
-
-```text
-fan_node.py
-```
-
-中的默认 parameter。
-
-如果 `fan_node.py` 当前仍为：
-
-```python
-self.declare_parameter("right_gpio", 13)
-```
-
-改成：
-
-```python
-self.declare_parameter("right_gpio", 26)
-```
-
-保持：
-
-```text
-left_gpio = 12
-```
-
-不变。
-
----
-
-# 13. 不要改变 PWM 参数
-
-以下配置保持不变：
-
-```text
-min_pwm_us = 800
-
-max_pwm_us = 2200
-
-stop_pwm_us = 800
-
-fan_stop_pwm_us = 800
-
-fan_start_pwm_us = 1200
-
-fan_auto_max_pwm_us = 1400
-
-flight_fan_max_pwm_us = 1400
-
-rise_step_pwm_us = 10
-
-fall_step_pwm_us = 20
-```
-
-不要因为此次 GPIO fix 修改：
-
-```text
-ESC calibration
-fan curve
-Flight normalized mapping
-```
-
----
-
-# 14. 更新必要的 tests
-
-检查现有测试是否包含：
-
-```text
-GPIO13
-right_gpio = 13
-pin 33
-```
-
-对于表达当前正式 hardware contract 的测试：
-
-```text
-更新为 GPIO26 / physical pin 37
-```
-
-如果缺少针对 fan GPIO default mapping 的简单 regression test，并且现有测试结构允许以很小成本加入，则增加一个最小测试来保证：
-
-```text
-LEFT default = GPIO12
-RIGHT default = GPIO26
-```
-
-不要为了这个 fix 建立新的大型 hardware abstraction。
-
----
-
-# 15. 更新 README / hardware documentation
-
-检查 README 和现有 hardware docs。
-
-所有面向当前用户的正式 wiring instructions 必须更新为：
-
-```text
-LEFT fan signal:
 BCM GPIO12
 physical pin 32
 
-RIGHT fan signal:
+RIGHT fan:
 BCM GPIO26
 physical pin 37
 ```
 
-明确标注旧映射：
+B2：
 
 ```text
-GPIO13 / physical pin 33
+tested physical fan = LEFT
+
+fan_left_test_command = 0.05
+fan_right_test_command = 0.0
+
+expected LEFT target = 1210 us
+expected RIGHT target = 800 us
+
+motor_test_offset_configured = true
+motor_test_offset_rad = 0.0
+
+test_motor_name = left_lift
+
+intentional motor movement = NONE
+
+all four motors = captured baseline hold
 ```
 
-不再用于 RIGHT fan。
-
-同时增加简短说明：
+RIGHT ESC 在本次最终 B2 session 中：
 
 ```text
-Waveshare 2-CH CAN HAT+ 的 CAN_1 INT_1
-默认占用 BCM GPIO13。
-
-因此 WindArmor 在当前 Raspberry Pi 5 +
-Waveshare 2-CH CAN HAT+ 硬件组合下，
-不得再把 GPIO13 用作 RIGHT ESC PWM。
+independently POWER OFF
 ```
 
-记录官方 Waveshare 参考：
+这是已有 B2 plan 允许的最小风险配置。
+
+因此不要错误声称：
 
 ```text
-https://www.waveshare.net/wiki/2-CH_CAN_HAT%2B
+RIGHT ESC received powered physical Flight verification
 ```
 
-并说明：
+正确表述为：
 
 ```text
-本项目选择将 RIGHT fan 改到 GPIO26，
-而不是修改 HAT 上 INT_1 的 0Ω 电阻和设备树配置。
-```
-
----
-
-# 16. 记录问题来龙去脉
-
-在合适的现有开发/hardware documentation 中记录：
-
-## Symptom
-
-```text
-RIGHT ESC connected to GPIO13 kept beeping
-and did not accept throttle.
-```
-
-## Cross-test
-
-```text
-Either ESC works on GPIO12.
-
-Either ESC fails on GPIO13.
-```
-
-## Software evidence
-
-```text
-RIGHT /fans/status_pwm path changes correctly.
-GPIO13 was successfully claimed by lgpio.
-```
-
-## Direct hardware evidence
-
-```text
-direct lgpio GPIO12 800 us:
-ARMED NORMAL
-
-direct lgpio GPIO13 800 us:
-STILL BEEPING
-
-direct lgpio GPIO26 800 us:
-ARMED NORMAL
-
-direct lgpio GPIO26 1210 us:
-BOUNDED RESPONSE
-
-GPIO26 return to 800 us:
-STOPPED
-```
-
-## Root cause / engineering classification
-
-不要声称：
-
-```text
-Raspberry Pi GPIO13 silicon is proven damaged
-```
-
-因为当前证据并没有证明芯片物理损坏。
-
-更准确地记录为：
-
-```text
-hardware pin assignment conflict /
-GPIO13 unsuitable in the current
-Raspberry Pi 5 + Waveshare 2-CH CAN HAT+ stack
-```
-
-其中 Waveshare 官方资料证明：
-
-```text
-CAN_1 INT_1 defaults to GPIO13
-```
-
-所以该 GPIO 不应同时承担 RIGHT ESC PWM。
-
-## Resolution
-
-```text
-RIGHT fan moved to BCM GPIO26 / physical pin 37.
+RIGHT command remained 0.0
+RIGHT software PWM remained 800 us
+RIGHT ESC was independently unpowered during the bounded LEFT test
 ```
 
 ---
 
-# 17. 更新 hardware verification 状态
+# 4. B2 software evidence
 
-不要错误地把 B2 标为 PASS。
-
-当前状态仍然：
+用户最终 analyzer 输出为：
 
 ```text
-B2:
-PAUSED / PENDING
+========== B2 SOFTWARE EVIDENCE ==========
+ACTIVE complete evidence: PASS
+Flight command 0.05/0.0 + 4 motor names: PASS
+Fan PWM bounded/right-stop/final-stop: PASS
+At least one 4-motor healthy/fault-free snapshot: PASS
+Post E-STOP authority: PASS
+Post E-STOP motor owner NONE: PASS
+Post E-STOP fan owner NONE: PASS
+Post E-STOP motor latch: PASS
+Post E-STOP fan latch: PASS
+Post E-STOP fan PWM [800,800]: FAIL
+
+PWM summary:
+first=(800, 800)
+last=(800, 800)
+left_max=1210
+right_unique=[800]
+
+SOFTWARE EVIDENCE: FAIL
 ```
 
-因为 GPIO26 虽然已经完成 direct hardware verification，但：
+最后这一项 FAIL 不是 runtime / hardware FAIL。
+
+随后检查发现：
 
 ```text
-新的 WindArmor runtime GPIO26 mapping
-尚未完成双路 ROS sanity test
-尚未完成正式 B2 Flight test
+post_fan_pwm.txt
+```
+
+文件存在但：
+
+```text
+EMPTY
+```
+
+原因分类应记录为：
+
+```text
+supplemental one-shot evidence capture failure
+```
+
+而不是：
+
+```text
+post E-STOP fan failed to return to STOP
+```
+
+原因是同一次 continuous recorder 已经明确得到：
+
+```text
+first = (800,800)
+last  = (800,800)
+
+LEFT max = 1210
+RIGHT unique = [800]
 ```
 
 因此：
 
 ```text
-Gate B:
-NOT COMPLETE
-
-Gate C:
-DO NOT START
+continuous fan PWM evidence:
+PASS
 ```
 
-记录：
+空的 `post_fan_pwm.txt` 只是额外 `ros2 topic echo --once` 没有收到未来新消息，不能覆盖 continuous recorder 的实际结果。
+
+---
+
+# 5. B2 physical evidence
+
+用户直接观察：
 
 ```text
-GPIO26 replacement fan channel:
-DIRECT HARDWARE PASS
+LEFT fan bounded response:
+YES
+
+Unexpected motor movement:
+NO
+
+Abnormal vibration/noise/smell:
+NO
+
+LEFT stopped after E-STOP:
+YES
 ```
 
-但不要把它等同于：
+软件侧同时证明：
+
+```text
+ACTIVE complete evidence:
+PASS
+
+command_authority:
+FLIGHT_CONTROL
+
+motor_committed:
+true
+
+fan_committed:
+true
+
+owner_tokens_match:
+true
+
+atomic_cutoff_present:
+true
+
+last_command_present:
+true
+
+actuation_allowed:
+true
+```
+
+Flight command：
+
+```text
+fan_left = 0.05
+fan_right = 0.0
+
+4 logical motor names present
+```
+
+Fan PWM：
+
+```text
+initial:
+(800,800)
+
+bounded LEFT:
+max 1210
+
+RIGHT:
+always 800
+
+final:
+(800,800)
+```
+
+motor feedback：
+
+```text
+at least one complete 4-motor snapshot:
+healthy
+fresh
+valid
+fault_flags = 0
+```
+
+E-STOP 后：
+
+```text
+Flight authority:
+PASS
+
+command authority revoked:
+PASS
+
+motor owner NONE:
+PASS
+
+fan owner NONE:
+PASS
+
+motor E-STOP latch:
+PASS
+
+fan E-STOP latch:
+PASS
+```
+
+---
+
+# 6. Formal B2 classification
+
+根据上述真实硬件 + continuous software evidence，正式记录：
+
+```text
+B2 bounded fan hardware verification:
+HARDWARE PASS
+```
+
+同时：
+
+```text
+Gate B:
+COMPLETE
+```
+
+必须明确记录一个 evidence note：
+
+```text
+post_fan_pwm.txt:
+EMPTY
+
+classification:
+supplemental one-shot capture failure
+
+impact on B2:
+NONE
+
+reason:
+continuous fan_pwm.log captured final (800,800),
+physical LEFT fan stopped after E-STOP,
+and authority / ownership / E-STOP latch evidence all passed.
+```
+
+不要把最初 analyzer 输出里的：
+
+```text
+SOFTWARE EVIDENCE: FAIL
+```
+
+直接照搬成最终 Gate failure。
+
+更准确的最终分类：
+
+```text
+runtime/hardware failure:
+NO
+
+evidence collection defect:
+YES
+
+B2 result:
+PASS
+```
+
+---
+
+# 7. Update hardware verification documentation
+
+Audit 当前：
+
+```text
+docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md
+```
+
+以及相关 current hardware docs。
+
+更新当前正式状态为：
+
+```text
+B0 PASS
+
+B1 FUNCTIONAL HARDWARE PASS
+
+B2 HARDWARE PASS
+
+Gate B COMPLETE
+
+Gate C NEXT
+```
+
+不要重新展开或修改已经冻结的 Flight architecture。
+
+如果 current docs 中仍有 active/current wiring instruction：
+
+```text
+RIGHT = GPIO13 / pin33
+```
+
+必须根据当前正式 mapping 修正为：
+
+```text
+RIGHT = GPIO26 / pin37
+```
+
+但历史 root-cause 记录中：
+
+```text
+Waveshare CAN HAT INT_1 uses GPIO13
+```
+
+应保留作为历史问题原因。
+
+不要机械全文替换所有 GPIO13。
+
+---
+
+# 8. Hardware evidence tooling design
+
+本次 B2 最大的问题不是 product runtime，而是人工测试工具过于碎片化：
+
+```text
+continuous topic echo
++
+--once snapshots
++
+awk
++
+grep
++
+临时 Python
++
+人工高速观察
+```
+
+导致：
+
+```text
+awk syntax incompatibility
+empty --once capture
+operator workflow confusion
+```
+
+目标是新增一个小型、可维护、纯软件辅助工具集。
+
+推荐目录：
+
+```text
+scripts/hardware_verification/
+```
+
+至少实现：
+
+```text
+record_gate_evidence.py
+analyze_b2_evidence.py
+```
+
+可以根据仓库结构适当调整名称，但不要过度设计。
+
+---
+
+# 9. record_gate_evidence.py requirements
+
+目标：
+
+```text
+一个 terminal
+一个命令
+持续记录多个 ROS evidence topics
+Ctrl+C 后统一安全退出并写 session metadata
+```
+
+它是：
+
+```text
+evidence recorder
+```
+
+不是：
+
+```text
+authority controller
+hardware controller
+E-STOP controller
+prepare controller
+```
+
+## 9.1 Recorder must NOT
+
+禁止它：
+
+```text
+publish ROS commands
+call prepare
+call reset
+call ownership services
+publish /e_stop
+configure CAN
+touch GPIO
+touch PWM
+control motors
+control fans
+power hardware
+```
+
+它只能：
+
+```text
+subscribe / record
+```
+
+## 9.2 Recommended implementation
+
+优先使用 Python 管理：
+
+```text
+ros2 topic echo
+```
+
+subprocess。
+
+原因：
+
+```text
+现有 CLI YAML output
+已经是当前 evidence parser 的数据格式
+不需要重新实现 ROS serialization layer
+```
+
+工具应：
+
+```text
+create unique timestamped session directory
+
+write session manifest
+
+record start time
+
+record command line
+
+record topic -> file mapping
+
+launch all recorder subprocesses
+
+keep running in foreground
+
+handle Ctrl+C / SIGTERM
+
+send SIGINT to child ros2 processes
+
+wait bounded time
+
+terminate only if child does not exit
+
+record child exit codes
+
+record stop time
+```
+
+推荐默认支持这些 topic：
+
+```text
+/flight_control/authority/status
+/flight_control/command
+/motors/feedback
+/motors/safety_state
+/motors/ownership_state
+/fans/status_pwm
+/fans/safety_state
+/fans/ownership_state
+```
+
+但不要硬编码成只能用于 B2。
+
+应允许：
+
+```text
+generic topic/type configuration
+```
+
+例如 config / CLI 参数。
+
+工具运行时应清楚显示：
+
+```text
+SESSION DIR
+topics being recorded
+READY
+Ctrl+C to stop
+```
+
+不要把 topic 内容刷到 operator terminal。
+
+---
+
+# 10. Recorder robustness
+
+必须考虑本次实际遇到的问题。
+
+## 10.1 Empty files
+
+empty topic file 应被记录成：
+
+```text
+NO SAMPLE CAPTURED
+```
+
+但 recorder 本身不要擅自判断 Gate FAIL。
+
+## 10.2 Process exit
+
+主动 Ctrl+C / SIGINT 导致 child 退出时：
+
+不要把正常 shutdown：
+
+```text
+SIGINT / SIGTERM due recorder cleanup
+```
+
+错误描述为 product failure。
+
+## 10.3 Buffering
+
+保证持续日志尽可能实时 flush。
+
+可以使用：
+
+```text
+PYTHONUNBUFFERED
+stdbuf
+```
+
+或更稳健的等价机制。
+
+## 10.4 No shell quoting dependency
+
+不要要求 operator 写复杂：
+
+```text
+awk '
+...
+'
+```
+
+pipeline。
+
+尤其不要依赖：
+
+```text
+multiline awk assignment
+```
+
+---
+
+# 11. analyze_b2_evidence.py requirements
+
+这个 analyzer 只分析：
+
+```text
+B2 SOFTWARE evidence
+```
+
+它不能单独宣布：
 
 ```text
 B2 HARDWARE PASS
 ```
 
+因为 physical fan movement / vibration / smell / motor observation 必须来自 operator。
+
+最终输出应明确区分：
+
+```text
+SOFTWARE EVIDENCE
+OPERATOR PHYSICAL EVIDENCE
+FINAL HARDWARE GATE
+```
+
+其中 script 只负责第一项。
+
 ---
 
-# 18. Software validation
+# 12. B2 required software evidence
 
-完成代码修改后，运行与本 fix 直接相关的 tests。
+Analyzer 至少验证：
+
+## ACTIVE
+
+同一个完整 `FlightAuthorityStatus` message 中：
+
+```text
+authority_state: ACTIVE
+command_authority: FLIGHT_CONTROL
+
+motor_committed: true
+fan_committed: true
+
+owner_tokens_match: true
+atomic_cutoff_present: true
+last_command_present: true
+
+actuation_allowed: true
+```
+
+## Flight command
+
+同一个完整 command 中：
+
+```text
+request_safe_stop: false
+fan_commands_present: true
+
+fan_left ~= 0.05
+fan_right ~= 0.0
+
+motor logical names include:
+left_lift
+left_pitch
+right_pitch
+right_lift
+```
+
+float comparison 不要依赖纯字符串：
+
+```text
+fan_left: 0.05
+```
+
+应容忍合理 YAML float formatting，例如：
+
+```text
+0.05
+5e-2
+```
+
+## Fan PWM
+
+从 continuous recorder 验证：
+
+```text
+first = (800,800)
+
+LEFT > 800 at least once
+
+LEFT maximum <= expected B2 target
+
+RIGHT == 800 for all parseable samples
+
+last = (800,800)
+```
+
+本次 B2 expected LEFT target：
+
+```text
+1210 us
+```
+
+当前实际 evidence：
+
+```text
+left_max = 1210
+right_unique = [800]
+```
+
+不要把：
+
+```text
+1400
+```
+
+作为本次 B2 expected target。
+
+1400 是当前 Flight fan upper bound，不是 `fan_left=0.05` 的本次目标值。
+
+## Motor feedback
+
+至少找到一条完整四轴 frame，其中四个 motor 均：
+
+```text
+has_feedback = true
+position_valid = true
+fault_flags_valid = true
+fault_flags = 0
+valid = true
+fresh = true
+healthy = true
+```
+
+---
+
+# 13. Post-E-STOP evidence policy
+
+这是本任务最重要的工具修正之一。
+
+不要再把：
+
+```text
+post_fan_pwm.txt --once snapshot
+```
+
+设成唯一 REQUIRED evidence。
+
+原因：
+
+```text
+ros2 topic echo --once waits for a future message
+```
+
+如果 publisher 在 E-STOP 后不再继续发布：
+
+```text
+post_fan_pwm.txt
+```
+
+可能为空，即使 continuous recorder 已经捕获最终 stop。
+
+B2 analyzer 应使用：
+
+```text
+continuous fan_pwm.log final sample == (800,800)
+```
+
+作为 REQUIRED software evidence。
+
+如果额外存在：
+
+```text
+post_fan_pwm.txt
+```
+
+并有有效数据：
+
+```text
+将其作为 supplemental corroboration
+```
+
+如果：
+
+```text
+file missing
+```
+
+或者：
+
+```text
+file empty
+```
+
+应输出：
+
+```text
+SUPPLEMENTAL SNAPSHOT:
+MISSING / EMPTY
+```
+
+但在 continuous final PWM PASS 的情况下：
+
+```text
+不能单独导致 SOFTWARE EVIDENCE FAIL
+```
+
+不要为了“让测试 PASS”降低真实安全条件。
+
+必须正确区分：
+
+```text
+required evidence
+vs
+redundant supplemental capture
+```
+
+---
+
+# 14. Analyzer output
+
+最终输出应短、稳定、适合 operator 复制。
+
+例如：
+
+```text
+========== B2 SOFTWARE EVIDENCE ==========
+
+ACTIVE complete evidence: PASS
+Flight command 0.05 / 0.0: PASS
+Full 4-motor frame: PASS
+4-motor healthy/fault-free snapshot: PASS
+
+Fan PWM:
+  first: (800,800)
+  left_max: 1210
+  right_unique: [800]
+  last: (800,800)
+  result: PASS
+
+Post E-STOP authority: PASS
+Post E-STOP motor owner NONE: PASS
+Post E-STOP fan owner NONE: PASS
+Post E-STOP motor latch: PASS
+Post E-STOP fan latch: PASS
+
+Supplemental post_fan_pwm snapshot:
+EMPTY
+non-blocking because continuous final PWM is valid
+
+SOFTWARE EVIDENCE: PASS
+
+==========================================
+```
+
+Exit code：
+
+```text
+0 = required software evidence PASS
+non-zero = required software evidence FAIL
+```
+
+不要因为 optional / supplemental evidence 缺失返回 failure。
+
+---
+
+# 15. Tests for tooling
+
+必须增加 pure software tests。
+
+测试不得启动真实：
+
+```text
+ROS graph
+CAN
+GPIO
+PWM
+ESC
+motor
+fan
+```
+
+使用 fixtures / temporary files / mocked subprocess。
 
 至少覆盖：
 
 ```text
-windarmor_fan_controller
-windarmor_bringup
+1. valid ACTIVE message -> PASS
+
+2. ACTIVE missing one required field -> FAIL
+
+3. fan_left formatting:
+   0.05
+   5e-2
+   both parse correctly
+
+4. continuous PWM:
+   (800,800)
+   -> bounded LEFT
+   -> (1210,800)
+   -> (800,800)
+   PASS
+
+5. RIGHT != 800 at any sample -> FAIL
+
+6. final continuous PWM != (800,800) -> FAIL
+
+7. post_fan_pwm.txt empty
+   + continuous final (800,800)
+   -> SOFTWARE PASS
+   + supplemental warning
+
+8. post_fan_pwm.txt absent
+   + continuous final valid
+   -> SOFTWARE PASS
+   + supplemental warning
+
+9. four healthy motors -> PASS
+
+10. one motor fault / stale / unhealthy -> FAIL
+
+11. recorder graceful Ctrl+C cleanup
+
+12. child recorder abnormal exit is reported
 ```
 
-优先按照 repository 现有标准测试入口和 `AGENTS.md` 执行。
-
-如果仓库已有统一：
-
-```text
-scripts/ci_software.sh
-```
-
-且执行成本合理，则也运行。
-
-至少验证：
-
-```text
-fan unit tests PASS
-
-fan routing tests PASS
-
-shutdown tests PASS
-
-E-STOP tests PASS
-
-bringup/release contract tests PASS
-
-git diff --check PASS
-```
-
-不要执行真实硬件测试。
+不要为此建立大型 framework。
 
 ---
 
-# 19. 本 Codex 任务没有新的硬件授权
+# 16. Gate C relationship
 
-虽然 GPIO26 已经由用户人工完成真实硬件验证，但：
+本任务：
 
 ```text
-这次 Codex task 本身不授权任何新的硬件操作。
+DOES NOT EXECUTE GATE C
 ```
 
-禁止：
+只允许为下一步 Gate C 整理 evidence workflow。
+
+当前仓库已经存在：
 
 ```text
-ros2 launch
-ros2 run
-ros2 topic pub
-ros2 service call
+scripts/flight_estop_watchdog.py
+```
 
-CAN up/down
+不要复制它的职责。
+
+它负责：
+
+```text
+pre-created / prewarmed /e_stop publisher
+
+wait for ACTIVE / FLIGHT_CONTROL / actuation_allowed
+
+monotonic delay
+
+fail-closed timeout
+```
+
+新的 evidence recorder：
+
+```text
+只记录
+```
+
+不要把 watchdog 和 recorder 合并成一个“大一统硬件测试控制器”。
+
+Gate C 的正式 hardware commands / authorization 必须留到用户和 ChatGPT 后续单独讨论并明确授权。
+
+---
+
+# 17. Documentation update for future operator workflow
+
+在 hardware verification docs 中，把推荐 evidence workflow 简化为：
+
+```text
+Terminal A:
+normal bringup
+
+Terminal B:
+Flight Runtime
+
+Terminal C:
+record_gate_evidence.py
+
+Terminal D:
+Gate-specific trigger / watchdog
+
+Operator:
+physical observation
+
+End:
+Ctrl+C recorder
+run analyzer
+```
+
+避免继续要求 operator：
+
+```text
+开很多 topic echo 窗口
+肉眼追高速日志
+运行复杂 awk
+手工 grep 多个 transient state
+```
+
+稳态检查可以继续使用：
+
+```text
+ros2 topic echo ... --once
+```
+
+但文档必须说明：
+
+```text
+--once 只等待订阅后的下一条消息
+不适合作为唯一瞬态历史证据
+```
+
+对于：
+
+```text
+ACTIVE
+handoff
+ownership transient
+command transition
+```
+
+优先使用：
+
+```text
+continuous recorder
+```
+
+---
+
+# 18. Current GPIO contract
+
+Audit所有当前正式 hardware/operator docs。
+
+正式 current mapping 必须保持：
+
+```text
+LEFT:
+BCM12
+physical pin 32
+
+RIGHT:
+BCM26
+physical pin 37
+```
+
+不要重新引入：
+
+```text
+RIGHT fan = GPIO13
+```
+
+但 GPIO13 可以保留于：
+
+```text
+historical conflict explanation
+Waveshare CAN HAT INT_1 context
+```
+
+不要修改 Flight algorithm API 或 authority architecture。
+
+---
+
+# 19. Software validation
+
+运行与本任务相关的 pure software tests。
+
+至少：
+
+```text
+new hardware verification tooling tests
+existing flight_estop_watchdog tests
+relevant Flight/interfaces tests
+git diff --check
+```
+
+如果合理且不会访问真实 hardware：
+
+```bash
+./scripts/ci_software.sh
+```
+
+也应执行。
+
+本任务禁止执行：
+
+```text
+sudo ./scripts/setup_can.sh
+
+ros2 launch windarmor_bringup ...
+
+ros2 run windarmor_flight_control ...
+
+ros2 topic pub ...
+
+ros2 service call ...
 
 GPIO output
-
-ESC output
-
-CyberGear output
-
-Flight prepare
-
-E-STOP hardware test
+PWM output
+CAN hardware access
+ESC control
+CyberGear control
 ```
 
-允许：
+如果测试套件中有会访问真实硬件的项目：
 
 ```text
-source inspection
-code/config/doc changes
-software unit/integration tests that do not access hardware
-```
-
-如果某个 test 会访问真实 GPIO/CAN：
-
-```text
-不要执行
+不要运行该部分
 报告原因
 ```
 
 ---
 
-# 20. Git workflow
+# 20. Hardware authorization
 
-遵循 `AGENTS.md` 和当前项目分支策略。
-
-这是明确的 fix，推荐分支：
+本 Codex task：
 
 ```text
-fix/right-fan-gpio26
+NO HARDWARE AUTHORIZATION
 ```
 
-如果当前 workflow / working-tree 状态允许安全创建，则从：
+用户此前执行 B2 的授权已经结束。
+
+Codex 不得把此前授权视为：
 
 ```text
-master
-a3978c4101cef8a21071b2867fd820faa42b3127
+permission to rerun B2
+permission to execute Gate C
 ```
 
-创建。
-
-不要：
+本任务只做：
 
 ```text
-push
-tag
-GitHub Release
-修改 v0.3.x tags
-创建 v0.4.0 tag
+source
+docs
+scripts
+pure software tests
 ```
-
-如果现有 `docs/NEXT_COMMAND.md` / `docs/LATEST_FEEDBACK.md` 修改使分支操作存在风险：
-
-```text
-不要擅自 stash/reset/restore
-按照 AGENTS.md 采取安全方式并在反馈中说明
-```
-
-完成代码、文档和 software validation 后，可创建一个清晰的本地 commit。
-
-建议 commit message：
-
-```text
-修复右侧风扇与 CAN HAT 的 GPIO13 冲突
-```
-
-不要自行 merge/push，除非 `AGENTS.md` 对当前 workflow 有明确不同要求。
 
 ---
 
-# 21. 最终 docs/LATEST_FEEDBACK.md
+# 21. docs/LATEST_FEEDBACK.md mandatory final content
 
-更新：
+完成全部修改和软件测试后，在最终回复用户之前必须覆盖更新：
 
 ```text
 docs/LATEST_FEEDBACK.md
@@ -965,95 +1313,142 @@ docs/LATEST_FEEDBACK.md
 
 只保留当前最新反馈。
 
-至少记录：
+至少包含：
+
+## Result
 
 ```text
-问题症状
-
-ESC/fan cross-test
-
-RIGHT software PWM routing evidence
-
-GPIO12 direct result
-
-GPIO13 direct result
-
-GPIO26 direct result
-
-Waveshare GPIO13 INT_1 conflict
-
-root-cause classification
-
-modified files
-
-new fan mapping
-
-software tests
-
-test results
-
-Git branch
-
-commit hash（如有）
-
-working tree status
-```
-
-最后明确：
-
-```text
-RIGHT fan final proposed mapping:
-GPIO26 / BCM26 / physical pin 37
-
-GPIO26 direct hardware verification:
-PASS
-
-WindArmor software mapping fix:
-PASS / FAIL
-
-B2:
-PENDING
+B2 bounded fan hardware verification:
+HARDWARE PASS
 
 Gate B:
-NOT COMPLETE
+COMPLETE
 
 Gate C:
-NOT STARTED
+NOT EXECUTED
+NEXT
 ```
+
+## B2 evidence
+
+记录：
+
+```text
+LEFT physical bounded response: PASS
+Unexpected motor movement: NONE
+Abnormal vibration/noise/smell: NONE
+LEFT stopped after E-STOP: PASS
+
+ACTIVE evidence: PASS
+command 0.05 / 0.0: PASS
+4-motor frame: PASS
+motor healthy evidence: PASS
+
+PWM:
+first (800,800)
+left_max 1210
+right_unique [800]
+last (800,800)
+
+post-E-STOP authority / owners / latches:
+PASS
+```
+
+并明确：
+
+```text
+RIGHT ESC independently OFF during final B2 physical test.
+RIGHT software command remained 0.0 / 800 us.
+```
+
+## Evidence collection note
+
+```text
+post_fan_pwm.txt:
+EMPTY
+
+classification:
+supplemental one-shot capture failure
+
+does not invalidate continuous final PWM evidence.
+```
+
+## Tooling
+
+记录：
+
+```text
+files added / changed
+tool responsibilities
+tests
+```
+
+## Hardware
+
+明确：
+
+```text
+Codex executed no hardware in this task.
+
+B2 hardware evidence was operator-provided from the immediately preceding
+authorized physical session.
+```
+
+## Git
+
+记录：
+
+```text
+branch at task start
+branch at task end
+
+HEAD start
+HEAD end
+
+commit if any
+
+working tree
+
+push status
+```
+
+并明确：
+
+```text
+No branch was created or switched by Codex.
+```
+
+## Next
+
+只写：
+
+```text
+Next:
+discuss and prepare Gate C fail-closed hardware verification.
+
+Gate C requires a new explicit hardware authorization.
+```
+
+不要自动执行 Gate C。
 
 ---
 
-# 22. 最终回复用户
+# 22. Final response to user
 
-最终报告不要重新展开整个 Flight architecture。
-
-只简洁报告：
+最终回复简洁报告：
 
 ```text
-1. 是否确认并记录 GPIO13 / CAN HAT 冲突
-
-2. 修改了哪些代码/config/doc
-
-3. RIGHT fan 是否已经改为 GPIO26
-
-4. software regression 是否 PASS
-
-5. branch / commit
-
-6. 是否还需要人工双风扇 sanity test
-
-7. B2 是否可以恢复
+1. B2 是否正式记录为 PASS
+2. Gate B 是否 COMPLETE
+3. evidence tooling 新增了什么
+4. 是否修复 empty --once 的 false-negative policy
+5. software tests 是否 PASS
+6. 当前 branch / commit / push 状态
+7. 是否创建或切换了分支（必须 NO）
+8. docs/LATEST_FEEDBACK.md 是否已更新
+9. 下一步是否为 Gate C discussion
 ```
 
-如果 software validation 全部 PASS：
+不要展开历史 Task 1～6。
 
-```text
-下一步应是：
-
-LEFT GPIO12 + RIGHT GPIO26
-双风扇 manual hardware sanity test
-
-PASS 后恢复 B2。
-```
-
-不要自动执行该硬件测试。
+不要执行任何真实硬件动作。

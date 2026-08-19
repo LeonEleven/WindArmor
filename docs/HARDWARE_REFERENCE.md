@@ -139,6 +139,20 @@ GPIO13 工作；RIGHT `/fans/status_pwm` 软件路由正常，lgpio 也成功 cl
 硬件引脚分配冲突、GPIO13 不适合当前硬件栈；GPIO26 replacement channel 的 direct
 hardware verification 为 PASS。
 
+最终 B2 Flight session 进一步确认当前 runtime mapping 的 LEFT bounded path：LEFT
+command `0.05` 使 continuous fan PWM 从 `(800,800)` 有界达到 `(1210,800)` 并最终回到
+`(800,800)`；RIGHT software command/PWM 保持 `0.0 / 800 us`。四台 motor 保持 captured
+baseline，用户观察到 LEFT bounded response、无意外 motor movement、无异常振动/声音/
+气味，并在 E-STOP 后停止；authority、owners、motor/fan latches 和完整健康四 motor
+snapshot 均通过。因此 B2 为 `HARDWARE PASS`，Gate B 为 `COMPLETE`。RIGHT ESC 在该次
+最终 B2 session 中独立断电，该证据不构成 RIGHT powered physical Flight verification。
+
+额外 `post_fan_pwm.txt` 因 `ros2 topic echo --once` 没有收到订阅后的未来新消息而为空，
+分类为 supplemental one-shot capture failure；它不推翻同次 continuous log 的最终
+`(800,800)` 或用户观察到的 physical stop。后续瞬态 gate 使用
+`scripts/hardware_verification/record_gate_evidence.py` 持续记录，不再把 optional
+`--once` snapshot 作为唯一 required history。
+
 首次带电前仍必须物理确认 GPIO12/pin 32 为左风扇、GPIO26/pin 37 为右风扇；不能
 把仓库默认值视为接线已完成实机确认。任何 GPIO/PWM/ESC 操作仍需遵守
 `AGENTS.md` 的硬件授权门槛。
@@ -151,8 +165,8 @@ hardware verification 为 PASS。
 - Flight 的 normalized fan command 是 `[0.0, 1.0]` 无量纲控制意图，不是
   thrust fraction；
 - `flight_takeover_enabled=false` 是当前默认值；
-- v0.4.0 Task 4/4.1 的 Flight takeover 只完成 pure/fake/in-memory 软件验证，
-  尚未完成真实硬件验证。
+- v0.4.0 Flight takeover 已完成 B1 motor bounded 和 B2 LEFT fan bounded hardware
+  verification；Gate C fail-closed 和 Gate D final regression 尚未执行，仍需分别授权。
 
-本文档不把软件测试、默认配置或历史正常功能回归扩展解释为新的物理量、性能
-标定或 Flight takeover 实机结论。
+本文档不把软件测试、默认配置或已有 B1/B2 bounded evidence 扩展解释为新的物理量、
+性能标定、RIGHT powered Flight verification 或 Gate C/D 实机结论。
