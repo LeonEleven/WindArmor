@@ -1,203 +1,211 @@
-# 最新反馈：Gate C / C2 contract 与 local-only preparation
+# 最新反馈：Gate C / C2 HARDWARE PASS 收口
 
 > 日期：2026-08-20
-> 任务起点：`master` / `a6583069d90012442e71153752b72650852af9c2`
-> 本轮工作性质：source/config/test review、文档校准、local-only operator bundle 准备
-> C2 结论：`DESIGN/PREPARATION COMPLETE, NOT AUTHORIZED / NOT EXECUTED`
+> 任务起点：`master` / `25de37cdf74c3d39d62f71d774e077db7ba1b09d`
+> 本轮工作性质：已有实机 evidence 的只读离线复核与文档归档
+> 最终结论：`Gate C / C2: HARDWARE PASS`
 > Gate C：`IN PROGRESS / NOT COMPLETE`
 
 ## 状态摘要
 
 ```text
-Gate A: COMPLETE
+B0: PASS
+B1: FUNCTIONAL HARDWARE PASS
+B2: HARDWARE PASS
 Gate B: COMPLETE
+
 Gate C / C1: HARDWARE PASS
-Gate C / C2: DESIGN/PREPARATION COMPLETE, NOT AUTHORIZED / NOT EXECUTED
+Gate C / C2: HARDWARE PASS
 Gate C / C3: NOT AUTHORIZED / NOT EXECUTED
 Gate C / C4: NOT AUTHORIZED / NOT EXECUTED
 Gate C: IN PROGRESS / NOT COMPLETE
-Gate D: PLANNED / NOT AUTHORIZED
 ```
 
-C1 的最终 `HARDWARE PASS` 已完整归档在
-`docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md`，本轮没有覆盖或降级该结论。C1 PASS 和
-C2 preparation 都不授权 C2/C3/C4、Gate D、prepare、SIGSTOP、E-STOP、lifecycle
-hardware transition 或任何带电动作。
+C2 PASS 不授权 C2 retry、C3/C4、Gate D 或任何新的硬件操作。下一步只能进入 C3 的
+design/review；C3 仍须单独确定边界并满足十项带电授权门槛。
 
-## 本轮安全与修改边界
+## 本轮边界
 
-本轮没有启动 WindArmor launch、Flight Runtime 或任何 ROS hardware node，没有访问或
-改变 CAN、GPIO、PWM、串口、IMU、motor、ESC/fan 或树莓派系统硬件状态，也没有执行
-prepare、lifecycle transition、E-STOP、SIGSTOP、C2/C3/C4。只进行了源码/配置/测试审查、
-repository 文档修改、local-only helper 准备和不连接 ROS graph/不发送真实 signal 的纯测试。
+本轮只读取用户已完成的 C2 raw evidence，交叉核对 recorder manifest、pre-armed helper、
+authority/command、motor/fan ownership/safety、fan PWM 和 motor feedback，再同步 README、
+硬件验证计划和本文件。
 
-production Runtime、lower-level actuator behavior、配置、launch、message、service 和测试均
-未修改；没有新增 repository analyzer 或永久 C2 helper。没有 commit、push、tag 或 release。
+本轮没有启动 ROS 2、WindArmor launch、Flight Runtime 或 hardware node，没有访问 CAN、
+GPIO、PWM、串口、IMU、motor、ESC/fan，没有执行 prepare、E-STOP、SIGSTOP/SIGCONT/SIGKILL、
+C2 retry 或 C3/C4。production code、config、launch、message、service 和 test 均未修改；没有
+新增 analyzer 或 permanent C2 helper，也没有 commit、push、tag 或 release。
 
-## C2 实际软件 contract 审查
-
-当前 source/config 与 C2 预期一致：
-
-- Flight Runtime control rate 为 `50 Hz`。Runtime process 被 `SIGSTOP` 后，Linux 冻结其
-  用户态执行，因此它不能继续 control tick、rollback、best-effort revoke 或发布新的
-  `INHIBITED` authority sample；冻结后的 command 和 authority publication cessation 才是
-  正确预期。
-- motor `motor_flight_command_timeout_sec=0.25`。最后合法 Flight command 把 deadline 设为
-  receipt monotonic `+0.25 s`；`0.02 s` motion tick 调用 `timed_out()`，超时后 owner 先释放
-  为 `NONE`，再 `halt_motion()`、退出 Flight `AUTO_RUNNING` 并发布 ownership。
-- fan `fan_flight_command_timeout_sec=0.25`。`0.05 s` manager control tick 调用
-  `timed_out()`，超时后 `force_safe_stop()` 将 command PWM 立即设为 `[800,800]`、发布停止值
-  并保持 owner `NONE`。
-- 两条 lease 都只由合法、递增且 token 匹配的 normal Flight envelope 刷新；invalid command
-  和 safe-stop 不会成为 heartbeat。
-- timeout 后 motor controller 返回 `MANUAL_RUNNING`/公开 `MANUAL` label，不等于自动
-  legacy/manual recovery。C2 必须同时证明 ownership 保持 `NONE`，且没有普通 command 或
-  movement。
-
-因此 C1 与 C2 的 safety proof 已明确区分：C1 中 Runtime 仍活着，可自身 fail-close 到
-`INHIBITED`；C2 中 Runtime 完全冻结，proof 来自 motor/fan lower-level independent leases，
-不得要求被冻结的 Runtime 自己进入或发布 `INHIBITED`。
-
-## C2 candidate 边界（未授权）
-
-为减少新变量，下一次 C2 authorization review candidate 与最终 C1 使用相同 bounded
-operating point：
+## Final evidence session 与 recorder 完整性
 
 ```text
-motor:
-  left_pitch = captured baseline +0.05 rad
-  other 3 motors = captured baseline hold
-
-fans:
-  LEFT = 0.05
-  RIGHT = 0.0
-
-power candidate:
-  motor bus ON
-  LEFT ESC ON
-  RIGHT ESC OFF
-
-IMU:
-  normal default auto activation
-
-pre-fault stabilization:
-  legal ACTIVE 后约 3.0 s 自动 SIGSTOP
-
-candidate max ACTIVE:
-  10 s
+/home/h-goal/windarmor_evidence/
+  gate-evidence-20260820T070959.631365Z-1037382
 ```
 
-这些值只是等待用户审查的 candidate，不是 C2 或任何硬件操作授权。
+manifest 复核结果：
 
-## Local-only C2 bundle
+- `status=COMPLETED`、`stop_reason=SIGINT`；
+- `abnormal_child=null`、`cleanup_timed_out=false`；
+- 默认 8/8 C2 topic 均为 `SAMPLES CAPTURED`；
+- 8 个 stderr 文件均为空，recorder children 都是 expected cleanup exit。
 
-已准备且不进入 repository：
+authority 与 fan ownership stdout 开头各有一次 DDS lost notice，但都位于 recorder 起始的
+DRY_RUN/NONE history。关键 fault 边界完整：motor ownership observation sequence
+`1153 -> 1154`、fan ownership `9407 -> 9408` 连续，因此这两个 startup notice 不构成 C2
+required evidence 缺口。
 
-```text
-/home/h-goal/windarmor_test_sessions/c2/
-  RUNBOOK.md
-  run_c2_runtime.sh
-  c2_sigstop_on_active.py
-```
+## Trigger / exact Runtime evidence
 
-目标目录在本轮开始时不存在，没有覆盖用户已有 local 文件。
-
-### Exact PID strategy
-
-`run_c2_runtime.sh` 先用 `ros2 pkg prefix windarmor_flight_control` 定位安装后的：
+`c2_sigstop_on_active.log` 原始记录确认：
 
 ```text
-lib/windarmor_flight_control/flight_control_runtime_node
-```
-
-source/package metadata 和当前安装结果均确认该路径存在。wrapper 在 `exec` 前将自身 PID
-原子写入 local pidfile，再 `exec` 真正 Runtime executable；PID 保持不变，所以 pidfile
-指向 actual Runtime process，而不是 `ros2 run` CLI wrapper。它保持 Terminal B 前台
-stdout/stderr，不 daemonize、不 prepare。candidate 参数固定为 `left_pitch +0.05`、LEFT fan
-`0.05`、RIGHT fan `0.0`、`flight_takeover_enabled=true`。本轮没有执行该 wrapper。
-
-### Trigger/helper behavior
-
-`c2_sigstop_on_active.py` 必须在 prepare 前启动。它先验证 pidfile、process existence、当前
-UID、`/proc/<pid>/cmdline`、start time 和非 stopped/zombie/dead state；PID missing、reuse、
-ambiguity 或 mismatch 都在 arm 前 fail。它先观察 non-ACTIVE，完成 subscription 后才输出：
-
-```text
+C2_RUNTIME_PID=1036555
 C2_TRIGGER_READY
 C2_TRIGGER_ARMED
+ACTIVE_DETECTED_MONOTONIC=170510.978304214
+SIGSTOP_SENT_MONOTONIC=170513.982496759
+ACTIVE_TO_SIGSTOP_SEC=3.004192545
+RUNTIME_STOP_CONFIRMED_MONOTONIC=170513.988818302
+C2_TRIGGER_RESULT=PASS
+C2_TRIGGER_EXIT_STATUS=0
 ```
 
-legal ACTIVE 要求 `ACTIVE / FLIGHT_CONTROL / actuation_allowed=true`，同时 motor/fan committed
-且 owner token 匹配。约 `3.0 s` 后 helper 仅向 exact PID 发送一次 `SIGSTOP`，轮询
-`/proc/<pid>/status` 确认 `T/t`，之后只读观察 command cessation、两 owner `NONE` 和 fan
-`[800,800]`，并输出 monotonic marker/delta。helper 永不发送 `SIGCONT`，不 prepare、不发布
-Flight command/E-STOP、不控制 motor/fan、不 kill 或 restart Runtime。helper PASS 只是辅助
-trigger/transition evidence，不等于 C2 HARDWARE PASS。
+helper cmdline 明确对应安装后的真实 `flight_control_runtime_node`，参数为 selected
+`left_pitch +0.05 rad`、LEFT/RIGHT fan `0.05/0.0`、takeover enabled。helper 在 prepare 前
+READY/ARMED，legal ACTIVE 到 SIGSTOP 为 `3.004192545 s`，低于批准的 `10 s` max ACTIVE；
+SIGSTOP 后 `0.006321543 s` 确认 process state `T/t`。helper 本身没有 SIGCONT、prepare、
+E-STOP、actuator command、kill 或 restart 路径。helper PASS 是辅助 trigger/observation
+evidence，不单独宣布 hardware PASS。
 
-## Recorder 与 timing acceptance 建议
+## Flight command 与 frozen authority
 
-默认 `record_gate_evidence.py` 的八个 topic 已覆盖 authority、Flight command、motor
-feedback/safety/ownership 和 fan PWM/safety/ownership，C2 直接复用默认 recorder，不创建
-C2 JSON config。Runtime SIGSTOP 后 authority publisher 没有新 frame 是 expected，不得误判
-为 recorder failure；continuous ownership/PWM history 仍是 authoritative ROS evidence。
-
-当前 timeout predicate 为 `now > last_valid_receipt + 0.25 s`。结合 motor `0.02 s` 与 fan
-`0.05 s` control period，nominal core detection 上界约为 motor `0.27 s`、fan `0.30 s`，再加
-ROS/DDS scheduling 和 observation latency。建议用户在 C2 执行前审查以下 candidate timing
-acceptance window：
+continuous command history 共 131 帧，sequence `0-130` 连续，全部使用同一 epoch/generation
+和唯一 approved bounded payload：
 
 ```text
-以 continuous history 最后一帧 command 的 ROS stamp 为共同基准：
-  motor owner NONE: >=0.25 s and <=0.40 s
-  fan owner NONE:   >=0.25 s and <=0.40 s
-  fan [800,800]:    >=0.25 s and <=0.40 s
+left_lift:   captured baseline hold
+left_pitch:  captured baseline +0.05 rad
+right_pitch: captured baseline hold
+right_lift:  captured baseline hold
+fan_left:    0.05
+fan_right:   0.0
+request_safe_stop: false
 ```
 
-`0.40 s` 只是基于现有 period 的 execution-review candidate，不是 production hardware SLA，
-也没有擅自创造 `0.250000 +/- N ms` contract。超过该 window 应先归类为 timing review/
-`NOT VERIFIED`，不能自动放宽。helper receipt monotonic 与 lower-level receipt 属于不同 DDS
-subscriber，可能存在 delivery skew，所以 helper delta 只作辅助交叉核对，不单独执行
-`>=0.25 s` 下界判定；略小于 `0.25 s` 时必须组合共同 ROS stamp、command sequence、
-OwnershipState history、timeout 前的 `last_valid_flight_command_age_sec` 和 continuous recorder
-审查。单一时间源不独立宣布 hardware PASS。
+最后 command sequence 为 130；之后没有新 Flight command、safe-stop frame 或 stale replay。
+C2 不要求 `request_safe_stop=true`：Runtime 被 SIGSTOP 后 publisher ceases，motor/fan lower-level
+lease 独立 fail-close。
 
-## Candidate safe exit review
-
-future C2 candidate 应在 lower-level fail-close 和 operator physical stop 确认后继续 recorder，
-先物理断开 LEFT ESC 与 motor actuator power，old Runtime 始终保持 STOPPED。只有 operator
-确认 actuator power OFF 后，才允许对 exact frozen PID 使用 `SIGKILL`，不得 `SIGCONT`/`fg`。
-
-Linux 下 `SIGTERM` 在 SIGSTOP-frozen process 上只能保持 pending，无法在不恢复用户态执行的
-情况下完成 graceful cleanup。因此，在 actuator power 已物理断开后，对验证过 identity 的
-exact PID 使用不可捕获的 `SIGKILL` 是不恢复旧 Runtime 的确定性终止方案。Runtime graceful
-shutdown/restart 和 new epoch isolation 属于 C3，本场景不执行 restart。本轮没有执行任何
-上述 safe-exit 动作。
-
-## 本轮验证
-
-已执行且通过：
+authority history 完整经过 `DRY_RUN -> ARMING -> READY_TO_TAKEOVER -> ACTIVE`，最后仍为：
 
 ```text
-git status --short --branch
-git branch --show-current
-git rev-parse HEAD
-source /opt/ros/jazzy/setup.bash
-source install/setup.bash
-ros2 pkg prefix windarmor_flight_control
-test -x <prefix>/lib/windarmor_flight_control/flight_control_runtime_node
-bash -n ~/windarmor_test_sessions/c2/run_c2_runtime.sh
-python3 -m py_compile ~/windarmor_test_sessions/c2/c2_sigstop_on_active.py
-python3 ~/windarmor_test_sessions/c2/c2_sigstop_on_active.py --self-test
-git diff --check
+authority_state: ACTIVE
+command_authority: FLIGHT_CONTROL
+actuation_allowed: true
+motor_committed: true
+fan_committed: true
+owner_tokens_match: true
 ```
 
-helper pure self-test 覆盖 PID missing、cmdline mismatch、already stopped、starts ACTIVE、
-valid ACTIVE、delay boundary、mock SIGSTOP、无 SIGCONT 和 observation success/failure；不连接
-真实 ROS graph、不发送真实 signal。repository production Python/test 没有修改，因此未运行
-900+ 完整 CI；硬件验证未执行，等待未来单独授权。
+最后 authority sample 只比最后 command 晚 `0.000360727 s`，之后两条 Runtime publication
+stream 一起停止。C1 中 Runtime 仍活着，可 rollback 并发布 `INHIBITED`；C2 中 Runtime 被
+SIGSTOP-frozen，不能 tick、rollback、revoke 或发布新 authority，故 authority 停在 ACTIVE
+且随后 cessation 是预期 freeze evidence，不是 anomaly。
 
-## 下一步
+## Lower-level lease、ownership 与 timing
 
-下一步只建议用户审查 local bundle、candidate powered boundary、`3.0 s` delay、`10 s` max
-ACTIVE、`0.40 s` timing review window 和 safe-exit procedure，再决定是否单独授权 C2。当前
-不得执行 C2，也不得进入 C3。
+helper monotonic 辅助 timing：
+
+```text
+last command receipt -> motor owner NONE: 0.258244544 s
+last command receipt -> fan owner NONE:   0.291357200 s
+last command receipt -> fan PWM stop:     0.292747309 s
+```
+
+continuous message stamp/history 交叉核对：
+
+- motor ownership：`MANUAL -> FLIGHT_RESERVED -> FLIGHT_CONTROL -> NONE`；最后 command
+  ROS stamp 到 NONE 为 `0.260380983 s`；
+- fan ownership：`NONE -> FLIGHT_RESERVED -> FLIGHT_CONTROL -> NONE`；最后 command ROS
+  stamp 到 NONE 为 `0.293756485 s`；
+- timeout 前最后 ownership age 分别为 motor `0.237991288 s`、fan `0.263708737 s`，与
+  motor 50 Hz / fan 20 Hz timeout check period 一致；
+- 两 owner 进入 NONE 后没有再出现 FLIGHT_CONTROL、MANUAL 或其他 ordinary owner。
+
+两项 authoritative owner timing 和 helper 的 fan-stop 辅助 timing 均落在本次批准的
+`0.25-0.40 s` evidence-review window。helper receipt delta 与 lower-level receipt 属于不同
+DDS subscriber；fan PWM `Int32MultiArray` 也没有 header stamp，因此这些值只用于本次
+verification review，不创造新的 production timing SLA。
+
+motor timeout 后 controller 返回 `MANUAL_RUNNING / MANUAL`，transition reason 为
+`flight_ownership_revoke`；该 label 本身不是 legacy recovery，authoritative ownership 此后
+保持 NONE，且没有普通 motor command/movement evidence。
+
+## Fan PWM 与 motor software evidence
+
+fan safety 明确记录 `Flight command timeout；等待显式重新授权`。continuous PWM 完整显示：
+
+```text
+LEFT:  800 -> 810 -> ... -> 1200 -> 1210 -> 800 us
+RIGHT: 800 us throughout
+```
+
+`MAX_LEFT=1210`、`MAX_RIGHT=800`；LEFT 回到 800 后，其余记录只包含 `[800,800]`。这证明
+fault 前 bounded LEFT fan 前态已经建立，fault 后 fan lower-level lease 独立回 safe stop。
+
+motor feedback 在 fault window 内显示：selected `left_pitch` 从约 `-0.00019 rad` 到约
+`+0.04890 rad`；其他三轴只在约 `-0.00250` 到 `+0.00020 rad` 的反馈量化/保持范围内。
+这支持 selected target 与其他三轴 baseline hold，但不表述为 operator 肉眼精确确认
+`+0.05 rad`。
+
+## Operator physical evidence 与 safe exit
+
+用户对 final session 明确报告：
+
+- ACTIVE 时 LEFT fan 有明确低幅旋转；
+- SIGSTOP/lower-level lease expiry 后 LEFT fan 与 motor 均停止；
+- 无错误轴、意外运动、异常声音、振动、气味或温升；
+- old Runtime 始终没有 SIGCONT/`fg`，没有恢复执行；
+- lower-level fail-close 和 physical stop 确认后 recorder 继续留证；
+- LEFT ESC 与 motor actuator power 先物理断开，确认 power OFF 后才 SIGKILL exact frozen
+  Runtime；最终 actuator power 已断。
+
+physical stop、现场异常观察、物理断电和 power-OFF-before-SIGKILL 顺序属于
+operator-provided evidence；ROS logs 只能证明 publication cessation、owner/PWM/software
+state，不能独立证明物理断电。本场景没有 Runtime restart；restart/new epoch isolation 属于
+C3。
+
+## Buffered preflight classification
+
+更早的 recorder session：
+
+```text
+gate-evidence-20260820T065345.667453Z-1018147
+```
+
+helper 实际输出 READY/ARMED，但 Python stdout 经 `tee` 后 block-buffered，operator 未实时看到
+marker，因此正确地没有 prepare。raw evidence 只有 DRY_RUN，`flight_command.log` 为 0 字节，
+helper 最终 `ACTIVE_WAIT_TIMEOUT`；没有 ACTIVE、SIGSTOP 或 C2 fault injection。正式分类为：
+
+```text
+C2 PRE-FLIGHT ABORTED / HARDWARE ATTEMPT NOT STARTED
+```
+
+它不是 C2 FAIL，也不是 C2 NOT VERIFIED。未来经 `tee` 运行 timing helper 应使用
+`python3 -u` 或显式 flush；不为此修改 production code。
+
+## Final judgement 与验证
+
+trigger、continuous ROS history、lower-level lease/ownership/PWM、operator physical 和
+no-automatic-recovery/safe-exit evidence 全部闭合，raw evidence 未发现 contradiction：
+
+```text
+Gate C / C2: HARDWARE PASS
+Gate C: IN PROGRESS / NOT COMPLETE
+```
+
+本轮只修改 Markdown。执行 `git diff --check` 和最终 Git 状态检查；完整 900+ pure software
+CI 未执行，因为 production code/config/launch/test 均未修改。C2 hardware 不由本轮执行，
+本轮只归档用户已经完成的 final session。
+
+下一步只能建议 C3 design/review，不自动执行 C3。

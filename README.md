@@ -31,8 +31,9 @@ operator-provided hardware PASS：LEFT command `0.05` 的 continuous PWM 从 `(8
 E-STOP 后 authority/owners/latches 和 LEFT physical stop 均通过。RIGHT command 保持
 `0.0 / 800 us`，但 RIGHT ESC 在该次最终 B2 session 中独立断电，不把它表述为 powered
 physical Flight verification。Gate B 现为 COMPLETE；Gate C 的 C1 stale-required-input
-rollback 已取得 `HARDWARE PASS`，C2/C3/C4 尚未授权、未执行，因此 Gate C 仍为
-`IN PROGRESS / NOT COMPLETE`，Gate D 最终回归也未完成。
+rollback 和 C2 Runtime-unresponsive lower-level lease fail-close 均已取得 `HARDWARE PASS`；
+C3/C4 尚未授权、未执行，因此 Gate C 仍为 `IN PROGRESS / NOT COMPLETE`，Gate D 最终
+回归也未完成。
 分阶段验证协议见
 [v0.4.0 Hardware Verification Plan](docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md)。
 Gate A0/A1、normal controller 的 Gate B feedback baseline、Flight DRY_RUN、冷启动
@@ -43,7 +44,10 @@ lower-level 收到 E-STOP 后的停止和状态转换本身很快。该 timing �
 E-STOP 子场景使用预创建 publisher 的 watchdog 闭合，不为此重跑 B1 functional test。
 Task 6.2.7 的 shutdown cleanup 和 watchdog 已通过纯软件验证；2026-08-20 的 C1 最终
 session 已通过预创建 lifecycle helper 验证 IMU 停止后 Runtime fail-closed、owner 释放、
-motor/LEFT fan 停止和无自动恢复。C1 的通过不授权 C2/C3/C4 或任何其他硬件操作。
+motor/LEFT fan 停止和无自动恢复。同日 C2 最终 session 通过 exact Runtime SIGSTOP 验证
+command/authority publication cessation、motor/fan 独立 `0.25 s` lease fail-close、两 owner
+NONE、LEFT PWM `1210 -> 800 us`、RIGHT 始终 `800 us` 以及 operator-confirmed physical
+stop/no-resume。C1/C2 的通过不授权 C3/C4 或任何其他硬件操作。
 
 仓库另提供默认禁用的 `bounded_verification_controller`，仅用于该计划中的受控
 实机验证。它先从当前 authority session 的新鲜、合法、健康电机反馈捕获相对
@@ -375,7 +379,7 @@ ros2 launch windarmor_bringup windarmor.launch.py
 > 本节是完成单设备方向、零点、软限位、风扇起转值和急停验证后的正常运行
 > 流程，不是首次带电调试流程。当前候选值 `1200 μs` 和 `1400 μs` 尚未实机
 > 标定；标定完成并获得硬件运行授权前，不得直接按本节给全部动力设备通电。
-> v0.4.0 分阶段验证计划仍为未执行状态；任何带电操作都必须先满足根目录
+> v0.4.0 分阶段验证计划中的 C1/C2 已完成，C3/C4 仍未授权、未执行；任何新的带电操作都必须先满足根目录
 > [AGENTS.md](AGENTS.md) 的十项授权门槛，并取得对应 Stage 的单独明确授权，
 > 不得从本节或验证计划推断授权。
 
