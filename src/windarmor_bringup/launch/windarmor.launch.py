@@ -14,6 +14,7 @@ def generate_launch_description():
     start_controller = LaunchConfiguration("start_controller")
     start_fans = LaunchConfiguration("start_fans")
     enable_motor_keyboard = LaunchConfiguration("enable_motor_keyboard")
+    imu_auto_activate = LaunchConfiguration("imu_auto_activate")
     control_backend = LaunchConfiguration("control_backend")
     can_channel = LaunchConfiguration("can_channel")
 
@@ -31,6 +32,7 @@ def generate_launch_description():
             "params_file": motor_params_file,
             "start_controller": start_controller,
             "enable_keyboard": enable_motor_keyboard,
+            "imu_auto_activate": imu_auto_activate,
             "control_backend": control_backend,
             "can_channel": can_channel,
             "can_bustype": "socketcan",
@@ -93,6 +95,11 @@ def generate_launch_description():
                 "enable_motor_keyboard",
                 default_value="true",
                 description="是否在当前终端启用电机键盘控制",
+            ),
+            DeclareLaunchArgument(
+                "imu_auto_activate",
+                default_value="true",
+                description="IMU configure 后是否自动 activate",
             ),
             DeclareLaunchArgument(
                 "control_backend",

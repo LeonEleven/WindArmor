@@ -21,8 +21,9 @@ WindArmor 是运行于树莓派 5（Ubuntu 24.04、ROS 2 Jazzy）的飞行机器
   最终依据。
 - release notes 和对应 RC checklist：仅作为相应历史版本的发布与验证证据。
 
-`docs/NEXT_COMMAND.md` 只保存当前最新任务，`docs/LATEST_FEEDBACK.md` 只保存
-当前最新任务反馈；二者记录工作流状态，不是长期产品架构来源。
+`docs/NEXT_COMMAND.md` 是可选的本地当前任务 scratchpad，用户可以用它传递长任务
+说明；它被 Git 忽略，不是 repository artifact、长期架构来源或历史记录，文件不存在
+时不得视为错误。`docs/LATEST_FEEDBACK.md` 继续作为仓库跟踪的当前最新任务反馈。
 
 不要在本文件复制大段操作文档。若文档和代码不一致，停止涉及硬件的工作，
 先报告差异；不得猜测命令、节点、话题、服务或硬件参数。
@@ -171,6 +172,29 @@ fake feedback 和 fake clock 不构成真实硬件验证。
 `windarmor.launch.py` 默认启动电机控制器和风扇控制器，绝不能作为默认测试。
 `start_controller:=false` 仍会访问真实 IMU；`start_fans:=false` 仍会启动
 IMU/电机部分，因此二者都不是完整的软件模拟模式。
+
+### 真实硬件验证执行模式
+
+- 默认采用 `agent-prepared / operator-executed`：agent 负责审查、确定性 runbook、
+  准确命令、临时 helper/config、纯软件验证和离线证据审查；operator 负责物理供电、
+  执行真实硬件命令、立即物理断电和现场观察。除非用户针对某次 session 明确要求，
+  agent 不默认充当实时硬件 operator。
+- timing-sensitive Gate 必须在 prepare/ACTIVE 前预创建并预热所需 helper、watchdog、
+  publisher、service client 和 continuous recorder，不得依赖 agent 反应、UI/网络延迟、
+  ACTIVE 后启动新 DDS 进程或临时复制长命令。
+- handoff、ownership、command 和其他瞬态历史优先使用 continuous recorder；人工
+  `topic echo` 可辅助现场观察，但不能作为唯一历史证据。
+- 软件反馈不能冒充 operator physical observation；例如反馈位置约 `+0.05 rad` 只证明
+  软件测量，除非 operator 确实观察并报告，否则不得写成肉眼精确确认。
+- 单一硬件场景专用的 recorder config、trigger helper、shell wrapper、session runbook
+  和 quick extractor 默认放在 `/tmp`、`~/windarmor_test_sessions` 或
+  `~/windarmor_evidence` 等 local/untracked 位置；只有多场景证明可持续复用后才考虑
+  提升为 repository infrastructure。
+- operator 自行执行硬件不降低十项授权门槛；每个新的 powered scenario 仍须明确设备、
+  值、duration、fault、E-STOP 和安全退出，并取得用户针对该场景的明确授权。
+- 覆盖 `docs/LATEST_FEEDBACK.md` 前，若其中存在尚未写入权威/当前验证文档的硬件
+  PASS/FAIL/NOT VERIFIED、Gate transition、接线映射、release blocker 或重要安全结论，
+  必须先精简归档，再更新最新反馈。
 
 ## 5. ROS 2 与控制代码约束
 

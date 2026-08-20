@@ -32,6 +32,80 @@ def test_windarmor_reuses_fans_launch_in_unified_mode() -> None:
     assert 'executable="fan_controller"' not in source
 
 
+def test_low_level_imu_auto_activate_contract() -> None:
+    launch_file = (
+        Path(__file__).parents[2]
+        / "imu_cybergear_ros2"
+        / "launch"
+        / "imu_cybergear_system.launch.py"
+    )
+    source = launch_file.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    declarations = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "DeclareLaunchArgument"
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value == "imu_auto_activate"
+    ]
+    assert len(declarations) == 1
+    defaults = {
+        keyword.arg: keyword.value
+        for keyword in declarations[0].keywords
+        if keyword.arg is not None
+    }
+    assert isinstance(defaults["default_value"], ast.Constant)
+    assert defaults["default_value"].value == "true"
+
+    assignments = {
+        node.targets[0].id: node.value
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "generate_launch_description"
+        for node in node.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+    }
+    configure_source = ast.unparse(assignments["imu_configure_handler"])
+    activate_source = ast.unparse(assignments["imu_activate_handler"])
+    assert "TRANSITION_CONFIGURE" in configure_source
+    assert "imu_auto_activate" not in configure_source
+    assert "TRANSITION_ACTIVATE" in activate_source
+    assert "condition=IfCondition(imu_auto_activate)" in activate_source
+
+
+def test_unified_launch_declares_and_forwards_imu_auto_activate() -> None:
+    launch_file = Path(__file__).parents[1] / "launch" / "windarmor.launch.py"
+    source = launch_file.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    declarations = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "DeclareLaunchArgument"
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value == "imu_auto_activate"
+    ]
+    assert len(declarations) == 1
+    defaults = {
+        keyword.arg: keyword.value
+        for keyword in declarations[0].keywords
+        if keyword.arg is not None
+    }
+    assert isinstance(defaults["default_value"], ast.Constant)
+    assert defaults["default_value"].value == "true"
+    assert 'imu_auto_activate = LaunchConfiguration("imu_auto_activate")' in source
+    assert '"imu_auto_activate": imu_auto_activate' in source
+
+
 def test_observation_only_launch_is_valid_and_excludes_actuator_nodes() -> None:
     launch_file = (
         Path(__file__).parents[1]

@@ -1,4 +1,4 @@
-# 最新反馈：C1 stale-input contract audit
+# 最新反馈：长期硬件验证规则与 C1 retry 准备
 
 > 本文件只保留当前最新任务反馈。
 >
@@ -8,90 +8,199 @@
 
 ```text
 task-start branch: master
-task-start HEAD: 7b3f7d77c27f220f26f8f5f28b67f6a32a2ececb
+task-start HEAD: 7b8f621fcbdb73131b102611539cbac518b26c97
+task-end branch: master
+task-end HEAD: 7b8f621fcbdb73131b102611539cbac518b26c97
 Gate B: COMPLETE
-Gate C: NOT EXECUTED / NOT AUTHORIZED
+Gate C / C1: NOT VERIFIED — retry prepared, not executed
+Gate C / C2: NOT AUTHORIZED / NOT EXECUTED
 ```
 
-本次只完成 Gate C / C1 stale required input 的 software/document contract audit，不构成
-C1 hardware PASS，也不授权任何 Gate C trigger。
+本任务只完成 pure software、documentation 和 local operator tooling preparation；没有执行
+C1 retry，也没有访问真实 hardware。
 
-## Confirmed Runtime contract
+## Task-start workspace and archival
 
-当前 ACTIVE stale-input 的实际路径为：
+任务开始时工作区为：
 
 ```text
-build_runtime_snapshot()
-→ IMU freshness 参与 required_inputs_fresh
-→ _active_gate_reason()
-→ _handoff_safety_reason() returns required_inputs_stale
-→ _rollback_handoff()
-→ local executable dispatch/tracking/authority/sequencer fail closed
-→ best-effort motor and fan owner revoke
-→ control tick returns before controller.update()
+## master...origin/master
+ M docs/LATEST_FEEDBACK.md
+ M docs/NEXT_COMMAND.md
 ```
 
-`_rollback_handoff()` 在调用任何外部 revoke 前，先关闭 command dispatch、使 handoff 和
-command tracking 失效、清除 committed owner tracking、进入 Runtime INHIBITED，并通过
-`_inhibit()` 使 envelope sequencer 失效。随后才分别尝试 motor/fan revoke；即使 cleanup
-异常，lower-level command lease/backstop 仍承担 fail-closed 后盾。
+两项均为用户已有修改，已保留并按任务内容处理。覆盖上一份
+`docs/LATEST_FEEDBACK.md` 前，已把 2026-08-19 C1 attempt 的简洁历史永久归档到
+`docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md`，包括：
 
-C1 因此不再要求 controller 返回 `FlightCommand.safe_stop()`，也不要求 executable command
-topic 额外出现 `request_safe_stop=true` frame。controller 主动 safe-stop 与 Runtime safety
-gate 在 controller update 前 rollback 是两条不同安全路径。
+- 最终分类 `NOT VERIFIED`；
+- ACTIVE exposure 约 `16.385 s`，超过批准的 `10 s`；
+- IMU deactivate 后 normal launch 自动恢复；
+- LEFT ESC powered sequence 偏差；
+- `+0.05 rad` 不适合作为肉眼精确测量；
+- stale 后 command cutoff、无 old target replay、Runtime inhibit、两 owner 回收和
+  operator stop observation 等局部正向证据。
 
-C1 required evidence 已校准为：ACTIVE 前存在合法 bounded command；IMU lifecycle transition
-和 `/imu/data_raw` cessation 证明 trigger；required input 变 stale；stale 后 command cutoff、
-无旧 target 生成/replay；Runtime `ACTIVE → INHIBITED`；motor/fan owner
-`FLIGHT_CONTROL → NONE`；actuator software/physical state 回到安全状态。
-`flight_imu_freshness_sec=0.2` 仅作为 freshness threshold，不扩展为新的精确 hardware timing
-SLA。
+归档明确声明这些局部证据不是 C1 HARDWARE PASS，不得据此进入 C2。
 
-## Regression coverage
+## NEXT_COMMAND local-only
 
-审查发现原有测试分别覆盖 IMU freshness aggregation、稳定的 `required_inputs_stale`
-preflight reason、controller 主动 safe-stop transport，以及泛化 ACTIVE safety failure
-rollback，但没有精确锁定以下完整不变量：
+`.gitignore` 已加入：
+
+```gitignore
+/docs/NEXT_COMMAND.md
+```
+
+已按任务明确授权执行普通 `git rm --cached docs/NEXT_COMMAND.md`，没有使用 `-f`，也没有
+stage 其他文件。最终验证：
 
 ```text
-ACTIVE + required_inputs_fresh=false
-→ rollback before controller.update
-→ no new executable envelope
+local docs/NEXT_COMMAND.md: EXISTS
+git check-ignore: .gitignore:10:/docs/NEXT_COMMAND.md
+git ls-files -- docs/NEXT_COMMAND.md: no output
+index: tracked-file deletion only
 ```
 
-因此在现有 `test_runtime_handoff.py` 中增加一个最小 pure software regression test，明确
-验证：controller update count 不增加；不新增 executable envelope/safe-stop frame；authority
-INHIBITED；command dispatch、command tracking 和 envelope sequencer 失效；两路 owner
-revoke 都被尝试。没有新增 framework 或 integration harness。
+该文件现在是用户与 agent 的本地 scratchpad，不是 repository artifact。旧内容继续保留在
+本地和 Git history，不做 history rewrite。
 
-## Modified files
+## Long-term hardware verification rules
+
+`AGENTS.md` 已将 NEXT_COMMAND authority 描述改为 optional/local/ignored，并新增
+`agent-prepared / operator-executed` 长期规则：
+
+- agent 准备确定性 runbook、准确命令、临时 helper/config、纯软件验证和离线证据审查；
+- operator 负责真实供电、真实硬件命令、physical kill 和现场观察；
+- timing-sensitive trigger 必须在 prepare/ACTIVE 前 pre-arm/prewarm；
+- 瞬态历史优先 continuous recorder；
+- 软件反馈不得冒充 operator physical observation；
+- 单场景工具默认保存在 `/tmp`、`~/windarmor_test_sessions` 或
+  `~/windarmor_evidence`；
+- operator 自行执行仍不降低十项授权门槛；
+- 覆盖 LATEST_FEEDBACK 前先归档尚未进入权威文档的重要硬件结论。
+
+## `imu_auto_activate`
+
+确认原低层 launch 的实际路径为：
 
 ```text
-docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md
-docs/LATEST_FEEDBACK.md
-src/windarmor_flight_control/test/test_runtime_handoff.py
+OnProcessStart -> automatic CONFIGURE
+OnStateTransition(goal_state="inactive") -> automatic ACTIVATE
 ```
 
-Runtime production code changes：`NONE`。
+同一 inactive handler 会在手工 deactivate 后再次运行，正是上一轮 C1 auto-reactivation
+的原因。
 
-任务开始时已有的 `docs/NEXT_COMMAND.md` 修改属于用户工作区内容，本次按其执行但不覆盖
-或回退。
+最小修复：
+
+- `imu_cybergear_system.launch.py` 声明 `imu_auto_activate`，默认 `"true"`；
+- 参数只作为 IMU automatic activate handler 的 `IfCondition`；
+- automatic configure 不受影响；
+- motor controller lifecycle 不变；
+- unified `windarmor.launch.py` 声明同名默认参数并透传；
+- README 已最小说明公开参数与硬件授权边界。
+
+因此默认 production behavior 完全保持：
+
+```text
+imu_auto_activate:=true
+process start -> configure -> inactive -> automatic activate
+```
+
+C1 retry 使用：
+
+```text
+imu_auto_activate:=false
+process start -> configure -> inactive and stay inactive
+operator explicit activate
+fault deactivate -> inactive and stay inactive
+```
+
+本任务没有运行上述 launch 或 lifecycle 命令。
+
+## C1 retry contract
+
+验证计划已校准：
+
+- 下一次 C1 candidate 使用 manual IMU lifecycle mode；
+- motor bus 与 LEFT ESC 可以在 prepare 前均已通电，RIGHT ESC 保持 OFF，但仍需新的十项
+  场景授权；
+- prepare 前必须确认 fan `SAFE_STOP`、PWM `[800,800]`、LEFT 无非批准旋转、四 motor
+  healthy/hold 和 physical kill ready；
+- 软件 evidence 证明 selected target/feedback、其他 motor hold 和 fan command/PWM；
+- operator 不再负责肉眼精确测量 `+0.05 rad`，但仍须确认无错误轴、异常大幅运动、机械
+  干涉、错侧 fan、异常振动/声音/气味/温升，以及 stale 后 motor/fan stop；
+- 最大 ACTIVE duration 保持 `10 s`；pre-armed helper 在合法 ACTIVE 后约 `1 s` 请求
+  deactivate；
+- fault 后不恢复 IMU，不自动 retry，不进入 C2。
+
+没有新增 C1 analyzer。
+
+## Local operator bundle
+
+仓库外 bundle：
+
+```text
+/home/h-goal/windarmor_test_sessions/c1_retry/
+├── RUNBOOK.md
+├── c1_recorder_topics.json
+└── c1_trigger_on_active.py
+```
+
+三个主文件均不属于 repository artifact，未进入 Git。
+
+`c1_recorder_topics.json` 使用现有 recorder schema，完整包含默认八个 topic 加
+`/imu/data_raw` 和 `/imu_driver_node/transition_event`，共 10 个唯一 topic；schema 纯函数
+校验通过。config SHA256：
+
+```text
+ea79de849340b6c96eae8ef567fe5fc3bf157c83d0517da5dedbf20f3e5d4c41
+```
+
+`c1_trigger_on_active.py` 在 prepare 前创建 authority subscription 和
+`/imu_driver_node/change_state` client；先观察非 ACTIVE、确认 service ready 后打印
+`C1_TRIGGER_READY / C1_TRIGGER_ARMED`。它只在下一次同时满足以下条件时计时：
+
+```text
+authority_state == ACTIVE
+command_authority == FLIGHT_CONTROL
+actuation_allowed == true
+motor_committed == true
+fan_committed == true
+owner_tokens_match == true
+```
+
+约 `1.0 s` 后使用已创建 client 请求 DEACTIVATE，并输出稳定 monotonic timing、service
+success 和 PASS/FAIL 字段。启动时已经 ACTIVE、service/authority 未 ready、ACTIVE timeout、
+service reject/exception/result timeout 都会非零退出。helper 不 call prepare、不 publish
+Flight command 或 E-STOP、不控制 motor/fan，也不自动 reactivate IMU。
+
+RUNBOOK 按 Terminal A/B/C/D 与 operator 划分，顶部明确
+`PREPARED ONLY — NOT HARDWARE AUTHORIZATION`，包含 preflight、manual activation、条件式
+set-zero、recorder/helper READY、prepare、immediate stop、expected evidence 和 safe exit。
 
 ## Validation
 
-本次只运行 pure/fake/mock/static validation：
+只运行 pure/static/fake/mock validation：
 
 ```bash
+python3 -m pytest src/windarmor_bringup/test/test_launch_syntax.py -q
+python3 -m py_compile \
+  ~/windarmor_test_sessions/c1_retry/c1_trigger_on_active.py
 git diff --check
-python3 -m pytest src/windarmor_flight_control/test/test_runtime_handoff.py -q
+git diff --cached --check
+source /opt/ros/jazzy/setup.bash
 ./scripts/ci_software.sh
 ```
 
-结果：PASS。
+结果：
 
 ```text
+targeted launch/source tests: 6 passed
+local helper py_compile: PASS
+local recorder config: 10 unique topics accepted
 git diff --check: PASS
-C1 targeted runtime handoff tests: 27 passed
+git diff --cached --check: PASS
 CI safety check: PASS
 Git whitespace check: PASS
 Python compile: PASS
@@ -100,21 +209,20 @@ colcon build: 5 packages PASS
 motor package pytest: 431 passed
 fan safety regression: 159 passed
 Flight and interface software tests: 301 passed
-full workspace colcon test: 919 tests, 0 errors, 0 failures, 0 skipped
+full workspace colcon test: 921 tests, 0 errors, 0 failures, 0 skipped
 ```
 
-这些检查均不构成硬件验证。
+这些结果不构成真实硬件验证。
 
-## Hardware and next step
+## Hardware and Git limits
 
-- 没有启动硬件 node/launch，没有配置 CAN，没有访问真实 IMU/串口，没有 lifecycle 操作
-  真实 IMU，没有操作 GPIO/PWM/CyberGear/ESC/fan，没有 authority prepare，没有 publish
-  `/e_stop`，也没有执行任何 Gate C trigger。
-- C1 motor axis、offset、fan command、powered actuator combination 和最大 ACTIVE duration
-  继续保持 `TO BE SET BEFORE EXECUTION`，均未授权。
-- 下一步仍是用户审查本次 C1 contract 修改后，再讨论 C1 hardware boundary；本任务不执行
-  C1。
+本任务没有启动任何 ROS hardware node/launch，没有打开 `/dev/imu_usb`，没有配置或访问
+CAN，没有初始化 CyberGear，没有调用 set-zero，没有操作 GPIO/PWM/ESC/fan，没有 Flight
+prepare，没有 lifecycle 操作真实 IMU，也没有发布 `/e_stop`。C1 retry 未执行。
 
-## Git limits
+没有创建或切换 branch，没有 commit、push、tag 或 release。除
+`git rm --cached docs/NEXT_COMMAND.md` 产生的 tracked-file deletion 外，没有 stage 其他
+文件。
 
-本次不创建或切换 branch，不 commit、push、tag，也不创建 GitHub Release。
+下一步只能由用户审查本次改动，并为 C1 retry 重新逐项完成十项硬件授权；本任务不建议
+自动执行硬件。

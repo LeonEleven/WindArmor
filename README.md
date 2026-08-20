@@ -353,6 +353,11 @@ sudo ./scripts/setup_can.sh can10
 
 启动前让机器人可靠固定，移除风扇周围的人员和松散物体，并先断开风扇动力电池。
 
+统一 launch 参数 `imu_auto_activate:=true` 保持默认正常行为：IMU 自动 configure 后继续
+自动 activate。受控维护或已授权硬件验证可设置 `imu_auto_activate:=false`，此时 IMU 仍
+自动 configure，但停在 inactive，必须由 operator 显式执行 lifecycle activate。该参数不
+构成任何真实硬件操作授权。
+
 ```bash
 cd ~/workspace/WindArmor
 source /opt/ros/jazzy/setup.bash

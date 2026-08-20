@@ -6,3 +6,5 @@ __pycache__/
 .pytest_cache/
 /reference
 /hardware_evidence/
+# Local user-to-agent task scratchpad; never a repository artifact.
+/docs/NEXT_COMMAND.md

@@ -1,7 +1,7 @@
 """IMU + CyberGear 电机控制系统 launch 文件。
 
 启动 imu_driver_node 和 imu_motor_controller_node 两个 LifecycleNode，
-并自动执行 configure → activate 生命周期转换。
+默认自动执行 configure → activate 生命周期转换；受控维护模式可以只自动 configure。
 
 可通过 launch 参数控制是否启动控制器节点、选择 CAN 后端等。
 """
@@ -27,6 +27,7 @@ def generate_launch_description():
     control_backend = LaunchConfiguration("control_backend")
     can_channel = LaunchConfiguration("can_channel")
     can_bustype = LaunchConfiguration("can_bustype")
+    imu_auto_activate = LaunchConfiguration("imu_auto_activate")
 
     # ---- IMU 驱动节点（LifecycleNode） ----
     imu_node = LifecycleNode(
@@ -67,6 +68,7 @@ def generate_launch_description():
                 ),
             ],
         ),
+        condition=IfCondition(imu_auto_activate),
     )
 
     # ---- 电机控制节点（LifecycleNode） ----
@@ -159,6 +161,11 @@ def generate_launch_description():
                 "start_controller",
                 default_value="true",
                 description="是否启动电机控制节点",
+            ),
+            DeclareLaunchArgument(
+                "imu_auto_activate",
+                default_value="true",
+                description="IMU configure 后是否自动 activate",
             ),
             DeclareLaunchArgument(
                 "enable_keyboard",
