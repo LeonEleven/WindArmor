@@ -30,19 +30,20 @@ operator-provided hardware PASS：LEFT command `0.05` 的 continuous PWM 从 `(8
 有界达到 1210/800 us 并最终回到 `(800,800)`，四 motor baseline hold、无意外运动，
 E-STOP 后 authority/owners/latches 和 LEFT physical stop 均通过。RIGHT command 保持
 `0.0 / 800 us`，但 RIGHT ESC 在该次最终 B2 session 中独立断电，不把它表述为 powered
-physical Flight verification。Gate B 现为 COMPLETE；Gate C fail-closed 和 Gate D 最终
-回归仍未完成。
+physical Flight verification。Gate B 现为 COMPLETE；Gate C 的 C1 stale-required-input
+rollback 已取得 `HARDWARE PASS`，C2/C3/C4 尚未授权、未执行，因此 Gate C 仍为
+`IN PROGRESS / NOT COMPLETE`，Gate D 最终回归也未完成。
 分阶段验证协议见
 [v0.4.0 Hardware Verification Plan](docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md)。
 Gate A0/A1、normal controller 的 Gate B feedback baseline、Flight DRY_RUN、冷启动
 当前位置保持 B0 和 B1 functional hardware verification 已通过。B1 closure run 没有满足
 procedural `ACTIVE <= 3.0 sec`：watchdog 在 ACTIVE 后等待 2.5 秒才临时启动新的
 `ros2 topic pub --once`，额外 ROS process/DDS discovery 延迟使实际 `/e_stop` 送达超时；
-lower-level 收到 E-STOP 后的停止和状态转换本身很快。该 timing 证据将在 Gate C 使用
-预创建 publisher 的 watchdog 顺便闭合，不为此重跑 B1 functional test。Task 6.2.7 的
-shutdown cleanup 和 watchdog 已通过纯软件验证，Gate C 仅处于等待新授权的
-`NEXT / READY FOR HARDWARE VERIFICATION / NOT AUTHORIZED`，本次未执行 Gate C。
-这些状态不构成任何后续硬件操作授权。
+lower-level 收到 E-STOP 后的停止和状态转换本身很快。该 timing 证据仍将在后续 Gate C
+E-STOP 子场景使用预创建 publisher 的 watchdog 闭合，不为此重跑 B1 functional test。
+Task 6.2.7 的 shutdown cleanup 和 watchdog 已通过纯软件验证；2026-08-20 的 C1 最终
+session 已通过预创建 lifecycle helper 验证 IMU 停止后 Runtime fail-closed、owner 释放、
+motor/LEFT fan 停止和无自动恢复。C1 的通过不授权 C2/C3/C4 或任何其他硬件操作。
 
 仓库另提供默认禁用的 `bounded_verification_controller`，仅用于该计划中的受控
 实机验证。它先从当前 authority session 的新鲜、合法、健康电机反馈捕获相对
