@@ -1,135 +1,150 @@
-# 最新反馈：Gate C / C3 `/proc` state sampling race 修复
+# 最新反馈：Gate C / C3 Flight Runtime graceful signal shutdown 修复
 
 > 日期：2026-08-21
-> 任务起点：`master` / `7f9831819e64245dbbf89d2c2f12f5fb46f96090`
-> 本轮性质：local-only observer `/proc` sampling race 修复、pure self-test 与反馈归档
-> C3 结论：`DESIGN/PREPARATION COMPLETE, NOT AUTHORIZED / NOT EXECUTED`
+> 任务起点：`master` / `f1df97b22e36525cca6e52e49f58225c9732e713`
+> 本轮性质：production graceful-shutdown 修复、pure/mock regression 与 C3 evidence 归档
+> C3 结论：`HARDWARE NOT VERIFIED / SOFTWARE FIX COMPLETE / RETRY NOT AUTHORIZED`
 > Gate C：`IN PROGRESS / NOT COMPLETE`
 
-## 正式状态与本轮边界
+## 正式状态
 
 ```text
 Gate B: COMPLETE
 Gate C / C1: HARDWARE PASS
 Gate C / C2: HARDWARE PASS
-Gate C / C3: DESIGN/PREPARATION COMPLETE, NOT AUTHORIZED / NOT EXECUTED
+Gate C / C3: HARDWARE NOT VERIFIED / SOFTWARE FIX COMPLETE / RETRY NOT AUTHORIZED
 Gate C / C4: NOT AUTHORIZED / NOT EXECUTED
 Gate C: IN PROGRESS / NOT COMPLETE
 ```
 
-C1/C2 的硬件 PASS、安全结论与证据继续由当前 `README.md`、
-`docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md` 和 Git history 保存；本轮没有覆盖、降低或扩展
-这些结论，也不把历史授权延伸到 C3。本次修复执行没有启动 ROS 2、WindArmor launch、Flight
-Runtime 或 hardware node，没有调用 prepare/E-STOP，没有向任何真实进程发送 SIGINT/SIGTERM/
-SIGKILL/SIGCONT，没有访问 CAN、GPIO、PWM、串口、IMU、motor 或 ESC/fan，也没有执行 C3/C4。
+C1/C2 的硬件 PASS 继续有效。本轮没有执行 C4，也不把 C3 已结束 session 的授权延伸到 retry。
+本次软件修复没有启动 Flight Runtime、ROS graph、hardware node 或 launch，没有调用 prepare/
+E-STOP，没有向真实进程发送 signal，也没有访问 CAN、GPIO、PWM、串口、IMU、motor 或 fan。
 
-production source、config、launch、message、service 和 tests 均未修改。仓库内只更新当前反馈，
-本地 bundle 继续位于 `~/windarmor_test_sessions/c3/`，不纳入 Git。
+## C3 session classification
 
-## C3 pre-flight abort 分类
-
-session `gate-evidence-20260821T014852.009218Z-1200735` 分类为：
+本轮归档的完整 C3 evidence session 为：
 
 ```text
-C3 PRE-FLIGHT ABORTED / HARDWARE ATTEMPT NOT STARTED
+/home/h-goal/windarmor_evidence/
+  gate-evidence-20260821T021811.696548Z-1220232
 ```
 
-helper 依次读取 `/proc/<pid>/status` 与 `/proc/<pid>/stat`，此前要求两次非原子采样得到的 process
-state 完全相等。进程在两次读取之间发生正常调度状态变化时会产生 false-positive identity
-failure；这是 helper preflight defect，不是 Runtime identity change 或 C3 hardware FAIL。
+正式分类为 `C3 NOT VERIFIED`，不是 C3 FAIL。以下正向证据保留：
 
-该 session 中 prepare 未执行、ACTIVE 未进入、SIGINT 未发送，C3 hardware scenario 未开始；
-因此不构成 C3 attempt、PASS 或 FAIL，也不改变正式状态：C3 仍为
-`DESIGN/PREPARATION COMPLETE, NOT AUTHORIZED / NOT EXECUTED`。
+- continuous legal ACTIVE 到 exact-PID SIGINT 为 `3.010030905 s`；
+- helper `C3_STOP_RESULT=PASS`、exit 0；
+- motor/fan physical stop，owners fail closed；
+- NEW PID 与 `authority_epoch` fresh；
+- NEW 持续 `DRY_RUN/NONE`、owners NONE、PWM `[800,800]`；
+- restart 后没有 movement，也没有错误轴、错侧 fan、异常声音、振动、气味或温升；
+- 最终 actuator power 已物理断开。
 
-## Strict Runtime argv identity
+operator 在 `OLD_RUNTIME_EXIT_STATUS=1` 后仍启动了 NEW Runtime。NEW-half evidence 可作为
+supplemental positive evidence 保留，但不能覆盖 OLD graceful-exit blocker，也不能使整体 C3
+成为 PASS。
 
-`c3_graceful_stop_observer.py` 不再把 `/proc/<pid>/cmdline` 拼成字符串做子串匹配。现在按 NUL
-分隔原始 bytes、丢弃空字段并以 replacement mode 解码，保存为完整 `tuple[str, ...]`。候选
-Runtime 至少必须满足：
+唯一 blocker 是 OLD Runtime 收到 exact-PID SIGINT 后非零退出：
 
 ```text
-any(Path(argument).name == "flight_control_runtime_node" for argument in argv)
+OLD_RUNTIME_EXIT_STATUS=1
+RuntimeError: Unable to convert call argument '0' to Python object
+Failed to publish log message to rosout: publisher's context is invalid
 ```
 
-因此 `--note=flight_control_runtime_node` 之类的参数子串不能冒充 Runtime，而任意安装前缀下
-basename 精确匹配的 executable/script argument 仍可接受。初始验证继续要求 current UID、
-exact executable basename、非 stopped/zombie/dead state，并保存 PID、UID、`/proc` start time
-和完整 argv tuple。
+原 rclpy default SIGINT handler 先 invalidated context。`finally -> destroy_node()` 与
+`runtime_shutdown` rollback 确实运行，actuator command gate、owners 与 PWM 均正确 fail-close；
+但 executor 在 subscription `take_message` 抛出 RuntimeError，cleanup logging 也遇到 invalid
+context。因此 blocker 是 graceful process shutdown，不是 actuator fail-close。
 
-SIGINT 前的最终 revalidation 要求 PID 对应的 UID、start time 与完整 argv tuple 全部不变，
-再次确认 exact Runtime basename 和 running state。相同 PID/start time 下只要 argv 改变也会
-FAIL；start time 改变仍按 PID reuse FAIL。失败时不会调用 signal sender。
+更早的 `/proc` false-positive preflight session 已归档到
+`docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md`，不在本反馈重复展开。
 
-本次修复移除了 `status.State == stat.state` 检查。UID 继续只取自
-`/proc/<pid>/status`；process state 与 `start_time_ticks` 统一只取自同一次
-`/proc/<pid>/stat` 采样。PID、UID、start time、完整 argv、exact basename 防护全部保持，
-`T/t/Z/X/x` stopped/zombie/dead rejection 也继续基于 authoritative `stat` state 执行。
+## Python-controlled SIGINT/SIGTERM contract
 
-## Continuous legal ACTIVE latch
+Flight Runtime `main()` 现在显式使用：
 
-首次建立 coherent legal ACTIVE 仍要求 authority 为 ACTIVE/FLIGHT_CONTROL、actuation allowed、
-motor/fan committed、owner tokens match，两 ownership 均为同 token 的 FLIGHT_CONTROL，且至少
-收到一帧同 token executable command。此时锁定 OLD `(authority_epoch,
-authority_generation)` 并进入约 `3.0 s` 的连续 pre-SIGINT phase。
+```python
+rclpy.init(
+    args=args,
+    signal_handler_options=SignalHandlerOptions.NO,
+)
+```
 
-该 phase 不在每个任意 callback 上重新组合可能不同步的缓存。只有新收到的 authoritative
-sample 本身明确非法时才锁存相应 `PRE_SIGINT_FAILURE=...`：
-
-- authority 不再 ACTIVE、command authority 不再为 FLIGHT_CONTROL；
-- actuation disallowed、motor/fan commit 丢失或 owner token-match flag 丢失；
-- authority epoch/generation 改变；
-- motor/fan ownership 不再为 FLIGHT_CONTROL 或 owner token 改变；
-- normal executable command 使用不同 token。
-
-锁存后后续合法样本不能恢复、不能清除 failure、不能重启 timer，也不能发送 SIGINT。
-同 token normal executable command 只更新 `last_old_command_at`；safe-stop envelope 不作为
-heartbeat。helper 不引入 command-frequency SLA。连续合法时间达到 delay 后，先完成最终
-process identity revalidation，再通过唯一 signal path 恰好发送一次 SIGINT；仍没有 SIGTERM、
-SIGKILL、SIGCONT、automatic retry、restart、prepare、E-STOP 或 actuator control 路径。
-
-## Local-only bundle
+Runtime 在 init 前安装自己的 Python SIGINT/SIGTERM handler。首次 signal 到达时，handler 先把
+SIGINT 与 SIGTERM 都设为 ignore，再抛出 `KeyboardInterrupt`，把控制权交给 `main()` 的
+graceful cleanup；cleanup 入口再次确保两种 signal 均被忽略，因此第二个 signal 不能中断
+rollback。退出顺序为：
 
 ```text
-~/windarmor_test_sessions/c3/
-  RUNBOOK.md
-  run_c3_runtime.sh
-  c3_graceful_stop_observer.py
+SIGINT or SIGTERM
+-> Python KeyboardInterrupt
+-> ROS context remains valid
+-> FlightControlRuntimeNode.destroy_node()
+-> runtime_shutdown rollback and local command gate close
+-> best-effort motor/fan revoke
+-> node destruction
+-> rclpy.shutdown()
+-> restore previous Python signal handlers
+-> clean return
 ```
 
-`RUNBOOK.md` 已最小同步：明确 trigger 需要约 3 秒连续 legal ACTIVE；任一 authority/owner/token/
-legal-condition loss 都锁存 FAIL，后续 recovery 不重启计时且不发送 SIGINT；继续要求
-`python3 -u`、显式 flush、`pipefail` 与 `PIPESTATUS[0]`。wrapper 没有结构或内容改动。
+该修复没有吞掉 context-invalid `RuntimeError` 来伪造成功。只有 `KeyboardInterrupt` 进入正常
+signal-shutdown path；普通 executor/Runtime `RuntimeError` 仍在 ordered cleanup 后传播并产生
+nonzero。`destroy_node()` 自身异常也不会阻止 `rclpy.shutdown()` 尝试，异常仍不会被吞掉。
 
-## Pure/static validation
+## Pure/mock validation
 
-按本轮任务只执行不访问 ROS graph、Runtime 或硬件的验证：
+新增 `test_runtime_shutdown.py`，全部 mock `rclpy`、node 与 Python signal registration，不发真实
+signal、不初始化 ROS context。3 项 focused tests 覆盖：
+
+- `rclpy.init` 使用 `SignalHandlerOptions.NO`；
+- SIGINT 与 SIGTERM 都进入 custom `KeyboardInterrupt` path并 clean return；
+- cleanup 期间 context 仍 valid；
+- `destroy_node()` 严格先于 `rclpy.shutdown()`；
+- cleanup 中两种 signal 均为 ignored，第二个 signal不能中断；
+- previous handlers 最终恢复；
+- unexpected executor `RuntimeError` 仍传播。
+
+已执行相关 Runtime/C1/C2 pure/mock regression：
 
 ```text
-bash -n ~/windarmor_test_sessions/c3/run_c3_runtime.sh                 PASS
-python3 -m py_compile .../c3_graceful_stop_observer.py                 PASS
-python3 .../c3_graceful_stop_observer.py --self-test                  13/13 PASS
-git diff --check                                                       PASS
+test_runtime_shutdown.py
+test_runtime_node.py
+test_runtime_handoff.py
+test_runtime_safety_boundary.py
+test_runtime_config.py
+test_fan_estop_rollback_integration.py
+结果：97 passed
 ```
 
-13 项 self-test 只使用 temporary fake `/proc`、fake messages、fake clock 与 mock signal sender。
-覆盖 valid Python argv + Runtime path + args、参数子串 false positive、exact basename path、
-full argv mutation、PID reuse、`status=S/stat=R` accepted、`stat=T/t/Z/X/x` rejected、
-starts-ACTIVE 拒绝、连续合法路径 exactly one mock SIGINT、authority
-loss、actuation false、motor/fan owner NONE、motor/fan token change、authority generation change、
-illegal 后 recovery 仍 FAIL/no signal、wrong-token executable command、exit timeout、缺失 owner/PWM
-transition、forbidden signal absence 与 flushed marker。所有 signal assertion 都停留在内存列表；
-没有向真实 PID 发信号，也没有读取真实 `/proc`。
+既有 ACTIVE shutdown、owner service unavailable、runtime restart fresh epoch、required-input
+stale rollback、E-STOP dominance 和 strict fan safety adapter 测试全部保持 PASS。该结果是
+纯软件证据，不是 C3 hardware re-verification。
 
-完整 `scripts/ci_software.sh` 与此前的 75 项 selected package tests 本轮未执行：本轮没有修改
-production code/config/launch/test，新增行为全部位于 local-only helper，已由其 focused pure
-self-test 覆盖。此前测试结果仍是历史证据，不冒充本轮重跑结果。
+完整纯软件 CI 已执行：
 
-production code changed = `NO`；real signal sent = `NO`；ROS graph accessed = `NO`；real hardware
-executed = `NO`。README 无需修改，因为正式 hardware 状态和公开 production behavior 未变。
+```text
+source /opt/ros/jazzy/setup.bash
+./scripts/ci_software.sh
 
-## 下一步
+CI safety / whitespace / Python compile                            PASS
+hardware verification tooling                                      26 passed
+five-package colcon build                                           PASS
+motor package pytest                                               431 passed
+fan safety regression                                              159 passed
+Flight and interface software tests                                304 passed
+full workspace colcon test                    924 tests, 0 errors, 0 failures
+```
 
-下一步只允许用户 review 加固后的 bundle、production contract 和完整十项 powered boundary，
-再决定是否单独授权 C3。当前不得执行 wrapper/helper、不得启动 Runtime、不得 prepare、不得
-发送真实 signal、不得供电，也不得进入 C4。
+所有测试均为 pure/fake/mock 或未连接 backend；未实例化真实 CAN、GPIO、PWM 或串口硬件。
+
+## 修改范围与下一步
+
+production 修改仅限 Flight Runtime process signal/shutdown orchestration，没有改变 ROS topic、
+service、parameter、authority、ownership、command envelope、lease、E-STOP 或 actuator mapping。
+README 与 hardware verification plan 已同步 C3 `NOT VERIFIED`、software blocker 与 retry boundary。
+
+C3 仍需在软件修复完成后重新满足十项授权门槛并取得单独授权，再重跑 OLD graceful exit 与
+NEW isolation。当前不得执行 wrapper/helper、不得启动真实 Runtime、不得供电或 prepare，
+不得发送真实 signal，也不得进入 C4。

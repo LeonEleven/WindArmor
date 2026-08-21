@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import signal
 import time
 from dataclasses import replace
 from typing import Callable, Mapping
@@ -10,6 +11,7 @@ import rclpy
 from geometry_msgs.msg import Vector3Stamped
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.signals import SignalHandlerOptions
 from sensor_msgs.msg import Imu
 from std_msgs.msg import Bool, Int32MultiArray, String, UInt64
 from std_srvs.srv import Trigger
@@ -50,6 +52,35 @@ from .ownership import (
     OwnerReply,
     OwnershipReadbackTracker,
 )
+
+
+_RUNTIME_SHUTDOWN_SIGNALS = (signal.SIGINT, signal.SIGTERM)
+
+
+def _ignore_runtime_shutdown_signals() -> None:
+    for shutdown_signal in _RUNTIME_SHUTDOWN_SIGNALS:
+        signal.signal(shutdown_signal, signal.SIG_IGN)
+
+
+def _runtime_shutdown_signal_handler(_signum, _frame) -> None:
+    # Block a second signal before transferring control to main's cleanup path.
+    _ignore_runtime_shutdown_signals()
+    raise KeyboardInterrupt
+
+
+def _install_runtime_shutdown_signal_handlers() -> dict[int, object]:
+    previous_handlers = {
+        shutdown_signal: signal.getsignal(shutdown_signal)
+        for shutdown_signal in _RUNTIME_SHUTDOWN_SIGNALS
+    }
+    for shutdown_signal in _RUNTIME_SHUTDOWN_SIGNALS:
+        signal.signal(shutdown_signal, _runtime_shutdown_signal_handler)
+    return previous_handlers
+
+
+def _restore_signal_handlers(previous_handlers: Mapping[int, object]) -> None:
+    for shutdown_signal, handler in previous_handlers.items():
+        signal.signal(shutdown_signal, handler)
 
 
 class FlightControlRuntimeNode(Node):
@@ -1366,18 +1397,28 @@ class FlightControlRuntimeNode(Node):
 
 
 def main(args: list[str] | None = None) -> None:
-    rclpy.init(args=args)
+    previous_handlers = _install_runtime_shutdown_signal_handlers()
     node = None
     try:
+        rclpy.init(
+            args=args,
+            signal_handler_options=SignalHandlerOptions.NO,
+        )
         node = FlightControlRuntimeNode()
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
-        if node is not None:
-            node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
+        _ignore_runtime_shutdown_signals()
+        try:
+            if node is not None:
+                node.destroy_node()
+        finally:
+            try:
+                if rclpy.ok():
+                    rclpy.shutdown()
+            finally:
+                _restore_signal_handlers(previous_handlers)
 
 
 if __name__ == "__main__":
