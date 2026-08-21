@@ -1,8 +1,8 @@
-# 最新反馈：Gate C / C3 本地 operator helper 加固
+# 最新反馈：Gate C / C3 `/proc` state sampling race 修复
 
-> 日期：2026-08-20
-> 任务起点：`master` / `72070fa89305b46e251749e7584c9987f14e4be9`
-> 本轮性质：local-only observer fail-closed 加固、pure self-test 与最小文档同步
+> 日期：2026-08-21
+> 任务起点：`master` / `7f9831819e64245dbbf89d2c2f12f5fb46f96090`
+> 本轮性质：local-only observer `/proc` sampling race 修复、pure self-test 与反馈归档
 > C3 结论：`DESIGN/PREPARATION COMPLETE, NOT AUTHORIZED / NOT EXECUTED`
 > Gate C：`IN PROGRESS / NOT COMPLETE`
 
@@ -19,13 +19,28 @@ Gate C: IN PROGRESS / NOT COMPLETE
 
 C1/C2 的硬件 PASS、安全结论与证据继续由当前 `README.md`、
 `docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md` 和 Git history 保存；本轮没有覆盖、降低或扩展
-这些结论，也不把历史授权延伸到 C3。本轮没有启动 ROS 2、WindArmor launch、Flight Runtime
-或 hardware node，没有调用 prepare/E-STOP，没有向任何真实进程发送 SIGINT/SIGTERM/
+这些结论，也不把历史授权延伸到 C3。本次修复执行没有启动 ROS 2、WindArmor launch、Flight
+Runtime 或 hardware node，没有调用 prepare/E-STOP，没有向任何真实进程发送 SIGINT/SIGTERM/
 SIGKILL/SIGCONT，没有访问 CAN、GPIO、PWM、串口、IMU、motor 或 ESC/fan，也没有执行 C3/C4。
 
 production source、config、launch、message、service 和 tests 均未修改。仓库内只更新当前反馈，
-并在 hardware verification plan 中最小澄清 C3 trigger 的连续合法 ACTIVE 契约；本地 bundle
-继续位于 `~/windarmor_test_sessions/c3/`，不纳入 Git。
+本地 bundle 继续位于 `~/windarmor_test_sessions/c3/`，不纳入 Git。
+
+## C3 pre-flight abort 分类
+
+session `gate-evidence-20260821T014852.009218Z-1200735` 分类为：
+
+```text
+C3 PRE-FLIGHT ABORTED / HARDWARE ATTEMPT NOT STARTED
+```
+
+helper 依次读取 `/proc/<pid>/status` 与 `/proc/<pid>/stat`，此前要求两次非原子采样得到的 process
+state 完全相等。进程在两次读取之间发生正常调度状态变化时会产生 false-positive identity
+failure；这是 helper preflight defect，不是 Runtime identity change 或 C3 hardware FAIL。
+
+该 session 中 prepare 未执行、ACTIVE 未进入、SIGINT 未发送，C3 hardware scenario 未开始；
+因此不构成 C3 attempt、PASS 或 FAIL，也不改变正式状态：C3 仍为
+`DESIGN/PREPARATION COMPLETE, NOT AUTHORIZED / NOT EXECUTED`。
 
 ## Strict Runtime argv identity
 
@@ -45,6 +60,11 @@ exact executable basename、非 stopped/zombie/dead state，并保存 PID、UID�
 SIGINT 前的最终 revalidation 要求 PID 对应的 UID、start time 与完整 argv tuple 全部不变，
 再次确认 exact Runtime basename 和 running state。相同 PID/start time 下只要 argv 改变也会
 FAIL；start time 改变仍按 PID reuse FAIL。失败时不会调用 signal sender。
+
+本次修复移除了 `status.State == stat.state` 检查。UID 继续只取自
+`/proc/<pid>/status`；process state 与 `start_time_ticks` 统一只取自同一次
+`/proc/<pid>/stat` 采样。PID、UID、start time、完整 argv、exact basename 防护全部保持，
+`T/t/Z/X/x` stopped/zombie/dead rejection 也继续基于 authoritative `stat` state 执行。
 
 ## Continuous legal ACTIVE latch
 
@@ -88,13 +108,14 @@ legal-condition loss 都锁存 FAIL，后续 recovery 不重启计时且不发�
 ```text
 bash -n ~/windarmor_test_sessions/c3/run_c3_runtime.sh                 PASS
 python3 -m py_compile .../c3_graceful_stop_observer.py                 PASS
-python3 .../c3_graceful_stop_observer.py --self-test                  12/12 PASS
+python3 .../c3_graceful_stop_observer.py --self-test                  13/13 PASS
 git diff --check                                                       PASS
 ```
 
-12 项 self-test 只使用 temporary fake `/proc`、fake messages、fake clock 与 mock signal sender。
+13 项 self-test 只使用 temporary fake `/proc`、fake messages、fake clock 与 mock signal sender。
 覆盖 valid Python argv + Runtime path + args、参数子串 false positive、exact basename path、
-full argv mutation、PID reuse、starts-ACTIVE 拒绝、连续合法路径 exactly one mock SIGINT、authority
+full argv mutation、PID reuse、`status=S/stat=R` accepted、`stat=T/t/Z/X/x` rejected、
+starts-ACTIVE 拒绝、连续合法路径 exactly one mock SIGINT、authority
 loss、actuation false、motor/fan owner NONE、motor/fan token change、authority generation change、
 illegal 后 recovery 仍 FAIL/no signal、wrong-token executable command、exit timeout、缺失 owner/PWM
 transition、forbidden signal absence 与 flushed marker。所有 signal assertion 都停留在内存列表；
