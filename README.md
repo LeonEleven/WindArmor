@@ -32,10 +32,10 @@ E-STOP 后 authority/owners/latches 和 LEFT physical stop 均通过。RIGHT com
 `0.0 / 800 us`，但 RIGHT ESC 在该次最终 B2 session 中独立断电，不把它表述为 powered
 physical Flight verification。Gate B 现为 COMPLETE；Gate C 的 C1 stale-required-input
 rollback 和 C2 Runtime-unresponsive lower-level lease fail-close 均已取得 `HARDWARE PASS`；
-C3 已取得 actuator fail-close 与 NEW restart isolation 正向证据，但 OLD Runtime 在 SIGINT
-后因 rclpy context 提前失效而非零退出，整体为 `NOT VERIFIED`；软件已改为 Python-controlled
-SIGINT/SIGTERM graceful cleanup，仍须重新授权并重跑 C3。C4 尚未授权、未执行，因此 Gate C
-仍为 `IN PROGRESS / NOT COMPLETE`，Gate D 最终回归也未完成。
+C3 final powered retry 也已取得 `HARDWARE PASS`：OLD Runtime exact-PID SIGINT 后 clean exit 0、
+command stream 停止、两 owner NONE、fan PWM 回到 `[800,800]`，NEW Runtime 使用 fresh PID/
+authority epoch 并持续 `DRY_RUN/NONE`、无 executable command 或 actuator movement。C4 尚未
+授权、未执行，因此 Gate C 仍为 `IN PROGRESS / NOT COMPLETE`，Gate D 最终回归也未完成。
 分阶段验证协议见
 [v0.4.0 Hardware Verification Plan](docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md)。
 Gate A0/A1、normal controller 的 Gate B feedback baseline、Flight DRY_RUN、冷启动
@@ -49,7 +49,9 @@ session 已通过预创建 lifecycle helper 验证 IMU 停止后 Runtime fail-cl
 motor/LEFT fan 停止和无自动恢复。同日 C2 最终 session 通过 exact Runtime SIGSTOP 验证
 command/authority publication cessation、motor/fan 独立 `0.25 s` lease fail-close、两 owner
 NONE、LEFT PWM `1210 -> 800 us`、RIGHT 始终 `800 us` 以及 operator-confirmed physical
-stop/no-resume。C1/C2 的通过不授权 C3/C4 或任何其他硬件操作。
+stop/no-resume。当时 C1/C2 的通过没有自动授权 C3/C4 或任何其他硬件操作。
+2026-08-21 的 C3 final session 随后闭合 graceful stop/restart 和 stale-authority isolation；
+C3 的通过不授权 C4 或任何新的硬件操作。
 
 Flight Runtime 入口禁用 rclpy 默认 SIGINT/SIGTERM handler，改由 Python signal handler 先
 阻止 cleanup 期间的后续信号，再以 `KeyboardInterrupt` 进入有序退出：context 保持有效时先
@@ -386,8 +388,8 @@ ros2 launch windarmor_bringup windarmor.launch.py
 > 本节是完成单设备方向、零点、软限位、风扇起转值和急停验证后的正常运行
 > 流程，不是首次带电调试流程。当前候选值 `1200 μs` 和 `1400 μs` 尚未实机
 > 标定；标定完成并获得硬件运行授权前，不得直接按本节给全部动力设备通电。
-> v0.4.0 分阶段验证计划中的 C1/C2 已完成，C3 为 `NOT VERIFIED` 且修复后重跑尚未授权，
-> C4 仍未授权、未执行；任何新的带电操作都必须先满足根目录
+> v0.4.0 分阶段验证计划中的 C1/C2/C3 均已取得 `HARDWARE PASS`，C4 仍未授权、未执行；
+> 任何新的带电操作都必须先满足根目录
 > [AGENTS.md](AGENTS.md) 的十项授权门槛，并取得对应 Stage 的单独明确授权，
 > 不得从本节或验证计划推断授权。
 
