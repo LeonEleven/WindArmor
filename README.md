@@ -34,8 +34,12 @@ physical Flight verification。Gate B 现为 COMPLETE；Gate C 的 C1 stale-requ
 rollback 和 C2 Runtime-unresponsive lower-level lease fail-close 均已取得 `HARDWARE PASS`；
 C3 final powered retry 也已取得 `HARDWARE PASS`：OLD Runtime exact-PID SIGINT 后 clean exit 0、
 command stream 停止、两 owner NONE、fan PWM 回到 `[800,800]`，NEW Runtime 使用 fresh PID/
-authority epoch 并持续 `DRY_RUN/NONE`、无 executable command 或 actuator movement。C4 尚未
-授权、未执行，因此 Gate C 仍为 `IN PROGRESS / NOT COMPLETE`，Gate D 最终回归也未完成。
+authority epoch 并持续 `DRY_RUN/NONE`、无 executable command 或 actuator movement。C4a 首次
+powered attempt 因超过批准的 10 秒 ACTIVE boundary，且 intended deactivate 前 Runtime 已因
+stale input fail closed，又暴露 startup lifecycle handler 自动 re-activate，被分类为
+`NOT VERIFIED / POWERED ATTEMPT INVALIDATED`，不是 actuator safety FAIL；C4a software/
+preparation 已重新打开且 retry 未授权，C4b 仍未授权、未执行。因此 Gate C 仍为
+`IN PROGRESS / NOT COMPLETE`，Gate D 最终回归也未完成。
 分阶段验证协议见
 [v0.4.0 Hardware Verification Plan](docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md)。
 Gate A0/A1、normal controller 的 Gate B feedback baseline、Flight DRY_RUN、冷启动
@@ -305,6 +309,11 @@ fallback 到 `0.0`，也不会自动 set-zero。成功后 `current_targets`、`d
 `EMERGENCY_STOP` 只有在显式电机恢复成功后才能进入 MANUAL，状态提交若失败会
 重新尽力停止电机。公开 `/motors/control_mode` 值和 QoS 保持不变。
 
+低层 launch 的 IMU 和 motor controller 自动 activate 只匹配首次
+`configuring -> inactive`。显式 lifecycle deactivate 的
+`active -> deactivating -> inactive` 会保持 inactive，不会被 startup handler 再次 activate；
+`imu_auto_activate=false` 仍表示 IMU 自动 configure 后保持 inactive。
+
 ### 双风扇
 
 代码使用 BCM GPIO 编号：
@@ -388,7 +397,8 @@ ros2 launch windarmor_bringup windarmor.launch.py
 > 本节是完成单设备方向、零点、软限位、风扇起转值和急停验证后的正常运行
 > 流程，不是首次带电调试流程。当前候选值 `1200 μs` 和 `1400 μs` 尚未实机
 > 标定；标定完成并获得硬件运行授权前，不得直接按本节给全部动力设备通电。
-> v0.4.0 分阶段验证计划中的 C1/C2/C3 均已取得 `HARDWARE PASS`，C4 仍未授权、未执行；
+> v0.4.0 分阶段验证计划中的 C1/C2/C3 均已取得 `HARDWARE PASS`；C4a 首次 attempt 已失效，
+> retry 未授权，C4b 未授权、未执行；
 > 任何新的带电操作都必须先满足根目录
 > [AGENTS.md](AGENTS.md) 的十项授权门槛，并取得对应 Stage 的单独明确授权，
 > 不得从本节或验证计划推断授权。

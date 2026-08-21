@@ -58,6 +58,7 @@ def generate_launch_description():
     imu_activate_handler = RegisterEventHandler(
         event_handler=OnStateTransition(
             target_lifecycle_node=imu_node,
+            start_state="configuring",
             goal_state="inactive",
             entities=[
                 EmitEvent(
@@ -110,6 +111,7 @@ def generate_launch_description():
     controller_activate_handler = RegisterEventHandler(
         event_handler=OnStateTransition(
             target_lifecycle_node=controller_node,
+            start_state="configuring",
             goal_state="inactive",
             entities=[
                 EmitEvent(

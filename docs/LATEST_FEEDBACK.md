@@ -1,10 +1,11 @@
-# 最新反馈：Gate C / C4a + C4b 执行准备完成
+# 最新反馈：Gate C / C4a powered attempt 失效与 software/preparation 重开
 
 > 日期：2026-08-21
-> 任务起点：`master` / `7cb5322e59c226bcb738a0a40a80384266543a73`
-> 本轮性质：C4a/C4b execution-preparation docs-only closure
-> production code changed：`NO`
-> tests/scripts changed：`NO`
+> 任务起点：`master` / `7b440ddcb7b81232138ac851b9188bc3cde74e84`
+> 本轮性质：C4a invalidated attempt offline closure + lifecycle launch fix + retry preparation
+> production launch changed：`YES`
+> tests changed：`YES`
+> local-only helper changed：`YES / NOT REPOSITORY ARTIFACT`
 > real hardware executed：`NO`
 > C3 结论：`HARDWARE PASS`
 > Gate C：`IN PROGRESS / NOT COMPLETE`
@@ -16,85 +17,103 @@ Gate B: COMPLETE
 Gate C / C1: HARDWARE PASS
 Gate C / C2: HARDWARE PASS
 Gate C / C3: HARDWARE PASS
-Gate C / C4a: DESIGN/PREPARATION COMPLETE
-Gate C / C4a: NOT AUTHORIZED / NOT EXECUTED
+Gate C / C4a: NOT VERIFIED / POWERED ATTEMPT INVALIDATED
+Gate C / C4a: SOFTWARE/PREPARATION REOPENED
+Gate C / C4a: RETRY NOT AUTHORIZED
 Gate C / C4b: DESIGN/PREPARATION COMPLETE
 Gate C / C4b: NOT AUTHORIZED / NOT EXECUTED
-Gate C / C4: NOT AUTHORIZED / NOT EXECUTED
+Gate C / C4: NOT COMPLETE
 Gate C: IN PROGRESS / NOT COMPLETE
 ```
 
-C3 继续保持 `HARDWARE PASS`，不需要为重复确认而重跑。C4a/C4b 的 execution-critical
-candidate、timing、evidence、emergency、no-recovery 和独立十项授权边界已经定值，但本轮
-不是任何 powered authorization。没有启动 Runtime、ROS node、launch、helper/watchdog 或
-硬件，没有访问 CAN、GPIO、PWM 或串口，也没有发送 lifecycle、prepare、E-STOP、ownership
-或 actuator command。
+C3 继续保持 `HARDWARE PASS`，不需要重跑。本轮只进行 offline evidence review、repository
+software/test/docs 修改和 local-only fake helper preparation；没有启动 Runtime、ROS node、
+launch 或真实 helper，没有访问 CAN、GPIO、PWM、串口或硬件，也没有发送 lifecycle、prepare、
+E-STOP、ownership 或 actuator command。
 
-## C4 分离执行顺序
+## C4a powered attempt classification
 
-固定顺序为：C4a docs ready → C4a 单独授权 → C4a powered session → physical power OFF →
-offline evidence review → C4a PASS 后，才可审查 C4b 的新单独授权。C4a/C4b 不得连续执行、
-不得共享授权、不得自动 retry；C4a PASS 不授权 C4b。
+authoritative session：
 
-两项 proposed powered boundary 都是 motor bus ON、LEFT ESC ON、RIGHT ESC physically OFF；
-候选 command 都是 `left_pitch = captured legal ACTIVE baseline +0.05 rad`、其余三轴 captured
-ACTIVE baseline hold、fan `LEFT=0.05 / RIGHT=0.0`。这些是 execution-preparation 定值，不是
-批准值。
-
-## C4a execution-preparation closure
-
-C4a 的唯一 fault trigger candidate 为：
-
-```bash
-ros2 lifecycle set /imu_motor_controller_node deactivate
+```text
+/home/h-goal/windarmor_evidence/
+  gate-evidence-20260821T075236.156225Z-1454804
 ```
 
-稳定 continuous legal ACTIVE 约 `3.0 s` 后只触发一次，absolute max ACTIVE exposure 为
-`10.0 s`，fault 后约 `3 s` stable fail-closed observation；10 秒内没有进入预期路径即安全
-停止，不等待、不自动 retry。
+正式分类为 `C4a NOT VERIFIED / POWERED ATTEMPT INVALIDATED`，不是 actuator safety FAIL。
+recorder manifest 为 `COMPLETED / SIGINT`，`abnormal_child=null`、
+`cleanup_timed_out=false`，8/8 required topics 均有 samples。
 
-production semantics 已核对：`on_deactivate()` 令 `node_active=false` 并停止 motion timer，
-`stop_motion_timer()` 调用 `halt_motion()`，因此 target progression 停止。C4a 不依赖
-deactivate 后继续运行 C2 的 `0.25 s` command-lease timer，也不把该 timing 复制为 C4a SLA。
-要验证的独立链路是 lower-level safety loss → Runtime
-`motor_lower_level_safety_loss` → authority rollback/inhibit → owner revoke → motor target
-progression 停止 → fan fail closed。“motor halt”不代表 CyberGear STO、电气断电或立即零
-holding torque。
+### Blocker 1 — ACTIVE boundary overrun
 
-C4a 不做 recovery：不 reactivate、不 reset Runtime inhibit、不重新 prepare/restart/reclaim。
-完成 observation 后保持 controller inactive，LEFT ESC physically OFF → motor bus physically
-OFF → 再结束 software processes。
+```text
+motor Flight ownership commit: 1787298933.545647640
+Flight ownership revoke:       1787298948.513963905
+ACTIVE ownership exposure:     about 14.97 s
+approved absolute max ACTIVE:  10.0 s
 
-## C4b execution-preparation closure
+Runtime required_inputs_stale inhibit: 1787298948.612308890
+intended lifecycle deactivate start:   1787298950.757950629
+```
 
-C4b 只使用现有 `scripts/flight_estop_watchdog.py`，不得新增第二个 watchdog/helper。watchdog
-必须在 prepare 前启动并预热，实时看到 `WATCHDOG READY` 后才允许 prepare；它只在 legal
-`ACTIVE + FLIGHT_CONTROL + actuation_allowed=true` 后计时，默认 `2.0 s` 后由同一预热
-publisher 单次发布 `/e_stop=true`。
+intended deactivate 前 Runtime 已因 `required_inputs_stale` fail closed，所以该 attempt 无法证明
+`motor lifecycle deactivate -> lower-level safety loss -> Runtime rollback` 的因果链。人工盯
+`/flight_control/authority/status` 高速滚屏并估算 3 秒不再允许作为 C4a trigger timing。
 
-正式 timing requirement 是 `ACTIVE_TO_PUBLISH_SEC <3.0 s`，absolute ACTIVE limit 为
-`3.0 s`。达到或超过 3 秒仍没有有效 publish 时不能判 PASS，立即安全终止。no-ACTIVE
-timeout 为 `10 s`；`NO ACTIVE WITHIN TIMEOUT` + fail-closed E-STOP 是 safe abort，不是 timing
-PASS。required markers 是 `WATCHDOG READY`、`ACTIVE DETECTED`、`E-STOP PUBLISHED`、
-`ACTIVE_TO_PUBLISH_SEC`、`ESTOP OBSERVED BY FLIGHT`、`PUBLISH_TO_INHIBIT_SEC`；watchdog
-exit status 0 不能替代 markers/timing，`PUBLISH_TO_INHIBIT_SEC` 记录审查但不新增 production
-SLA。
+### Blocker 2 — production launch automatic re-activate
 
-C4b 不做 E-STOP recovery：不发布 `/e_stop=false`，不 reset latch/Runtime inhibit，不重新
-prepare/restart/reacquire。约 `3 s` fail-closed observation 后保持 E-STOP/latch，LEFT ESC
-physically OFF → motor bus physically OFF → 再停止 software processes。
+```text
+deactivate start:  1787298950.757950629
+deactivate done:   1787298950.760079915
+reactivate start:  1787298950.773456363
+reactivate done:   1787298950.782525330
+final lifecycle:   active [3]
+motor node_active: true
+```
 
-## Recorder and emergency policy
+根因是 controller startup `OnStateTransition` 只有 `goal_state="inactive"`，会同时匹配首次
+`configuring -> inactive` 和显式 `deactivating -> inactive`。IMU handler 具有同一 latent
+issue。本轮把两者都限定为 `start_state="configuring" / goal_state="inactive"`；正常
+cold-start auto activation 保持不变，manual deactivate 后保持 inactive，
+`imu_auto_activate=false` 语义不变。
 
-两项都使用 `scripts/hardware_verification/record_gate_evidence.py` 默认 continuous recorder，
-从 prepare/fault 前持续到 post-fault stable observation 结束；continuous recorder 是
-authoritative history，`topic echo --once` 只作辅助稳态抽查。ROS/software evidence 与
-operator physical evidence 分开记录，不新增 analyzer。
+### Positive evidence retained, but not causal C4a evidence
 
-wrong axis/fan side、超出批准 offset/PWM、owner/token 或 authority recovery 异常、fault 后
-继续旧 movement、NEW/unexpected command、异常声音/振动/气味/温升等任一 anomaly 均立即
-触发安全终止：ROS 可用时 `/e_stop=true`，同时准备 LEFT ESC/motor-bus physical kill，且
-physical kill 优先级不低于 ROS；不自动 retry、不 recovery、不进入另一 C4 scenario。
+- Runtime 因 `required_inputs_stale` fail closed；
+- motor/fan owner 均为 NONE；
+- fan PWM 最终 `[800,800]`；
+- operator 确认 physical motor/fan stop；
+- 无异常声音、振动、气味或温升；
+- final LEFT ESC 与 motor bus physically OFF；
+- Runtime exit 0。
+
+这些证据只证明该次 session 安全终止，不是 intended lifecycle-deactivate causal evidence，
+不能升级为 C4a PASS。
+
+## C4a retry preparation
+
+C4a 当前为 `SOFTWARE/PREPARATION REOPENED / RETRY NOT AUTHORIZED`。已在 local-only
+`~/windarmor_test_sessions/c4a/` 准备 pre-armed trigger、runbook 和 fake self-test；它们不属于
+repository artifact。helper 在 prepare 前创建 authority subscriber 和 motor lifecycle
+change-state client，输出 READY/ARMED，只在 continuous legal ACTIVE
+（ACTIVE、FLIGHT_CONTROL、actuation allowed、motor/fan committed、owner tokens match）后约
+3 秒请求一次 `TRANSITION_DEACTIVATE`。contract 提前丢失或 status 不新鲜即 latch abort，不
+发送迟到 deactivate；absolute ACTIVE max 保持 10 秒。它不 activate/reactivate、prepare、
+reset、publish E-STOP/actuator command、retry 或访问硬件。continuous recorder 仍是
+authoritative evidence。
+
+C4b 继续为 `DESIGN/PREPARATION COMPLETE / NOT AUTHORIZED / NOT EXECUTED`。C4a 尚未取得
+有效 PASS，禁止进入 C4b。
+
+## Pure software validation
+
+- targeted launch regression：`7 passed`；
+- local C4a fake ROS/messages/clock/service self-test：`6 passed`；
+- `./scripts/ci_software.sh`：PASS；motor `431 passed`，fan `159 passed`，Flight/interfaces
+  `304 passed`，最终 colcon `925 tests, 0 errors, 0 failures, 0 skipped`；
+- `git diff --check`：PASS。
+
+以上均为纯软件证据，不是 C4a hardware PASS，也不授权 retry。
 
 ## Final authoritative C3 session
 
@@ -265,10 +284,11 @@ Cannot shutdown a ROS adapter that is not running
 
 ## 修改范围与下一步
 
-本轮 repository 修改仅为 C4a/C4b execution-preparation 文档同步：
-`docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md` 与 `docs/LATEST_FEEDBACK.md`。production code
-changed：`NO`；test/script code changed：`NO`；real hardware executed：`NO`。
+本轮 repository 修改范围：low-level lifecycle launch、对应 pure launch regression、README、
+hardware verification plan 与本文件。production node/control algorithm、interface、config、
+recorder 和 watchdog 均未修改。local-only `~/windarmor_test_sessions/c4a/` helper/runbook/test
+不进入 repository。real hardware executed：`NO`。
 
-C3 不需要重跑。下一步只能由 assistant/user 审查 C4a 的独立十项 authorization boundary；
-不得执行 C4a，也不得提前审查或执行 C4b。C4a 与 C4b 都保持
-`NOT AUTHORIZED / NOT EXECUTED`，C4 总体未授权、未执行，Gate C 仍未完成。
+C3 不需要重跑。下一步只能由 assistant/user 审查本次 lifecycle fix、pure test、local trigger
+preparation 和 C4a 新的独立十项 retry authorization boundary；C4a retry 仍未授权，不得执行。
+C4a 有效 PASS 前禁止进入 C4b。Gate C 继续 `IN PROGRESS / NOT COMPLETE`。

@@ -2,8 +2,12 @@ import ast
 import importlib.util
 from pathlib import Path
 
-from launch import LaunchDescription
+from launch import LaunchContext, LaunchDescription
+from launch.actions import RegisterEventHandler
+from lifecycle_msgs.msg import TransitionEvent
 from launch_ros.actions import LifecycleNode, Node
+from launch_ros.event_handlers import OnStateTransition
+from launch_ros.events.lifecycle import StateTransition
 
 
 def _load_launch_module(path: Path):
@@ -73,10 +77,72 @@ def test_low_level_imu_auto_activate_contract() -> None:
     }
     configure_source = ast.unparse(assignments["imu_configure_handler"])
     activate_source = ast.unparse(assignments["imu_activate_handler"])
+    controller_activate_source = ast.unparse(
+        assignments["controller_activate_handler"]
+    )
     assert "TRANSITION_CONFIGURE" in configure_source
     assert "imu_auto_activate" not in configure_source
     assert "TRANSITION_ACTIVATE" in activate_source
+    assert "start_state='configuring'" in activate_source
+    assert "goal_state='inactive'" in activate_source
     assert "condition=IfCondition(imu_auto_activate)" in activate_source
+    assert "TRANSITION_ACTIVATE" in controller_activate_source
+    assert "start_state='configuring'" in controller_activate_source
+    assert "goal_state='inactive'" in controller_activate_source
+
+
+def test_low_level_startup_activate_handlers_only_match_configure_completion(
+    monkeypatch, tmp_path
+) -> None:
+    launch_file = (
+        Path(__file__).parents[2]
+        / "imu_cybergear_ros2"
+        / "launch"
+        / "imu_cybergear_system.launch.py"
+    )
+    monkeypatch.setenv("ROS_LOG_DIR", str(tmp_path / "ros-logs"))
+    module = _load_launch_module(launch_file)
+    description = module.generate_launch_description()
+
+    lifecycle_nodes = {
+        entity.node_executable: entity
+        for entity in description.entities
+        if isinstance(entity, LifecycleNode)
+    }
+    handlers = [
+        entity
+        for entity in description.entities
+        if isinstance(entity, RegisterEventHandler)
+        and isinstance(entity.event_handler, OnStateTransition)
+    ]
+
+    def transition(node, start_state: str, goal_state: str) -> StateTransition:
+        message = TransitionEvent()
+        message.start_state.label = start_state
+        message.goal_state.label = goal_state
+        return StateTransition(action=node, msg=message)
+
+    matched_handlers = {}
+    for executable in ("imu_driver_node", "imu_motor_controller_node"):
+        node = lifecycle_nodes[executable]
+        configuring = transition(node, "configuring", "inactive")
+        deactivating = transition(node, "deactivating", "inactive")
+        matches = [
+            handler
+            for handler in handlers
+            if handler.event_handler.matches(configuring)
+        ]
+        assert len(matches) == 1
+        assert not matches[0].event_handler.matches(deactivating)
+        matched_handlers[executable] = matches[0]
+
+    context = LaunchContext()
+    context.launch_configurations["imu_auto_activate"] = "true"
+    assert matched_handlers["imu_driver_node"].condition.evaluate(context)
+    context.launch_configurations["imu_auto_activate"] = "false"
+    assert not matched_handlers["imu_driver_node"].condition.evaluate(context)
+    context.launch_configurations["start_controller"] = "true"
+    assert matched_handlers["imu_motor_controller_node"].condition.evaluate(context)
 
 
 def test_unified_launch_declares_and_forwards_imu_auto_activate() -> None:
