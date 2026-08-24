@@ -1,13 +1,13 @@
-# 最新反馈：Gate C / C4a 最终实机验证 HARDWARE PASS
+# 最新反馈：Gate C / C4b HARDWARE PASS，Gate C COMPLETE
 
 > 日期：2026-08-24
-> 任务起点：`master` / `daa51ee3ecdaf6b19e9fe72b722837c175d5ceb9`
-> 本轮性质：C4a final authoritative session offline evidence closure（仅文档）
-> production code/launch changed：`NO`
-> tests/scripts changed：`NO`
-> real hardware executed：`NO`
-> C4a 结论：`HARDWARE PASS`
-> Gate C：`IN PROGRESS / NOT COMPLETE`
+> 任务起点：`master` / `d0b3ed088680b9bf47b394e3afc4df083d73a7c3`
+> 本轮性质：C4b final authoritative session 与 Gate C offline closure（仅文档）
+> production code changed：`NO`
+> test/script/config/launch changed：`NO`
+> real hardware executed during this docs task：`NO`
+> C4b 结论：`HARDWARE PASS`
+> Gate C：`COMPLETE`
 
 ## 正式状态
 
@@ -17,17 +17,127 @@ Gate C / C1: HARDWARE PASS
 Gate C / C2: HARDWARE PASS
 Gate C / C3: HARDWARE PASS
 Gate C / C4a: HARDWARE PASS
-Gate C / C4b: DESIGN/PREPARATION COMPLETE
-Gate C / C4b: NOT AUTHORIZED / NOT EXECUTED
-Gate C / C4: IN PROGRESS / NOT COMPLETE
-Gate C: IN PROGRESS / NOT COMPLETE
+Gate C / C4b: HARDWARE PASS
+Gate C / C4: HARDWARE PASS
+Gate C: COMPLETE
+Gate D: PLANNED / NOT AUTHORIZED / NOT EXECUTED
 ```
 
-C4a 已由最终 continuous recorder、预热 trigger、operator physical observation 和 powered
-launch-fix confirmation 共同闭合为 `HARDWARE PASS`。该结论不完成 C4、不完成 Gate C，也不
-授权 C4b。本轮只离线阅读既有证据并同步文档；没有启动 Runtime、ROS node、launch 或 helper，
-没有访问 CAN、GPIO、PWM、串口或硬件，也没有发送 lifecycle、prepare、E-STOP、ownership
-或 actuator command。
+C1/C2/C3/C4a/C4b 均为 `HARDWARE PASS`，因此 C4 为 `HARDWARE PASS`、Gate C 为
+`COMPLETE`。这不授权 Gate D，不代表 recovery 已验证，也不允许 unrestricted hardware
+operation。本轮只离线阅读既有证据并同步文档；没有运行 Runtime、ROS node、launch、watchdog
+或硬件，没有访问 CAN、GPIO、PWM、串口，也没有发布 E-STOP 或 actuator command。
+
+## Final authoritative C4b session
+
+authoritative powered session：
+
+```text
+/home/h-goal/windarmor_evidence/
+  gate-evidence-20260824T030542.834602Z-1754254
+```
+
+manifest 为 `COMPLETED / SIGINT`、`abnormal_child=null`、`cleanup_timed_out=false`，8/8
+required topics 均为 `SAMPLES CAPTURED`。continuous recorder 是 transient ROS history 的
+authoritative evidence。
+
+### Software preflight retained
+
+powered session 前为 `HEAD=d0b3ed0`、`master...origin/master` 且无额外工作区修改；installed
+config 为 `C4B_CONFIG_MATCH`。完整 software CI 结果为：hardware verification tooling
+`26 passed`、motor `431 passed`、fan `159 passed`、Flight/interfaces `304 passed`，full colcon
+`925 tests, 0 errors, 0 failures, 0 skipped`。这些是 execution preflight/software evidence，
+不是 C4b hardware PASS evidence 本身。
+
+### Watchdog timing evidence
+
+```text
+WATCHDOG READY
+WATCHDOG_READY_MONOTONIC=501371.112514595
+ACTIVE DETECTED
+E-STOP TIMER START
+ACTIVE_DETECTED_MONOTONIC=501376.383183235
+E-STOP PUBLISHED
+ESTOP_PUBLISHED_MONOTONIC=501378.404627468
+ACTIVE_TO_PUBLISH_SEC=2.021444233
+ESTOP OBSERVED BY FLIGHT
+PUBLISH_TO_INHIBIT_SEC=0.024631484
+WATCHDOG_EXIT_STATUS=0
+```
+
+全部 required marker 均存在，`ACTIVE_TO_PUBLISH_SEC=2.021444233 < 3.0 s`，因此 timing
+contract PASS，也闭合 B1/Gate B 遗留的 procedural timing item。watchdog exit 0 本身不单独
+构成 PASS；`PUBLISH_TO_INHIBIT_SEC=0.024631484` 只是本次 observation，不是新的 production
+SLA。
+
+### Authoritative authority and command evidence
+
+- 首个 legal ACTIVE stamp 为 `1787540766.501230955`，epoch
+  `501315221790256`、generation `1`；state `ACTIVE`、authority `FLIGHT_CONTROL`、
+  `actuation_allowed=true`、motor/fan committed、`owner_tokens_match=true`。
+- 首个 global E-STOP active 与首个 `INHIBITED` stamp 均为
+  `1787540768.549133778`；`actuation_allowed=false`，published/final
+  `last_inhibit_reason=fan_ownership_lost`。不虚构其他 inhibit reason；该 reason 与 E-STOP 后
+  fan lower-level 先 revoke 的 asynchronous sequence 一致，不是缺陷。
+- continuous recorder 共记录 100 条 executable Flight command，sequence `0..99`，全部属于
+  epoch/generation `501315221790256 / 1`，fan command 始终为 `LEFT=0.05 / RIGHT=0.0`。
+  首条 stamp `1787540766.519898891`，末条 stamp `1787540768.518891096`；E-STOP 后
+  `commands_after_estop=0`。
+- 首个 motor target vector 为 `left_lift=-0.00019175052436715134`、
+  `left_pitch=0.04980824947563285`、`right_pitch=-0.00019175052436715134`、
+  `right_lift=-0.00019175052436715134`，符合 approved `left_pitch baseline +0.05 rad`、其他
+  三轴 baseline hold candidate。
+
+### Ownership, lower-level E-STOP, and PWM evidence
+
+- motor owner：首个 `FLIGHT_CONTROL` 为 `1787540766.482691050`，E-STOP 后首个 `NONE` 为
+  `1787540768.557705879`；fan owner 对应为 `1787540766.482271194` 与
+  `1787540768.530885696`。
+- `motor_reacquire=0`、`fan_reacquire=0`、`ACTIVE_after_estop=0`，没有 automatic authority
+  recovery 或 ownership reacquisition。
+- fan controller 在 `1787540768.532819442` 记录收到系统 E-STOP 并立即停止、停用双 fan；
+  motor controller 在 `1787540768.544186365` 收到 topic E-STOP，随后四 motor stop completed，
+  `AUTO_RUNNING -> EMERGENCY_STOP`，`reason=topic_estop / source=topic`。
+- continuous safety 首个 fan/motor E-STOP latch 分别为 `1787540768.530710697` 和
+  `1787540768.558001518`；post-fault motor 为 `EMERGENCY_STOP / e_stop_latched=true`，fan 为
+  `EMERGENCY_STOP / e_stop_latched=true / enabled=false`。
+- fan PWM 首尾均为 `[800,800]`；`MAX_LEFT=1200`、LEFT non-800 samples `40`，
+  `MAX_RIGHT=800`。这证明 approved LEFT `0.05` command path 确实执行、RIGHT 始终保持停止
+  baseline，E-STOP 后 LEFT 回到 `800`。
+
+### Operator physical evidence and causal closure
+
+operator 在 E-STOP 前**未观察到 LEFT fan 明显转动**；不得写成 physically observed rotating。
+recorder 仅证明 LEFT command `0.05`、PWM 最大 `1200`、40 个 non-800 samples。该观察与短约
+2 秒 ACTIVE 窗口/有限 PWM ramp 一致，但未单独证明具体机械启动阈值，也不推断确切原因。
+
+E-STOP 后 operator 确认 motor 停止 Flight-induced movement、LEFT fan 处于停止状态，无异常
+声音、振动、气味或温升；最终 LEFT ESC 与 motor bus physically OFF。RIGHT ESC 在整个
+scenario 中始终 physically OFF。
+
+最终因果链为：legal ACTIVE → approved bounded motor/fan commands → prewarmed watchdog 约
+2.02 秒发布 `/e_stop=true` → fan/motor lower-level E-STOP latch → fan owner `NONE` → Runtime
+`INHIBITED / actuation_allowed=false` → motor owner `NONE` → executable Flight commands 停止
+→ no ACTIVE recovery → no owner reacquire → stable fail-closed。各 asynchronous topic 不要求
+单一固定微观发布顺序。
+
+本 session 未发布 `/e_stop=false`，未 reset E-STOP latch/Runtime inhibit，未 reprepare、restart
+Runtime 或 reclaim authority；C4b 只验证 latched fail-close，不验证 recovery。recovery/startup/
+re-entry 若属于 Gate D，必须作为新的独立授权范围。
+
+### Shutdown observation
+
+既有 `Cannot shutdown a ROS adapter that is not running` 继续分类为
+`LOW-PRIORITY / NON-GATE-C-BLOCKING shutdown cleanup observation`：它出现在验证完成后的
+software shutdown，actuator 已 fail closed、动力已 physically OFF、relevant children clean
+exit，因此不降级 C4b 或 Gate C，本轮不修复。
+
+## C4a remains archived HARDWARE PASS
+
+C4a 最终 session 继续为
+`gate-evidence-20260824T013006.286027Z-1631895`，结论保持 `HARDWARE PASS`，不重跑；更早
+`gate-evidence-20260821T075236.156225Z-1454804` 的
+`NOT VERIFIED / POWERED ATTEMPT INVALIDATED` 历史也继续保留。
 
 ## Final authoritative C4a session
 
@@ -313,9 +423,10 @@ Cannot shutdown a ROS adapter that is not running
 ## 修改范围与下一步
 
 本轮 repository 修改仅限 README、hardware verification plan 与本文件。production code、
-launch、test、script、config、recorder、watchdog 和 local-only helper 均未修改；本轮没有执行
-真实硬件操作。
+launch、test、script、config、interface、recorder、watchdog 和 local-only helper 均未修改；
+本轮没有执行真实硬件操作。
 
-C4a 不需要重跑。C4b 继续为 `DESIGN/PREPARATION COMPLETE / NOT AUTHORIZED / NOT
-EXECUTED`，必须作为新的独立 powered scenario 重新满足十项授权门槛；C4a PASS 不构成 C4b
-授权。C4 与 Gate C 均继续 `IN PROGRESS / NOT COMPLETE`。
+C4a/C4b 均不需要重跑。C4 为 `HARDWARE PASS`，Gate C 为 `COMPLETE`。Gate D 继续为
+`PLANNED / NOT AUTHORIZED / NOT EXECUTED`；Gate C COMPLETE 不授权 Gate D，也不代表 recovery
+已验证。下一步只能是 assistant/user 对 Gate D 的 design/authorization review，不得直接执行
+Gate D hardware。

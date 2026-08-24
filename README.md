@@ -39,16 +39,23 @@ powered session 也已取得 `HARDWARE PASS`：motor lifecycle deactivate 后 `n
 executable command stream 停止、fan/motor owner 依次归零、Runtime `INHIBITED` 且
 `actuation_allowed=false`，LEFT fan/PWM 回到停止基线，无自动 re-activate 或 ownership
 reacquire。首次 C4a attempt 的 `NOT VERIFIED / POWERED ATTEMPT INVALIDATED` 分类继续作为历史
-保留。C4b 仍为 `DESIGN/PREPARATION COMPLETE / NOT AUTHORIZED / NOT EXECUTED`；C4a PASS
-不授权 C4b。因此 C4 与 Gate C 仍为 `IN PROGRESS / NOT COMPLETE`，Gate D 最终回归也未完成。
+保留。C4b final powered session 也已取得 `HARDWARE PASS`：预热 watchdog 在 legal ACTIVE 后
+`2.021444233 s` 发布 E-STOP，lower-level motor/fan latch、owners NONE、Runtime
+`INHIBITED / actuation_allowed=false`、executable command stream 停止和 final PWM
+`[800,800]` 均有 continuous evidence，且无 authority/owner reacquire。operator 在 E-STOP 前
+未观察到 LEFT fan 明显转动；recorder 证明 LEFT command `0.05`、PWM 最大 `1200`，但不把它
+表述为 physically observed rotating。C4 因此为 `HARDWARE PASS`，Gate C 为 `COMPLETE`。
+Gate D 仍为 `PLANNED / NOT AUTHORIZED / NOT EXECUTED`；Gate C COMPLETE 不授权 Gate D、
+不代表 recovery 已验证，也不允许 unrestricted hardware operation。
 分阶段验证协议见
 [v0.4.0 Hardware Verification Plan](docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md)。
 Gate A0/A1、normal controller 的 Gate B feedback baseline、Flight DRY_RUN、冷启动
 当前位置保持 B0 和 B1 functional hardware verification 已通过。B1 closure run 没有满足
 procedural `ACTIVE <= 3.0 sec`：watchdog 在 ACTIVE 后等待 2.5 秒才临时启动新的
 `ros2 topic pub --once`，额外 ROS process/DDS discovery 延迟使实际 `/e_stop` 送达超时；
-lower-level 收到 E-STOP 后的停止和状态转换本身很快。该 timing 证据仍将在后续 Gate C
-E-STOP 子场景使用预创建 publisher 的 watchdog 闭合，不为此重跑 B1 functional test。
+lower-level 收到 E-STOP 后的停止和状态转换本身很快。该历史 pending timing item 后续已由
+Gate C / C4b 使用预创建 publisher 的 watchdog 以 `2.021444233 s < 3.0 s` 闭合；没有为此
+重跑或改写 B1 functional test。
 Task 6.2.7 的 shutdown cleanup 和 watchdog 已通过纯软件验证；2026-08-20 的 C1 最终
 session 已通过预创建 lifecycle helper 验证 IMU 停止后 Runtime fail-closed、owner 释放、
 motor/LEFT fan 停止和无自动恢复。同日 C2 最终 session 通过 exact Runtime SIGSTOP 验证
@@ -398,8 +405,9 @@ ros2 launch windarmor_bringup windarmor.launch.py
 > 本节是完成单设备方向、零点、软限位、风扇起转值和急停验证后的正常运行
 > 流程，不是首次带电调试流程。当前候选值 `1200 μs` 和 `1400 μs` 尚未实机
 > 标定；标定完成并获得硬件运行授权前，不得直接按本节给全部动力设备通电。
-> v0.4.0 分阶段验证计划中的 C1/C2/C3/C4a 均已取得 `HARDWARE PASS`；C4b 仍为
-> `DESIGN/PREPARATION COMPLETE / NOT AUTHORIZED / NOT EXECUTED`，C4 与 Gate C 尚未完成；
+> v0.4.0 分阶段验证计划中的 C1/C2/C3/C4a/C4b 均已取得 `HARDWARE PASS`，C4 为
+> `HARDWARE PASS`、Gate C 为 `COMPLETE`；Gate D 仍为
+> `PLANNED / NOT AUTHORIZED / NOT EXECUTED`，Gate C COMPLETE 不构成 Gate D 授权；
 > 任何新的带电操作都必须先满足根目录
 > [AGENTS.md](AGENTS.md) 的十项授权门槛，并取得对应 Stage 的单独明确授权，
 > 不得从本节或验证计划推断授权。
