@@ -166,7 +166,9 @@ snapshot 均通过。因此 B2 为 `HARDWARE PASS`，Gate B 为 `COMPLETE`。RIG
   thrust fraction；
 - `flight_takeover_enabled=false` 是当前默认值；
 - v0.4.0 Flight takeover 已完成 B1 motor bounded 和 B2 LEFT fan bounded hardware
-  verification；Gate C fail-closed 和 Gate D final regression 尚未执行，仍需分别授权。
+  verification，Gate C fail-closed verification 为 `COMPLETE`；Gate D historical-evidence
+  audit 为 `FUNCTIONAL REGRESSION PASS / COMPLETE`，没有执行新的 powered Gate D session，
+  部分项目只有 operator functional evidence，没有 continuous recorder。
 
 本文档不把软件测试、默认配置或已有 B1/B2 bounded evidence 扩展解释为新的物理量、
-性能标定、RIGHT powered Flight verification 或 Gate C/D 实机结论。
+性能标定、RIGHT powered Flight verification、新的 Gate D hardware session 或 release 授权。

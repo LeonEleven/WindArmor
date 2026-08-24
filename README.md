@@ -45,8 +45,13 @@ reacquire。首次 C4a attempt 的 `NOT VERIFIED / POWERED ATTEMPT INVALIDATED` 
 `[800,800]` 均有 continuous evidence，且无 authority/owner reacquire。operator 在 E-STOP 前
 未观察到 LEFT fan 明显转动；recorder 证明 LEFT command `0.05`、PWM 最大 `1200`，但不把它
 表述为 physically observed rotating。C4 因此为 `HARDWARE PASS`，Gate C 为 `COMPLETE`。
-Gate D 仍为 `PLANNED / NOT AUTHORIZED / NOT EXECUTED`；Gate C COMPLETE 不授权 Gate D、
-不代表 recovery 已验证，也不允许 unrestricted hardware operation。
+Gate D historical-evidence audit 已将 v0.3.2 历史整机回归记录、用户对 legacy 功能的明确
+确认、当前 README normal startup/MANUAL/LEGACY AUTO 回归确认与 Gate C safety evidence
+逐项映射；没有发现真实 evidence gap，因此 Gate D 为 `FUNCTIONAL REGRESSION PASS`、
+`COMPLETE`。本次没有执行新的 powered Gate D session，部分项目只有 operator functional
+evidence，没有 continuous recorder。Gate B/C/D 现均已完成，v0.4.0 hardware / functional
+verification 为 `COMPLETE`，release-readiness review 仍为 `PENDING`；当前 stable release
+仍为 `v0.3.2`，不得据此推断 tag、release 或任何新硬件操作已获授权。
 分阶段验证协议见
 [v0.4.0 Hardware Verification Plan](docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md)。
 Gate A0/A1、normal controller 的 Gate B feedback baseline、Flight DRY_RUN、冷启动
@@ -406,10 +411,11 @@ ros2 launch windarmor_bringup windarmor.launch.py
 > 流程，不是首次带电调试流程。当前候选值 `1200 μs` 和 `1400 μs` 尚未实机
 > 标定；标定完成并获得硬件运行授权前，不得直接按本节给全部动力设备通电。
 > v0.4.0 分阶段验证计划中的 C1/C2/C3/C4a/C4b 均已取得 `HARDWARE PASS`，C4 为
-> `HARDWARE PASS`、Gate C 为 `COMPLETE`；Gate D 仍为
-> `PLANNED / NOT AUTHORIZED / NOT EXECUTED`，Gate C COMPLETE 不构成 Gate D 授权；
+> `HARDWARE PASS`、Gate C 为 `COMPLETE`；Gate D historical-evidence audit 为
+> `FUNCTIONAL REGRESSION PASS`、Gate D 为 `COMPLETE`。该审计没有执行新的 powered session，
+> 也不构成新硬件操作授权；
 > 任何新的带电操作都必须先满足根目录
-> [AGENTS.md](AGENTS.md) 的十项授权门槛，并取得对应 Stage 的单独明确授权，
+> [AGENTS.md](AGENTS.md) 的十项授权门槛，并取得对应场景的单独明确授权，
 > 不得从本节或验证计划推断授权。
 
 仅执行 `windarmor.launch.py` 不会立即进入最终联动：电机初始化后默认处于

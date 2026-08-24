@@ -1,13 +1,15 @@
-# 最新反馈：Gate C / C4b HARDWARE PASS，Gate C COMPLETE
+# 最新反馈：Gate D FUNCTIONAL REGRESSION PASS，Gate D COMPLETE
 
 > 日期：2026-08-24
-> 任务起点：`master` / `d0b3ed088680b9bf47b394e3afc4df083d73a7c3`
-> 本轮性质：C4b final authoritative session 与 Gate C offline closure（仅文档）
+> 任务起点：`master` / `d0ac298f4ff5210fa900e428332468e5e6681fec`
+> 本轮性质：Gate D historical-evidence audit + docs-only closure preparation
 > production code changed：`NO`
 > test/script/config/launch changed：`NO`
 > real hardware executed during this docs task：`NO`
-> C4b 结论：`HARDWARE PASS`
 > Gate C：`COMPLETE`
+> Gate D：`FUNCTIONAL REGRESSION PASS / COMPLETE`
+> v0.4.0 hardware / functional verification：`COMPLETE`
+> release readiness review：`PENDING`
 
 ## 正式状态
 
@@ -20,13 +22,68 @@ Gate C / C4a: HARDWARE PASS
 Gate C / C4b: HARDWARE PASS
 Gate C / C4: HARDWARE PASS
 Gate C: COMPLETE
-Gate D: PLANNED / NOT AUTHORIZED / NOT EXECUTED
+Gate D: FUNCTIONAL REGRESSION PASS
+Gate D: COMPLETE
+v0.4.0 hardware / functional verification: COMPLETE
+Release readiness review: PENDING
 ```
 
-C1/C2/C3/C4a/C4b 均为 `HARDWARE PASS`，因此 C4 为 `HARDWARE PASS`、Gate C 为
-`COMPLETE`。这不授权 Gate D，不代表 recovery 已验证，也不允许 unrestricted hardware
-operation。本轮只离线阅读既有证据并同步文档；没有运行 Runtime、ROS node、launch、watchdog
-或硬件，没有访问 CAN、GPIO、PWM、串口，也没有发布 E-STOP 或 actuator command。
+C1/C2/C3/C4a/C4b 均保持 `HARDWARE PASS`，因此 C4 为 `HARDWARE PASS`、Gate C 为
+`COMPLETE`。本轮对 Gate D 的每个实际 acceptance item 做 evidence reconciliation，没有设计或
+执行新的 powered test。没有运行 Runtime、ROS node、launch 或 watchdog，没有访问 CAN、GPIO、
+PWM 或串口，也没有发布 E-STOP 或 actuator command。
+
+## Gate D historical-evidence audit
+
+### Evidence validity
+
+- `v0.3.2` tag（commit `398ea9b`）的 release notes 与 RC checklist 明确记录用户整机正常
+  功能回归 PASS，覆盖 normal startup、MANUAL、HOME、小幅 AUTO、fan MANUAL/AUTO、普通
+  E-STOP、正常 E-STOP recovery 和 normal exit。没有 archived recorder/session 或逐项测量值，
+  因此严格分类为 operator functional regression evidence。
+- 用户明确确认 motor MANUAL、motor HOME、fan MANUAL、LEGACY AUTO、E-STOP/recovery、
+  restart/re-entry、explicit legacy reclaim 和 README normal startup 以前均在真实系统测试过；
+  同时确认当前 README normal startup、motor MANUAL、fan MANUAL 与 LEGACY AUTO 正常。
+- Gate C C3/C4b 的真实 recorder session 分别提供 graceful shutdown/restart isolation 与 combined
+  E-STOP fail-close/no-reacquire 的 recorded hardware cross-check。它们不替代或冒充 legacy
+  MANUAL、HOME、AUTO、recovery 或 reclaim 功能测试。
+- `flight_takeover_enabled=false` 的默认 normal path 仍保持 legacy 语义；当前 operator regression
+  confirmation 与 Gate C safety cross-check 共同覆盖后续 v0.4.0 变更风险。已知的
+  `Cannot shutdown a ROS adapter that is not running` 保持既有
+  `LOW-PRIORITY / NON-GATE-C-BLOCKING shutdown cleanup observation`，发生在 actuator fail-close、
+  powered hardware physically OFF 和 relevant child clean exit 之后，不构成已知 legacy functional
+  regression。
+- 最近完整 software CI 来自 Gate C final preflight：motor `431 passed`、fan `159 passed`、
+  Flight/interfaces `304 passed`，full colcon `925 tests, 0 errors, 0 failures, 0 skipped`。任务起点
+  `d0ac298` 相对该 preflight baseline 的后续 repository 变更仅为 README、hardware verification
+  plan 和本文件的 Gate C docs closure。本轮没有重跑 CI，不把上述结果写成新执行结果。
+
+### Requirement matrix
+
+| Requirement | Evidence type | Evidence reference / current regression confirmation | Disposition |
+|---|---|---|---|
+| motor MANUAL | Operator functional evidence | `v0.3.2` release/checklist historical PASS；用户确认以前真实测试且当前正常 | PASS |
+| motor HOME | Operator functional evidence | `v0.3.2` release/checklist historical PASS；用户确认以前真实测试 | PASS |
+| motor LEGACY_AUTO | Operator functional evidence | `v0.3.2` motor AUTO historical PASS；用户确认以前真实测试且当前 LEGACY AUTO 正常 | PASS |
+| fan MANUAL | Operator functional evidence | `v0.3.2` release/checklist historical PASS；用户确认以前真实测试且当前正常 | PASS |
+| fan LEGACY_AUTO | Operator functional evidence | `v0.3.2` fan AUTO historical PASS；用户确认以前真实测试且当前 LEGACY AUTO 正常 | PASS |
+| E-STOP behavior | Operator functional + recorded safety cross-check | `v0.3.2` historical PASS 与用户确认；C4b session `gate-evidence-20260824T030542.834602Z-1754254` | PASS |
+| E-STOP recovery | Operator functional evidence | `v0.3.2` normal recovery historical PASS；用户确认以前真实测试；C4b 明确不作为 recovery evidence | PASS |
+| shutdown | Operator functional + recorded safety cross-check | `v0.3.2` normal exit historical PASS；C3 session `gate-evidence-20260821T062508.750044Z-1360504` 的 graceful Runtime stop | PASS |
+| restart / re-entry | Operator functional + recorded safety cross-check | 用户确认以前真实测试；C3 fresh Runtime restart isolation 仅作新架构安全交叉证据 | PASS |
+| explicit legacy reclaim | Operator functional evidence | 用户确认以前真实测试；Gate C no-automatic-recovery / owner-NONE 仅交叉确认 reclaim 必须显式发生 | PASS |
+| final normal regression / README startup | Operator functional evidence | 用户确认当前 README normal startup、motor/fan MANUAL 和 LEGACY AUTO 正常 | PASS |
+
+### Audit conclusion
+
+所有 Gate D required items 都有 historical recorded hardware evidence 或明确 operator functional
+regression evidence；没有真实 evidence gap，也没有已知 unresolved regression。HOME、E-STOP
+recovery 和 explicit legacy reclaim 等项目没有 continuous recorder，结论不伪造 session ID、
+timestamp、recorder log 或 command output。
+
+Gate D 结论为 `FUNCTIONAL REGRESSION PASS`，Gate D 为 `COMPLETE`。Gate B/C/D 全部完成，
+v0.4.0 为 `HARDWARE / FUNCTIONAL VERIFICATION COMPLETE`；release-readiness review 仍为
+`PENDING`，v0.4.0 尚未发布。
 
 ## Final authoritative C4b session
 
@@ -123,7 +180,9 @@ scenario 中始终 physically OFF。
 
 本 session 未发布 `/e_stop=false`，未 reset E-STOP latch/Runtime inhibit，未 reprepare、restart
 Runtime 或 reclaim authority；C4b 只验证 latched fail-close，不验证 recovery。recovery/startup/
-re-entry 若属于 Gate D，必须作为新的独立授权范围。
+re-entry 在 C4b 收口时若作为新的 Gate D powered session 执行，必须是独立授权范围；后续 Gate D
+evidence audit 使用既有 operator functional evidence 收口，没有执行该 session，也不把 C4b
+写成 recovery evidence。
 
 ### Shutdown observation
 
@@ -422,11 +481,13 @@ Cannot shutdown a ROS adapter that is not running
 
 ## 修改范围与下一步
 
-本轮 repository 修改仅限 README、hardware verification plan 与本文件。production code、
-launch、test、script、config、interface、recorder、watchdog 和 local-only helper 均未修改；
-本轮没有执行真实硬件操作。
+本轮 repository 修改仅限 README、hardware verification plan、hardware reference 与本文件。
+production code、launch、test、script、config、interface、recorder、watchdog 和 local-only helper
+均未修改；本轮没有执行真实硬件操作。
 
-C4a/C4b 均不需要重跑。C4 为 `HARDWARE PASS`，Gate C 为 `COMPLETE`。Gate D 继续为
-`PLANNED / NOT AUTHORIZED / NOT EXECUTED`；Gate C COMPLETE 不授权 Gate D，也不代表 recovery
-已验证。下一步只能是 assistant/user 对 Gate D 的 design/authorization review，不得直接执行
-Gate D hardware。
+C4a/C4b 均不需要重跑。C4 为 `HARDWARE PASS`，Gate C 为 `COMPLETE`。Gate D 现为
+`FUNCTIONAL REGRESSION PASS / COMPLETE`；本轮没有执行新的 powered Gate D session，部分项目
+只有 operator functional evidence，没有 continuous recorder。Gate B/C/D 全部完成，v0.4.0
+hardware / functional verification 为 `COMPLETE`，release readiness review 为 `PENDING`。
+下一步是 assistant/user Gate D closure + v0.4.0 release-readiness review；不得自行执行硬件、
+commit、push、tag 或 release。
