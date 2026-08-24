@@ -87,6 +87,14 @@ class FanSystemState:
 
 @dataclass(frozen=True)
 class SystemState:
+    """Runtime safety/authority summary exposed to algorithms.
+
+    ``required_inputs_fresh`` covers the paired IMU sample and every configured
+    motor feedback sample. It excludes fan observations, authoritative safety
+    readback, ownership, and authority readiness; ``actuation_allowed`` is the
+    separate Runtime decision for whether a normal command may be dispatched.
+    """
+
     command_authority: CommandAuthority
     authority_epoch: int
     authority_generation: int

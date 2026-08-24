@@ -101,23 +101,34 @@ ros2 launch windarmor_bringup windarmor_observation_only.launch.py
 
 ### 飞控算法开发
 
-1. 先读 [Flight Control API](docs/FLIGHT_CONTROL_API.md)；
-2. 需要理解系统边界时再读
+1. 第一天先按 [Algorithm Developer Guide](docs/ALGORITHM_DEVELOPER_GUIDE.md)
+   完成 controller、unit test 和 software-only synthetic DRY_RUN；
+2. 开发时查阅 [Flight Control API](docs/FLIGHT_CONTROL_API.md)；
+3. 需要理解 Runtime、authority 和安全边界时再读
    [Flight Control Architecture](docs/FLIGHT_CONTROL_ARCHITECTURE.md)；
-3. 机械、坐标和接线映射见
+4. 需要机械、坐标和接线背景时查阅
    [Hardware Reference](docs/HARDWARE_REFERENCE.md)。
 
 算法主要位于
-`src/windarmor_flight_control/windarmor_flight_control/algorithms/`。最小无硬件
-unit-test 入口为：
+`src/windarmor_flight_control/windarmor_flight_control/algorithms/`。新人教学
+controller 是 non-default 的 `example_algorithm_controller.py`；最小无硬件 unit-test
+入口为：
 
 ```bash
 PYTHONPATH=src/windarmor_flight_control \
 python3 -m pytest -p no:cacheprovider \
-  src/windarmor_flight_control/test/test_example_controller.py -q
+  src/windarmor_flight_control/test/test_example_algorithm_controller.py -q
 ```
 
-该命令只构造内存 fake state，不创建 ROS node 或访问 CAN、串口、GPIO/PWM。
+software-only synthetic DRY_RUN 为：
+
+```bash
+PYTHONPATH=src/windarmor_flight_control \
+python3 -m windarmor_flight_control.synthetic_dry_run
+```
+
+这两个命令只构造内存 state，不创建 ROS node，不请求 authority，也不访问 CAN、
+串口、GPIO/PWM、ESC、电机或风扇。它们不是实机验证，也不构成硬件授权。
 
 `v0.3.1` 在 `v0.3.0` 的统一相对姿态、电机模式状态和风扇手动/自动仲裁基础上，
 包含统一 MANUAL/AUTO/HOME 电机推进速度、AUTO 姿态增益和三种风扇响应曲线。
