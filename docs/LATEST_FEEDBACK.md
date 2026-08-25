@@ -6,10 +6,10 @@
 
 ## 当前任务
 
-- 任务：`DOC-2 — README/docs consolidation + verification archive + source-of-truth cleanup`
-- 日期：2026-08-24
+- 任务：`DOC-2 final hotfix — newcomer synthetic demo command`
+- 日期：2026-08-25
 - task-start branch：`master`
-- task-start HEAD：`b01b23f72f523bf60c4b4cabcaa2c180b16cca01`
+- task-start HEAD：`0fdfe75947df6af2e636302d29d95271aab1292b`
 - 当前 stable release：v0.3.2
 - 当前开发目标：v0.4.0（未发布）
 - Gate B / C / D：**COMPLETE / COMPLETE / COMPLETE**
@@ -20,7 +20,8 @@
 
 DOC-2 已完成文档层面的三项目标：
 
-1. 根 `README.md` 从 847 行压缩到 292 行，成为项目入口和正常操作主文档；
+1. 根 `README.md` 从 847 行压缩到 295 行（DOC-2 初次收口为 292 行，本次 hotfix 后
+   为 295 行），成为项目入口和正常操作主文档；
 2. 新建版本化
    [`verification/v0.4.0/HARDWARE_VERIFICATION_RECORD.md`](verification/v0.4.0/HARDWARE_VERIFICATION_RECORD.md)，
    固化 v0.4.0 最终硬件/功能验证结论；
@@ -29,6 +30,21 @@ DOC-2 已完成文档层面的三项目标：
 
 本轮没有改变 Gate 判定，没有把 operator evidence 升级成 recorder evidence，也没有把
 软件测试描述为真实硬件验证。v0.4.0 仍未发布。
+
+## DOC-2 final hotfix
+
+DOC-2 review 发现根 README 的 Testing 章节把一个仓库中不存在的旧 demo launch 当作
+newcomer 入口。现已替换为与 Algorithm Developer Guide 一致的命令：
+
+```bash
+PYTHONPATH=src/windarmor_flight_control \
+python3 -m windarmor_flight_control.synthetic_dry_run
+```
+
+README 现在明确该命令是 software-only controller integration demo：不连接 ROS graph、
+不访问硬件、不创建 actuator authority；并明确它不同于需要外部 state publisher 的
+`flight_control_dry_run.launch.py` observer Runtime。长期文档中没有其它失效 demo launch
+引用，Algorithm Developer Guide 原有两者区分保持不变。
 
 ## README 最终结构
 
@@ -121,6 +137,7 @@ verification plan 原有的 1826 行执行正文完整保留；加入状态 bann
   安全摘要、版本化证据或明确历史文档；
 - relative Markdown link check：检查 68 个相对文件链接，missing 0；
 - README 和 verification record 链接：PASS。
+- 失效 demo launch 精确文件名搜索：当前有效引用为 0；
 
 没有运行 full CI，因为本轮只修改 Markdown，未修改生产代码或测试。没有启动 ROS、
 没有访问 CAN/GPIO/PWM/串口，也没有给 actuator 通电。

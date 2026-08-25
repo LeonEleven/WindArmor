@@ -252,13 +252,16 @@ python3 -m pytest \
   src/windarmor_bringup/test/test_launch_syntax.py -v
 ```
 
-Flight synthetic demo 不访问真实硬件：
+Flight newcomer software-only controller integration demo：
 
 ```bash
-source /opt/ros/jazzy/setup.bash
-source install/setup.bash
-ros2 launch windarmor_flight_control flight_control_demo.launch.py
+PYTHONPATH=src/windarmor_flight_control \
+python3 -m windarmor_flight_control.synthetic_dry_run
 ```
+
+该命令不连接 ROS graph、不访问硬件，也不创建 actuator authority。它与
+`flight_control_dry_run.launch.py` 不同；后者启动 observer Runtime，需要外部 state
+publisher 才能形成 meaningful live preview，不是同一个 newcomer software-only demo。
 
 运行新增或修改后的测试前，必须重新检查 fixture、插件和依赖没有访问硬件 I/O。
 
