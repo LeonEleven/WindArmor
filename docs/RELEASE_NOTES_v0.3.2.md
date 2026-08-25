@@ -202,7 +202,9 @@ fan_response_curve: smoothstep
   覆盖命令失败、回滚、清理、状态转换、feedback health 与受控重连。
 - RC 本地 `./scripts/ci_software.sh` 完整通过：电机包 `359 passed`、风扇关键
   回归 `98 passed`、三包完整 `480 tests, 0 errors, 0 failures, 0 skipped`；更完整的
-  分项结果记录在 `docs/LATEST_FEEDBACK.md`。
+  分项结果与硬件边界固化在本发布说明和
+  [`V0.3.2_RC_HARDWARE_CHECKLIST.md`](V0.3.2_RC_HARDWARE_CHECKLIST.md)，不依赖可变的
+  `LATEST_FEEDBACK.md` 作为发布证据。
 - RC 固定提交 `5bc8ecc75708067d34102dfb33996970ed0e14a4` 的 GitHub Hosted CI
   run `31162441004` 为 `completed/success`，日志 artifact 正常生成。
 - 最终软件验证以本发布文档收口提交 push 后触发的新 GitHub Hosted CI run 为准；

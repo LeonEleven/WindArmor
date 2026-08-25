@@ -7,8 +7,9 @@
 [Flight Control API](FLIGHT_CONTROL_API.md)。
 
 v0.4.0 Flight control stack 已完成该 release 对应的 hardware/functional verification，Gate
-B/C/D 均 COMPLETE。release-specific evidence、invalidated attempts、operator observation 和
-限制保存在 [v0.4.0 Hardware Verification Plan](V0.4.0_HARDWARE_VERIFICATION_PLAN.md)。本文不
+B/C/D 均 COMPLETE。最终判定、release-specific evidence 和限制保存在
+[v0.4.0 Hardware Verification Record](verification/v0.4.0/HARDWARE_VERIFICATION_RECORD.md)，
+完整执行过程保存在 [historical plan](V0.4.0_HARDWARE_VERIFICATION_PLAN.md)。本文不
 复制 session/timestamp，也不把该结果扩展为任意新算法、性能标定或新硬件场景已获验证。
 `flight_takeover_enabled=false` 继续是 production default。
 

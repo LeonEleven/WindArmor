@@ -8,7 +8,8 @@ authority、ownership、lease 和 rollback 见
 [Flight Control Architecture](FLIGHT_CONTROL_ARCHITECTURE.md)。
 
 v0.4.0 Flight control stack 已完成该 release 对应的 hardware/functional verification，结果和
-限制记录在 [v0.4.0 Hardware Verification Plan](V0.4.0_HARDWARE_VERIFICATION_PLAN.md)。该事实
+限制记录在
+[v0.4.0 Hardware Verification Record](verification/v0.4.0/HARDWARE_VERIFICATION_RECORD.md)。该事实
 不表示任意新算法、性能边界或新硬件场景已经验证或获得授权。默认配置仍为
 `flight_takeover_enabled=false`。
 
@@ -335,6 +336,8 @@ python3 -m windarmor_flight_control.synthetic_dry_run
 - Runtime/safety/authority internals：[Flight Control Architecture](FLIGHT_CONTROL_ARCHITECTURE.md)
 - physical mapping/frame/wiring：[Hardware Reference](HARDWARE_REFERENCE.md)
 - release-specific hardware evidence：
+  [v0.4.0 Hardware Verification Record](verification/v0.4.0/HARDWARE_VERIFICATION_RECORD.md)
+- complete historical execution/provenance：
   [v0.4.0 Hardware Verification Plan](V0.4.0_HARDWARE_VERIFICATION_PLAN.md)
 - actual behavior：`core/`、`algorithms/`、`runtime/`、config 和 tests
 

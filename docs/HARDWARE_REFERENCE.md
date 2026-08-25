@@ -4,6 +4,10 @@
 带电授权和测试流程以根目录 `AGENTS.md` 为准；Flight 算法数据语义以
 `FLIGHT_CONTROL_API.md` 为准。
 
+v0.4.0 当前硬件验证范围、证据等级和已知限制见
+[版本化硬件验证记录](verification/v0.4.0/HARDWARE_VERIFICATION_RECORD.md)；该记录不改变
+本文的物理映射，也不授权新的带电操作。
+
 ## Platform
 
 - Raspberry Pi 5；
@@ -139,19 +143,11 @@ GPIO13 工作；RIGHT `/fans/status_pwm` 软件路由正常，lgpio 也成功 cl
 硬件引脚分配冲突、GPIO13 不适合当前硬件栈；GPIO26 replacement channel 的 direct
 hardware verification 为 PASS。
 
-最终 B2 Flight session 进一步确认当前 runtime mapping 的 LEFT bounded path：LEFT
-command `0.05` 使 continuous fan PWM 从 `(800,800)` 有界达到 `(1210,800)` 并最终回到
-`(800,800)`；RIGHT software command/PWM 保持 `0.0 / 800 us`。四台 motor 保持 captured
-baseline，用户观察到 LEFT bounded response、无意外 motor movement、无异常振动/声音/
-气味，并在 E-STOP 后停止；authority、owners、motor/fan latches 和完整健康四 motor
-snapshot 均通过。因此 B2 为 `HARDWARE PASS`，Gate B 为 `COMPLETE`。RIGHT ESC 在该次
-最终 B2 session 中独立断电，该证据不构成 RIGHT powered physical Flight verification。
-
-额外 `post_fan_pwm.txt` 因 `ros2 topic echo --once` 没有收到订阅后的未来新消息而为空，
-分类为 supplemental one-shot capture failure；它不推翻同次 continuous log 的最终
-`(800,800)` 或用户观察到的 physical stop。后续瞬态 gate 使用
-`scripts/hardware_verification/record_gate_evidence.py` 持续记录，不再把 optional
-`--once` snapshot 作为唯一 required history。
+v0.4.0 B2 Flight session 进一步确认 LEFT 的当前 runtime mapping 和 bounded response；
+RIGHT ESC 在该 session 中保持断电，因此不能扩展为 RIGHT powered physical Flight
+verification。完整命令边界、记录器证据和 one-shot capture 限制见
+[v0.4.0 硬件验证记录](verification/v0.4.0/HARDWARE_VERIFICATION_RECORD.md)，不在当前
+硬件契约中重复 session 过程。
 
 首次带电前仍必须物理确认 GPIO12/pin 32 为左风扇、GPIO26/pin 37 为右风扇；不能
 把仓库默认值视为接线已完成实机确认。任何 GPIO/PWM/ESC 操作仍需遵守
@@ -165,10 +161,8 @@ snapshot 均通过。因此 B2 为 `HARDWARE PASS`，Gate B 为 `COMPLETE`。RIG
 - Flight 的 normalized fan command 是 `[0.0, 1.0]` 无量纲控制意图，不是
   thrust fraction；
 - `flight_takeover_enabled=false` 是当前默认值；
-- v0.4.0 Flight takeover 已完成 B1 motor bounded 和 B2 LEFT fan bounded hardware
-  verification，Gate C fail-closed verification 为 `COMPLETE`；Gate D historical-evidence
-  audit 为 `FUNCTIONAL REGRESSION PASS / COMPLETE`，没有执行新的 powered Gate D session，
-  部分项目只有 operator functional evidence，没有 continuous recorder。
+- v0.4.0 已完成的 bounded/fail-close 验证、Gate D 证据等级和 RIGHT 侧限制以
+  [版本化验证记录](verification/v0.4.0/HARDWARE_VERIFICATION_RECORD.md) 为准。
 
 本文档不把软件测试、默认配置或已有 B1/B2 bounded evidence 扩展解释为新的物理量、
 性能标定、RIGHT powered Flight verification、新的 Gate D hardware session 或 release 授权。
