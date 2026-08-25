@@ -20,8 +20,8 @@ setup(
     ],
     install_requires=["setuptools"],
     zip_safe=True,
-    maintainer="h-goal",
-    maintainer_email="h-goal@todo.todo",
+    maintainer="LeonEleven",
+    maintainer_email="elevenlianm@foxmail.com",
     description=(
         "Flight-control API, algorithms, authority runtime, and actuator "
         "adapters for WindArmor."

@@ -43,6 +43,12 @@ def _unsigned_int(value: object, name: str, maximum: int) -> int:
 
 
 class MotorAdapter:
+    """Convert a complete configured feedback frame into read-only motor state.
+
+    Missing feedback and locally stale samples fail closed in the snapshot. This
+    adapter observes lower-level state; it does not issue commands or grant authority.
+    """
+
     def __init__(self, required_motor_names: Iterable[str]) -> None:
         self._required_names = tuple(required_motor_names)
         if not self._required_names or any(not name for name in self._required_names):

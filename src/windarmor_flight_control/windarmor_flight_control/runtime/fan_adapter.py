@@ -18,6 +18,12 @@ def _finite(value: object, name: str) -> float:
 
 
 class FanAdapter:
+    """Normalize observed applied PWM and turn stale observations into unknown.
+
+    The result is readback, not the requested ``FanCommand``; this adapter never
+    publishes PWM, controls hardware, or grants authority.
+    """
+
     def __init__(self, minimum_pwm_us: float, maximum_pwm_us: float) -> None:
         self._minimum = _finite(minimum_pwm_us, "fan PWM minimum")
         self._maximum = _finite(maximum_pwm_us, "fan PWM maximum")

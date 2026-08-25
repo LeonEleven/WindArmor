@@ -10,7 +10,7 @@ from ..core.controller import FlightController
 
 
 class ControllerLoadError(RuntimeError):
-    pass
+    """Configured controller import or factory contract failure."""
 
 
 def load_controller(
@@ -18,6 +18,13 @@ def load_controller(
     required_motor_names: Iterable[str],
     configuration: Mapping[str, object] | None = None,
 ) -> FlightController:
+    """Load ``module.path:factory`` without fallback or authority side effects.
+
+    Factories receive required motor names and, when their signature accepts it, an
+    optional configuration mapping. Import/factory failures are configuration errors;
+    algorithm modules must not rely on ROS or hardware side effects during loading.
+    """
+
     if not isinstance(factory_contract, str) or factory_contract.count(":") != 1:
         raise ControllerLoadError(
             "controller_factory must use 'module.path:factory_name'"

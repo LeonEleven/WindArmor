@@ -103,6 +103,12 @@ def _boolean(value: Any, name: str) -> bool:
 
 
 class SafetyReadbackAdapter:
+    """Validate authoritative lower-level safety ordering and cross-field state.
+
+    Unknown states, old epochs, and contradictory latches are rejected rather than
+    coerced to safe values. Freshness and the final actuation veto remain Runtime gates.
+    """
+
     def __init__(self) -> None:
         self.motor: ReceivedMotorSafety | None = None
         self.fan: ReceivedFanSafety | None = None

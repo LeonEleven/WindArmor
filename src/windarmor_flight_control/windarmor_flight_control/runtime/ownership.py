@@ -37,6 +37,8 @@ OWNER_DOMAIN_PHASES = {
 
 @dataclass(frozen=True)
 class OwnershipReadback:
+    """Ordered lower-level owner observation scoped to its publisher process epoch."""
+
     source_epoch: int
     observation_sequence: int
     owner: OwnershipDomain
@@ -48,6 +50,8 @@ class OwnershipReadback:
 
 
 class OwnershipReadbackTracker:
+    """Reject stale process epochs and non-increasing owner observations."""
+
     def __init__(self, owner: OwnershipDomain) -> None:
         self.owner = owner
         self.latest: OwnershipReadback | None = None
@@ -146,6 +150,12 @@ class CleanupResult:
 
 
 class OwnerHandoffCoordinator:
+    """Record token-matched reserve/commit replies for both lower-level owners.
+
+    Failure exposes every reserved domain for best-effort revoke; it never restores
+    an old token or owner automatically.
+    """
+
     def __init__(self) -> None:
         self.reset()
 

@@ -7,7 +7,7 @@ from enum import Enum
 
 
 class CommandAuthority(str, Enum):
-    """The sole ordinary command owner selected by a future runtime."""
+    """The sole ordinary command owner selected by the Runtime."""
 
     NONE = "NONE"
     MANUAL = "MANUAL"
@@ -17,7 +17,11 @@ class CommandAuthority(str, Enum):
 
 @dataclass(frozen=True)
 class AuthorityGrant:
-    """Immutable authority token metadata; it does not grant hardware access."""
+    """Authority identity scoped to one Runtime process and one prepare attempt.
+
+    ``generation`` is unique only inside ``authority_epoch``; the pair prevents a
+    command from surviving restart/session boundaries. It grants no hardware access.
+    """
 
     authority: CommandAuthority
     authority_epoch: int
@@ -65,7 +69,11 @@ class AuthorityTransitionError(RuntimeError):
 
 
 class AuthorityStateMachine:
-    """Generation-safe preparation and fake-testable ownership handshake."""
+    """Bind owner acknowledgements to one epoch/generation before atomic commit.
+
+    Cancel or inhibit invalidates the attempt token; returning to DRY_RUN requires
+    an explicit reset and never restores an old owner or command automatically.
+    """
 
     def __init__(self, *, authority_epoch: int, takeover_supported: bool) -> None:
         if not self._valid_uint64(authority_epoch):

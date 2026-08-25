@@ -99,18 +99,12 @@ from .transport_recovery import (
 )
 
 
-# ---------------------------------------------------------------------------
-# 主控制节点
-# ---------------------------------------------------------------------------
-
 class ImuMotorControllerNode(LifecycleNode):
     """IMU 驱动的 CyberGear 电机控制节点（LifecycleNode）。
 
     实现完整的控制状态机、通信看门狗、电机反馈监控、多层保护和急停。
     具体逻辑委托给 StateManager、MotorManager、SafetyMonitor、KeyboardHandler。
     """
-
-    # ---- 构造 ----
 
     def __init__(
         self,
@@ -222,7 +216,9 @@ class ImuMotorControllerNode(LifecycleNode):
         self.declare_parameter("m4_min", -1.57)
         self.declare_parameter("m4_max", 0.0)
 
-        # P0 安全参数
+        # Safety thresholds cover stale commands/feedback, thermal/fault latches,
+        # position error and transport recovery. Units are encoded in parameter names;
+        # motor_current_limit_a is reserved because 0x02 feedback has no numeric current.
         self.declare_parameter("watchdog_timeout_ms", 200)
         self.declare_parameter("motor_temp_limit_degC", 80.0)
         self.declare_parameter("motor_temp_critical_degC", 90.0)

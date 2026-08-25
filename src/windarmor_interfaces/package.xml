@@ -3,7 +3,7 @@
   <name>windarmor_interfaces</name>
   <version>0.4.0</version>
   <description>Structured ROS 2 interface contracts for WindArmor.</description>
-  <maintainer email="h-goal@todo.todo">h-goal</maintainer>
+  <maintainer email="elevenlianm@foxmail.com">LeonEleven</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>

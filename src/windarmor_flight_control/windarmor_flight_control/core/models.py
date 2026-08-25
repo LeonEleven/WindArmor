@@ -79,6 +79,12 @@ class FanChannelState:
 
 @dataclass(frozen=True)
 class FanSystemState:
+    """Observed lower-level fan state, distinct from a requested ``FanCommand``.
+
+    Stale or unobserved values are ``None``/unknown. Applied commands are meaningful
+    only when their channel's ``output_known`` flag is true.
+    """
+
     left: FanChannelState
     right: FanChannelState
     enabled: bool | None
@@ -93,6 +99,8 @@ class SystemState:
     motor feedback sample. It excludes fan observations, authoritative safety
     readback, ownership, and authority readiness; ``actuation_allowed`` is the
     separate Runtime decision for whether a normal command may be dispatched.
+    Optional safety/control observations use ``None`` for unknown; unknown must
+    never be interpreted as false, clear, stopped, or healthy.
     """
 
     command_authority: CommandAuthority

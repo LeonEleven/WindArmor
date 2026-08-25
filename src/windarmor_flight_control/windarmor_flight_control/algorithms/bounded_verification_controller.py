@@ -11,7 +11,11 @@ from ..core.models import FanCommand, FlightCommand, FlightState
 
 
 class BoundedVerificationController:
-    """Hold a captured motor baseline and offset one explicitly selected axis."""
+    """Apply one non-accumulating offset to a per-authority-session baseline.
+
+    This fail-closed, explicitly enabled controller exists only for bounded release
+    verification. It emits a complete frame and is not a newcomer/production template.
+    """
 
     def __init__(
         self,

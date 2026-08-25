@@ -1,4 +1,4 @@
-"""Generation and post-grant barriers for future actuator command envelopes."""
+"""Authority identity, ordering, and post-grant barriers for command envelopes."""
 
 from __future__ import annotations
 
@@ -12,6 +12,12 @@ from .validation import FlightValidationError, validate_flight_command
 
 @dataclass(frozen=True)
 class FlightCommandEnvelope:
+    """One validated intent bound to an authority token and post-cutoff state.
+
+    Receivers reject old epoch/generation pairs and duplicate/out-of-order sequence
+    numbers. A safe-stop intent remains payload-free inside the envelope.
+    """
+
     authority_epoch: int
     generation: int
     command_sequence: int

@@ -3,7 +3,7 @@
   <name>windarmor_fan_controller</name>
   <version>0.3.2</version>
   <description>ROS 2 dual ducted-fan ESC controller for WindArmor.</description>
-  <maintainer email="h-goal@todo.todo">h-goal</maintainer>
+  <maintainer email="elevenlianm@foxmail.com">LeonEleven</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_python</buildtool_depend>

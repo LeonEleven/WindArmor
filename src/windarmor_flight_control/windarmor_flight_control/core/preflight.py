@@ -80,7 +80,11 @@ class PreflightResult:
 
 
 def evaluate_preflight(context: PreflightContext) -> PreflightResult:
-    """Return the first stable blocker in safety-first deterministic order."""
+    """Return the first point-in-time blocker in safety-first deterministic order.
+
+    READY permits the handoff attempt only; Runtime and lower-level safety/ownership
+    readback continue to supervise freshness and may revoke actuation afterward.
+    """
 
     state = context.state
     checks = [

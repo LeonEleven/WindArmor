@@ -15,5 +15,9 @@ class FlightController(Protocol):
         ...
 
     def update(self, state: FlightState, dt: float) -> FlightCommand:
-        """Compute one complete command frame from an immutable state snapshot."""
+        """Map one state snapshot to an intent using a positive monotonic-seconds dt.
+
+        Controllers must accept a variable update interval. A normal result contains
+        the complete configured motor frame; unusable input should yield safe-stop.
+        """
         ...

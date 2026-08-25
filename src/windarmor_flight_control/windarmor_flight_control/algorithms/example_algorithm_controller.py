@@ -22,6 +22,8 @@ class ExampleAlgorithmController:
     This educational controller has no ROS or hardware dependencies. It captures
     one complete motor-position baseline after reset, then keeps that baseline
     fixed until the next reset or until an unsafe input clears it.
+    Its constants are software examples, not mechanical tuning values, and loading
+    it never grants actuator authority. It is not the default production controller.
     """
 
     def __init__(self, required_motor_names: Iterable[str]) -> None:

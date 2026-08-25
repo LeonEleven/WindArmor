@@ -19,6 +19,8 @@ from .safety_adapter import SafetyReadbackAdapter
 
 @dataclass(frozen=True)
 class RuntimeSnapshot:
+    """One coherent algorithm state plus separately authoritative safety readback."""
+
     flight_state: FlightState
     motor_safety: MotorSafetyReadback | None
     fan_safety: FanSafetyReadback | None
@@ -27,6 +29,12 @@ class RuntimeSnapshot:
 
 
 class StateAggregator:
+    """Pair observations under one lock and emit monotonic immutable snapshots.
+
+    Missing or stale observations stay unknown instead of becoming healthy defaults.
+    Aggregation is read-only and neither grants authority nor controls hardware.
+    """
+
     def __init__(self, config: RuntimeConfig) -> None:
         self._config = config
         self._lock = threading.RLock()

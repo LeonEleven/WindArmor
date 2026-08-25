@@ -3,7 +3,7 @@
   <name>windarmor_flight_control</name>
   <version>0.4.0</version>
   <description>Flight-control API, algorithms, authority runtime, and actuator adapters for WindArmor.</description>
-  <maintainer email="h-goal@todo.todo">h-goal</maintainer>
+  <maintainer email="elevenlianm@foxmail.com">LeonEleven</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_python</buildtool_depend>
