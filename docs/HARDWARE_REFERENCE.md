@@ -81,7 +81,7 @@ valid、fresh、healthy 且
 CyberGear 手册明确说明通信类型 6 设置的机械零位“掉电丢失”。这里的掉电是
 CyberGear 电机动力断开；不能把 Raspberry Pi 单独掉电描述成电机零位必然丢失。
 软件也无法只根据当前位置合法就判断机器人正处于项目机械零位，因此冷启动绝不自动
-set-zero。
+设置零点。
 
 普通控制器每次 configure 都为每台电机重新取得本次初始化期间的新鲜、合法
 type-2 实测位置，并把第一次 `loc_ref` 设置为同一 CyberGear 原生坐标值。反馈和目标

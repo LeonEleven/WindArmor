@@ -6,10 +6,10 @@
 
 ## 当前任务
 
-- 任务：`DOC-3.1 — 中文文档与注释本地化、术语一致性`
-- 日期：2026-08-25
+- 任务：`DOC-3.1 final language hotfix`
+- 日期：2026-08-26
 - task-start branch：`master`
-- task-start HEAD：`99207e74a59c931fa9dca11834fc0da7c6ad7d3e`
+- task-start HEAD：`464007bab53521e9bfd73841ab2e5cf256add647`
 - 当前 stable release：v0.3.2
 - 当前开发目标：v0.4.0（未发布）
 - Gate B / C / D：**COMPLETE / COMPLETE / COMPLETE**
@@ -17,8 +17,21 @@
 - DOC-1：**COMPLETE / REVIEW PASS**
 - DOC-2：**COMPLETE / REVIEW PASS**
 - DOC-3：**COMPLETE / REVIEW PASS**
-- DOC-3.1 proposed status：**COMPLETE / REVIEW PASS**
+- DOC-3.1：**COMPLETE / REVIEW PASS**
 - release readiness：**PENDING FINAL REVIEW**
+
+## DOC-3.1 final language hotfix
+
+本轮只修复五份长期新人文档中残留的普通英文说明，未扩大到历史文档、源码或运行时文本。
+
+- Architecture 图示中的普通英文边界/硬件说明和 `required_inputs_fresh` 说明图已改为自然中文，
+  正式类型名 `MotorState` 保持不变；
+- README、Algorithm Developer Guide、Flight Control API、Architecture 和 Hardware Reference
+  仅处理明显且不必要的普通英文，正式标识符、状态、单位和命令文本保持原样；
+- 本轮只修改 Markdown prose；Python comment/docstring、运行时日志、异常文本、CLI 输出、
+  production behavior、config、launch 和 interface 均未修改；
+- 相对 Markdown 链接检查为 67 checked、missing 0，`git diff --check` 为 PASS；
+- 按任务要求，纯文字微修未重复运行 full CI，也未执行任何硬件测试。
 
 ## DOC-3.1 结果
 
@@ -114,6 +127,6 @@ actuator 通电。
 
 ## 下一任务
 
-DOC-3.1 proposed status 为 `COMPLETE / REVIEW PASS`。下一步是 v0.4.0 final
+DOC-3.1 状态为 `COMPLETE / REVIEW PASS`。下一步是 v0.4.0 final
 release-readiness review：复核当前未提交 diff、版本和 release checklist，并由用户另行决定
 是否 commit/push/tag/release。该复核不自动授权任何 Git 发布动作或新的真实硬件操作。

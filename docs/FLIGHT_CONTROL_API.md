@@ -119,7 +119,7 @@ def create_controller(
 | `zero_generation` | `int \| None` | 已观测的非负 IMU 零点代次 | 未观测时为 `None` |
 
 原始观测与相对观测必须使用相同来源时间戳才能配对。当前没有公开
-`relative_yaw_rad`。物理安装为 X+ 前、Y+ 左、Z+ 上；API 正负值沿发布的 corrected frame，
+`relative_yaw_rad`。物理安装为 X+ 前、Y+ 左、Z+ 上；API 正负值沿发布的校正坐标系，
 算法不得未经机械审核推断执行器方向。详见[硬件参考](HARDWARE_REFERENCE.md)。
 
 示例：`relative_pitch_rad=0.10` 表示修正后的当前俯仰角相对最新零点为 `+0.10 rad`，
@@ -145,10 +145,10 @@ def create_controller(
 当前逻辑名称和单位：
 
 ```text
-left_lift    position in rad
-left_pitch   position in rad
-right_pitch  position in rad
-right_lift   position in rad
+left_lift    位置（rad）
+left_pitch   位置（rad）
+right_pitch  位置（rad）
+right_lift   位置（rad）
 ```
 
 这些名称是算法键，不是 CAN ID。普通命令必须包含配置中的完整键集合；保持其他轴时应

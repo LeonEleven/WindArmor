@@ -365,14 +365,14 @@ node/publisher/service/client，不读取 `/dev`，不连接 CAN/串口，不初
 
 - 控制器和单元测试；
 - synthetic DRY_RUN 输出；
-- 所需输入、单位、符号、clamp 和 fail-closed 说明；
+- 所需输入、单位、符号、限幅和失效后安全闭锁说明；
 - 建议的电机/风扇边界与停止条件。
 
 维护者/操作者负责：代码审查、生产集成审查、十项硬件授权、允许的电机/风扇值、连续记录器、
 E-STOP、物理断电、供电、现场观察、执行与证据分类。
 
 算法开发者不得自行启用 `flight_takeover_enabled`、调用 authority prepare、选择真实
-verification values、启动 hardware launch、set zero、reset E-STOP/ERROR 或给 actuator 通电。
+验证值、启动硬件 launch、设置零点、复位 E-STOP/ERROR 或给执行器通电。
 阅读本节不构成授权，也不提供一键硬件动作命令。
 
 项目已使用 `BoundedVerificationController` 证明简单控制器 → Runtime → 控制权 → 真实
@@ -420,6 +420,6 @@ verification values、启动 hardware launch、set zero、reset E-STOP/ERROR 或
 - [ ] 没有导入 ROS、CAN、串口、GPIO/PWM、驱动或管理器；
 - [ ] 单元测试覆盖中性输入、正负输入、边界、重置和故障；
 - [ ] synthetic DRY_RUN 可重复，且显示无控制权/无执行许可；
-- [ ] 没有修改默认控制器、takeover 或硬件配置；
+- [ ] 没有修改默认控制器、控制权接管或硬件配置；
 - [ ] 维护者已理解请求边界和故障行为；
 - [ ] 若提议 LEVEL 3，已单独准备授权、E-STOP、物理断电和证据计划。

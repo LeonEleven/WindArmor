@@ -276,7 +276,7 @@ python3 -m windarmor_flight_control.synthetic_dry_run
 | [IMU/CyberGear 包 README](src/imu_cybergear_ros2/README.md) | 电机/IMU 包专属接口与实现约束 |
 | [v0.4.0 验证记录](docs/verification/v0.4.0/HARDWARE_VERIFICATION_RECORD.md) | 当前版本最终硬件与功能验证证据 |
 | [v0.4.0 历史执行计划](docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md) | 完整过程、无效尝试和执行手册历史；不是当前授权 |
-| [v0.3.2 发布说明](docs/RELEASE_NOTES_v0.3.2.md) | 当前 stable release 的版本化发布记录 |
+| [v0.3.2 发布说明](docs/RELEASE_NOTES_v0.3.2.md) | 当前稳定版本的版本化发布记录 |
 | [v0.3.2 RC 检查表](docs/V0.3.2_RC_HARDWARE_CHECKLIST.md) | v0.3.2 历史验证记录 |
 
 `docs/LATEST_FEEDBACK.md` 是仓库内的可变任务交接，不是发布证据或长期接口来源；

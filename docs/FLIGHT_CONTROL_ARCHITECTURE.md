@@ -41,7 +41,7 @@ ROS / 硬件观测来源
                  v
             FlightCommand
                  |
-        pure algorithm boundary
+             纯算法边界
                  |
                  v
  Runtime 校验 / 控制权 / 命令包络
@@ -50,7 +50,7 @@ ROS / 硬件观测来源
  MotorManager / FanCommandManager / 安全机制
                  |
                  v
-              hardware
+                硬件
 ```
 
 包职责：
@@ -97,9 +97,9 @@ CyberGear 驱动或其他硬件包。ROS ↔ 纯模型转换只属于 Runtime �
 StateAggregator 当前定义为：
 
 ```text
-paired IMU is fresh
-AND
-every configured MotorState is fresh
+已配对的 IMU 数据新鲜
+并且
+每个已配置的 MotorState 都新鲜
 ```
 
 它不包含风扇输出/状态、电机/风扇权威安全回读、E-STOP 是否解除、控制归属回读或控制权
@@ -162,7 +162,7 @@ INHIBITED 回到 ACTIVE，也不能自动恢复 MANUAL、LEGACY_AUTO 或旧目�
 - generation 在该 epoch 的 prepare 尝试中分配正值；
 - `0` 保留表示无控制权；
 - cancel/inhibit 立即使本次尝试的 token 永久失效；
-- owner 拒绝旧 epoch/generation，新 epoch 也不能抢占仍为 active 的旧 Flight owner；
+- owner 拒绝旧 epoch/generation，新 epoch 也不能抢占仍活跃的旧 Flight owner；
 - 命令序号在同一 token 内严格递增，用于拒绝重复或乱序帧。
 
 ## 预检与就绪条件
@@ -181,13 +181,13 @@ ARMING 初期可以等待尚未出现的观测。明确危险、已观测安全�
 输入再次失效会锁存 INHIBITED。READY 丢失任一预检条件也会
 INHIBITED，不自动恢复。
 
-`actuation_allowed=True` 比 `required_inputs_fresh=True` 更严格：必须 ACTIVE、current authority
-token committed、两 owner readback 匹配、E-STOP 明确 false、fan enabled、motor/fan mode 已
-观测，并满足所有 Runtime safety gate。默认 takeover 关闭时永远 false。
+`actuation_allowed=True` 比 `required_inputs_fresh=True` 更严格：必须处于 ACTIVE、当前
+authority token 已提交、两个 owner 回读匹配、E-STOP 明确为 false、风扇已启用、电机/风扇
+模式已观测，并满足所有 Runtime 安全门槛。默认控制权接管关闭时永远为 false。
 
 ## 两阶段控制归属交接
 
-motor owner states 包含 `MANUAL/LEGACY_AUTO/NONE/FLIGHT_RESERVED/FLIGHT_CONTROL`；fan 包含
+电机 owner 状态包括 `MANUAL/LEGACY_AUTO/NONE/FLIGHT_RESERVED/FLIGHT_CONTROL`；风扇包括
 `LEGACY_MANUAL/LEGACY_AUTO/NONE/FLIGHT_RESERVED/FLIGHT_CONTROL`。
 
 交接顺序：
@@ -222,10 +222,10 @@ motor owner states 包含 `MANUAL/LEGACY_AUTO/NONE/FLIGHT_RESERVED/FLIGHT_CONTRO
 
 Runtime 事务、底层交接和 ACTIVE 命令使用独立的本地单调时钟截止时间：
 
-- Runtime handoff transaction 默认 `1.0 s`；
-- motor/fan handoff lease 默认 `1.5 s`；
-- motor/fan ACTIVE command lease 默认 `0.25 s`；
-- best-effort revoke diagnostic deadline 默认 `0.25 s`。
+- Runtime 交接事务默认 `1.0 s`；
+- 电机/风扇 handoff lease 默认 `1.5 s`；
+- 电机/风扇 ACTIVE 命令 lease 默认 `0.25 s`；
+- 尽力撤销的诊断截止时间默认 `0.25 s`。
 
 reserve 启动交接租约，commit 不重置。只有第一条 token、sequence、截止点后状态和载荷都
 合法的普通命令包络，才会结束交接租约并启动 ACTIVE 心跳租约。之后只有合法普通帧会刷新；
@@ -249,9 +249,8 @@ reserve 启动交接租约，commit 不重置。只有第一条 token、sequence
 ## 执行器适配器与最终否决权
 
 电机适配器复用 `MotorManager` 的 `MotionSource.FLIGHT` 和唯一运动定时器，不新增
-`FLIGHT_RUNNING` controller state；它在 `AUTO_RUNNING + owner=FLIGHT_CONTROL` 下继续应用
-soft limit、maximum step、mode/motor speed limit、feedback/transport fault 和 write-failure
-ERROR 路径。
+`FLIGHT_RUNNING` 控制器状态；它在 `AUTO_RUNNING + owner=FLIGHT_CONTROL` 下继续应用
+软限位、最大步长、模式/电机速度限制、反馈/transport 故障和写入失败 ERROR 路径。
 
 风扇适配器不创建第二个 GPIO 控制器。`FanCommandManager` 继续是唯一普通 PWM 发布者；
 `0` 映射为停止值，`(0,1]` 映射到配置的起始/最大区间并应用既有上升/下降斜率限制。
@@ -287,8 +286,8 @@ Runtime、适配器或算法都不能绕过底层 E-STOP、ERROR、看门狗、�
 递归触发回滚，也不得重新打开下发通道；底层租约是 Runtime 崩溃或无响应时独立的失效后
 安全闭锁后备机制。撤销不会自动恢复旧 owner。
 
-Runtime executable 禁用 rclpy default SIGINT/SIGTERM handler，由 Python signal handler 保持
-ROS context 在 `destroy_node()`/rollback 期间有效，node destruction 后才 shutdown context。
+Runtime 可执行程序禁用 rclpy 默认的 SIGINT/SIGTERM 处理器，由 Python 信号处理器保持
+ROS context 在 `destroy_node()`/rollback 期间有效，节点销毁后才关闭 context。
 普通 executor/Runtime 错误不会伪装成正常信号退出。重启必须获得新的进程 PID、控制权
 epoch 和完整的新交接；不得恢复旧 token、目标或命令序号。
 
@@ -302,9 +301,9 @@ epoch 和完整的新交接；不得恢复旧 token、目标或命令序号。
 - safe-stop 永不携带执行器载荷；
 - 未知状态使用 `None`/存在性标志，不用 false/zero/empty string 伪装；
 - 不从力矩推导电流，不创建未经验证的 RPM/推力；
-- motor/fan manager、watchdog、lease、soft limit、E-STOP 和 physical operator boundary 保持最终
+- 电机/风扇管理器、看门狗、lease、软限位、E-STOP 和现场物理操作员边界保持最终
   裁决权；
-- 软件 CI/fake/mock/DRY_RUN 不表述为真实硬件验证。
+- 软件 CI、fake、mock 和 DRY_RUN 不表述为真实硬件验证。
 
 新增字段或传输契约必须有可验证来源，并说明单位、坐标系/符号、存在性/`None`、有效性、
 新鲜度和兼容性。删除字段、改变单位/存在性或放宽校验属于破坏性变更，需要独立迁移审查。
