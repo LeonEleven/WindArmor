@@ -1,7 +1,6 @@
-"""Pure motor-feedback validation and freshness tracking.
+"""纯电机反馈校验与新鲜度跟踪。
 
-This module deliberately has no ROS or driver dependency.  Callers provide a
-status-like object and the local monotonic receive time explicitly.
+本模块刻意不依赖 ROS 或驱动；调用方须显式提供类 status 对象和本地单调接收时间。
 """
 
 from dataclasses import dataclass
@@ -115,7 +114,7 @@ def fault_names(flags: int) -> Tuple[str, ...]:
 
 
 def classify_fault(flags: int) -> MotorHealthReason:
-    """Classify one supported non-zero firmware fault mask."""
+    """对一个受支持的非零固件故障掩码进行分类。"""
     bits = [bit for bit in FAULT_NAMES if flags & (1 << bit)]
     if len(bits) != 1:
         return MotorHealthReason.MOTOR_FAULT_MULTIPLE
@@ -132,7 +131,7 @@ def classify_fault(flags: int) -> MotorHealthReason:
 
 
 class MotorHealthCore:
-    """Stateful pure logic for validation, warnings and feedback freshness."""
+    """用于校验、告警和反馈新鲜度的有状态纯逻辑。"""
 
     def __init__(self, config: MotorHealthConfig):
         self._config = config

@@ -1,4 +1,4 @@
-"""Strict, side-effect-free validation for flight API values."""
+"""对飞控 API 值执行严格、无副作用的校验。"""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from .models import (
 
 
 class FlightValidationError(ValueError):
-    """Raised when an API value violates one or more explicit contracts."""
+    """API 值违反一项或多项显式契约时抛出。"""
 
     def __init__(self, issues: Iterable[str]) -> None:
         self.issues = tuple(issues)
@@ -209,7 +209,7 @@ def _check_motor_keys(
 def validate_flight_state(
     state: FlightState, required_motor_names: Iterable[str]
 ) -> None:
-    """Reject an inconsistent snapshot without changing it."""
+    """拒绝不一致的状态快照，且不修改该快照。"""
 
     if not isinstance(state, FlightState):
         raise FlightValidationError(("state must be a FlightState",))
@@ -334,7 +334,7 @@ def _validate_fan_command(command: FanCommand, issues: list[str]) -> None:
 def validate_flight_command(
     command: FlightCommand, required_motor_names: Iterable[str]
 ) -> None:
-    """Reject an invalid command; never clamp or fill an incomplete frame."""
+    """拒绝非法命令；绝不对不完整帧限幅或补值。"""
 
     if not isinstance(command, FlightCommand):
         raise FlightValidationError(("command must be a FlightCommand",))
@@ -369,7 +369,7 @@ def validate_flight_command(
 
 
 def validate_authority_grant(grant: AuthorityGrant) -> None:
-    """Validate generation metadata without changing runtime authority."""
+    """校验 generation 元数据，但不改变 Runtime 控制权。"""
 
     issues: list[str] = []
     if not isinstance(grant, AuthorityGrant):

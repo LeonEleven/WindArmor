@@ -1,4 +1,4 @@
-"""Hardware-independent WindArmor flight-control foundation."""
+"""不依赖硬件的 WindArmor 飞控基础包。"""
 
 from .core import (
     AuthorityGrant,

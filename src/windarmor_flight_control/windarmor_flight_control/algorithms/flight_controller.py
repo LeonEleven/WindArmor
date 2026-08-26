@@ -1,4 +1,4 @@
-"""Default DRY_RUN example factory; targets are not mechanical references."""
+"""默认 DRY_RUN 示例工厂；其中的目标不是机械参考值。"""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ def create_controller(
     required_motor_names: tuple[str, ...],
     configuration: Mapping[str, object] | None = None,
 ) -> FlightController:
-    """Create the API example with test-only zero values for every logical key."""
+    """为每个逻辑键使用测试专用零值创建 API 示例。"""
 
     del configuration
     return NeutralExampleController(

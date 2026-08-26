@@ -1,4 +1,4 @@
-"""Immutable values crossing the pure flight-algorithm boundary."""
+"""跨越纯飞控算法边界传递的不可变状态值。"""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ def _freeze_mapping(values: Mapping[str, object]) -> Mapping[str, object]:
 
 @dataclass(frozen=True)
 class Vector3:
-    """Three-dimensional SI vector; component units come from its field use."""
+    """三维 SI 向量；各分量单位由具体字段用途决定。"""
 
     x: float
     y: float
@@ -24,7 +24,7 @@ class Vector3:
 
 @dataclass(frozen=True)
 class Quaternion:
-    """Unitless orientation quaternion in x, y, z, w order."""
+    """按 x、y、z、w 排列的无量纲姿态四元数。"""
 
     x: float
     y: float
@@ -34,7 +34,7 @@ class Quaternion:
 
 @dataclass(frozen=True)
 class ImuState:
-    """IMU snapshot. None represents an unknown physical measurement."""
+    """IMU 状态快照；``None`` 表示未知的物理测量。"""
 
     orientation: Quaternion | None
     roll_rad: float | None
@@ -53,7 +53,7 @@ class ImuState:
 
 @dataclass(frozen=True)
 class MotorState:
-    """Logical motor state without exposing a transport or physical CAN identity."""
+    """不暴露传输层或物理 CAN 标识的逻辑电机状态。"""
 
     name: str
     position_rad: float | None
@@ -71,7 +71,7 @@ class MotorState:
 
 @dataclass(frozen=True)
 class FanChannelState:
-    """Normalized applied fan output, if the runtime can verify it."""
+    """Runtime 能够验证时给出的归一化风扇实际输出。"""
 
     applied_command: float | None
     output_known: bool
@@ -79,10 +79,10 @@ class FanChannelState:
 
 @dataclass(frozen=True)
 class FanSystemState:
-    """Observed lower-level fan state, distinct from a requested ``FanCommand``.
+    """已观测的底层风扇状态，与请求的 ``FanCommand`` 明确区分。
 
-    Stale or unobserved values are ``None``/unknown. Applied commands are meaningful
-    only when their channel's ``output_known`` flag is true.
+    过期或未观测值使用 ``None`` 表示未知。只有对应通道的 ``output_known`` 为 true，
+    实际应用命令才有意义。
     """
 
     left: FanChannelState
@@ -93,14 +93,12 @@ class FanSystemState:
 
 @dataclass(frozen=True)
 class SystemState:
-    """Runtime safety/authority summary exposed to algorithms.
+    """向算法公开的 Runtime 安全状态与控制权摘要。
 
-    ``required_inputs_fresh`` covers the paired IMU sample and every configured
-    motor feedback sample. It excludes fan observations, authoritative safety
-    readback, ownership, and authority readiness; ``actuation_allowed`` is the
-    separate Runtime decision for whether a normal command may be dispatched.
-    Optional safety/control observations use ``None`` for unknown; unknown must
-    never be interpreted as false, clear, stopped, or healthy.
+    ``required_inputs_fresh`` 覆盖已配对 IMU 样本和每个配置电机反馈样本，不包含风扇
+    观测、权威安全回读、控制归属和控制权就绪条件。``actuation_allowed`` 是 Runtime
+    对普通命令能否下发作出的独立裁决。可选安全/控制观测使用 ``None`` 表示未知；
+    未知绝不能解释为 false、已解除、已停止或健康。
     """
 
     command_authority: CommandAuthority
@@ -116,7 +114,7 @@ class SystemState:
 
 @dataclass(frozen=True)
 class FlightState:
-    """One immutable, coherent input snapshot for an algorithm tick."""
+    """供一个算法周期使用的一致、不可变输入状态快照。"""
 
     timestamp_sec: float
     sequence: int
@@ -131,7 +129,7 @@ class FlightState:
 
 @dataclass(frozen=True)
 class FanCommand:
-    """Dimensionless fan request; each value must be within [0.0, 1.0]."""
+    """无量纲风扇请求；每个值都必须位于 [0.0, 1.0]。"""
 
     left: float
     right: float
@@ -139,7 +137,7 @@ class FanCommand:
 
 @dataclass(frozen=True)
 class FlightCommand:
-    """A complete normal frame or a payload-free safe-stop request."""
+    """完整普通帧，或不含载荷的 safe-stop 请求。"""
 
     motor_positions_rad: Mapping[str, float] | None
     fan_commands: FanCommand | None
@@ -155,7 +153,7 @@ class FlightCommand:
 
     @classmethod
     def safe_stop(cls) -> "FlightCommand":
-        """Relinquish ordinary control without carrying actuator targets."""
+        """放弃普通控制且不携带执行器目标。"""
 
         return cls(
             motor_positions_rad=None,

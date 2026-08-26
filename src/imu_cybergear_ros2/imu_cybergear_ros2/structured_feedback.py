@@ -1,4 +1,4 @@
-"""Pure construction of read-only structured motor feedback snapshots."""
+"""只读结构化电机反馈快照的纯构造逻辑。"""
 
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ def build_structured_feedback(
     critical_temperature_c: float,
     safety_fault_active: bool | None,
 ) -> tuple[StructuredMotorFeedback, ...]:
-    """Copy one complete configured snapshot without driver interaction."""
+    """复制一份完整的已配置快照，不与驱动交互。"""
 
     if not math.isfinite(now) or now < 0.0:
         raise ValueError("structured feedback now must be finite and non-negative")

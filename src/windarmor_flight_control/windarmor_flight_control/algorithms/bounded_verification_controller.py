@@ -1,4 +1,4 @@
-"""Fail-closed, feedback-relative controller for staged hardware verification."""
+"""用于分阶段硬件验证、相对反馈工作的失效后安全闭锁控制器。"""
 
 from __future__ import annotations
 
@@ -11,10 +11,10 @@ from ..core.models import FanCommand, FlightCommand, FlightState
 
 
 class BoundedVerificationController:
-    """Apply one non-accumulating offset to a per-authority-session baseline.
+    """对每个控制权会话的基线应用一次不累积的偏移。
 
-    This fail-closed, explicitly enabled controller exists only for bounded release
-    verification. It emits a complete frame and is not a newcomer/production template.
+    该控制器需要显式启用，仅用于受限版本验证，并在异常时执行失效后安全闭锁。
+    它会生成完整帧，但不是新人示例或生产算法模板。
     """
 
     def __init__(
@@ -76,7 +76,7 @@ class BoundedVerificationController:
         return True
 
     def reset(self) -> None:
-        """Clear the feedback baseline and authority-session identity."""
+        """清除反馈基线和控制权会话标识。"""
 
         self._baseline_positions_rad = None
         self._baseline_session = None
@@ -120,7 +120,7 @@ class BoundedVerificationController:
         return positions
 
     def update(self, state: FlightState, dt: float) -> FlightCommand:
-        """Capture from the current valid session and return a complete frame."""
+        """从当前有效会话捕获基线并返回完整帧。"""
 
         if (
             not self._configuration_valid
@@ -167,7 +167,7 @@ def create_controller(
     required_motor_names: tuple[str, ...],
     configuration: Mapping[str, object] | None = None,
 ) -> BoundedVerificationController:
-    """Create the verification controller from Runtime-validated values."""
+    """使用经 Runtime 校验的值创建验证控制器。"""
 
     values = dict(configuration or {})
     offset = (

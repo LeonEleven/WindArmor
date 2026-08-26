@@ -1,4 +1,4 @@
-"""Stateful IMU observation adapter with exact source-stamp correlation."""
+"""按精确来源时间戳配对、带状态的 IMU 观测适配器。"""
 
 from __future__ import annotations
 
@@ -75,7 +75,7 @@ def _vector(message: Any, field: str, unit_name: str) -> Vector3:
 
 
 class ImuAdapter:
-    """Cache raw/relative observations and expose a coherent paired state."""
+    """缓存原始/相对观测，并提供一致的配对状态。"""
 
     _PENDING_LIMIT = 8
 
@@ -108,7 +108,7 @@ class ImuAdapter:
             ),
             received_at=received,
         )
-        # A fully validated raw frame is positive evidence for the current path.
+        # 完整校验通过的原始帧，才是当前观测链路可用的正面证据。
         self._connected = True
         self._raw[stamp] = observation
         self._try_pair(stamp)

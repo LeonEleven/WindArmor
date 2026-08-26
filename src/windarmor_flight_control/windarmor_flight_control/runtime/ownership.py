@@ -1,4 +1,4 @@
-"""ROS-independent owner readback ordering and handoff coordination."""
+"""不依赖 ROS 的控制归属回读排序与交接协调。"""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ OWNER_DOMAIN_PHASES = {
 
 @dataclass(frozen=True)
 class OwnershipReadback:
-    """Ordered lower-level owner observation scoped to its publisher process epoch."""
+    """限定于发布者进程 epoch、带顺序的底层 owner 观测。"""
 
     source_epoch: int
     observation_sequence: int
@@ -50,7 +50,7 @@ class OwnershipReadback:
 
 
 class OwnershipReadbackTracker:
-    """Reject stale process epochs and non-increasing owner observations."""
+    """拒绝旧进程 epoch 和未递增的 owner 观测。"""
 
     def __init__(self, owner: OwnershipDomain) -> None:
         self.owner = owner
@@ -150,10 +150,9 @@ class CleanupResult:
 
 
 class OwnerHandoffCoordinator:
-    """Record token-matched reserve/commit replies for both lower-level owners.
+    """记录两路底层 owner 中 token 匹配的 reserve/commit 响应。
 
-    Failure exposes every reserved domain for best-effort revoke; it never restores
-    an old token or owner automatically.
+    失败时公开所有已 reserve 的域，以便尽力撤销；绝不自动恢复旧 token 或 owner。
     """
 
     def __init__(self) -> None:

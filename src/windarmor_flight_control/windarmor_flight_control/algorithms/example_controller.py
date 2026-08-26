@@ -1,4 +1,4 @@
-"""Minimal API example; this is not a real flight-control algorithm."""
+"""最小 API 示例；这不是真实飞控算法。"""
 
 from __future__ import annotations
 
@@ -9,10 +9,9 @@ from ..core.models import FanCommand, FlightCommand, FlightState
 
 
 class NeutralExampleController:
-    """Return caller-configured neutral motor targets and stopped fans.
+    """返回调用方配置的中性电机目标和停止风扇命令。
 
-    The class exists only to demonstrate and test the Flight API. The configured
-    targets are not claimed to be mechanically neutral for any real robot.
+    本类只用于演示和测试 Flight API。配置的目标并不代表任何真实机器人的机械中位。
     """
 
     def __init__(self, neutral_motor_positions_rad: Mapping[str, float]) -> None:
@@ -21,10 +20,10 @@ class NeutralExampleController:
         )
 
     def reset(self) -> None:
-        """Reset algorithm-local state; this stateless example has none."""
+        """重置算法内部状态；本无状态示例没有需要清理的内容。"""
 
     def update(self, state: FlightState, dt: float) -> FlightCommand:
-        """Build a neutral frame, or request a safe stop when inputs are inhibited."""
+        """构造中性帧；输入被闭锁时请求安全停止。"""
 
         del dt
         if (

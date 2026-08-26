@@ -9,11 +9,11 @@ WindArmor 是运行于树莓派 5、Ubuntu 24.04 和 ROS 2 Jazzy 的飞行机器
 - 当前正式稳定发布：**v0.3.2**
 - 当前开发目标：**v0.4.0（尚未发布）**
 - v0.4.0 Gate B、C、D 硬件与功能验证：**COMPLETE**
-- v0.4.0 release readiness：**PENDING**
+- v0.4.0 发布准备状态：**PENDING**
 
 v0.4.0 的最终验证判定及限制见
 [硬件与功能验证记录](docs/verification/v0.4.0/HARDWARE_VERIFICATION_RECORD.md)。
-验证完成不等于版本已经发布，也不改变 v0.3.2 的 stable 身份。
+验证完成不等于版本已经发布，也不改变 v0.3.2 的稳定版本身份。
 
 ## 安全边界
 
@@ -90,7 +90,7 @@ source install/setup.bash
 4. 启动后先确认电机保持当前测得位置、风扇为停止值、状态和反馈均新鲜。冷启动不会
    隐式建立机械零点。
 
-5. 若电机曾断电或机械参考发生变化，人工回到已知 physical reference posture 后，
+5. 若电机曾断电或机械参考发生变化，人工回到已知的正确机械参考姿态后，
    显式建立机械零点：
 
    ```bash
@@ -160,12 +160,12 @@ ros2 run windarmor_fan_controller fan_keyboard
 | `r` | 只调用底层 `/fans/enable`；不复位管理器急停或恢复旧命令 |
 | `q` | 两路停止并退出键盘节点 |
 
-MANUAL 未授权、等待停止基线、AUTO、急停、disabled 或安全停止状态都会拒绝非停止
+MANUAL 未授权、等待停止基线、AUTO、急停、停用或安全停止状态都会拒绝非停止
 命令。不要在 AUTO 已授权时同时发送手动风扇命令。
 
 ### LEGACY AUTO
 
-LEGACY AUTO 保留 v0.3.2 的正常操作接口；Flight takeover 默认仍为 false。
+LEGACY AUTO 保留 v0.3.2 的正常操作接口；Flight 控制权接管默认仍为 false。
 
 1. 在电机键盘按 `m`，确认 `/motors/control_mode` 为新鲜的 `AUTO`；
 2. 确认 IMU 已归零且相对姿态有效；
@@ -204,12 +204,12 @@ ros2 service call /fans/enable std_srvs/srv/SetBool "{data: true}"
 ros2 service call /fans/reset_e_stop std_srvs/srv/Trigger "{}"
 ```
 
-恢复后电机只回到 MANUAL，风扇保持 `[800, 800]` 且没有 owner。随后必须重新选择
+恢复后电机只回到 MANUAL，风扇保持 `[800, 800]` 且没有控制归属。随后必须重新选择
 `/fans/manual_enable=true` 或 `/fans/auto_enable=true`，并建立新的停止基线/新鲜输入。
 任何旧 PWM、旧 AUTO 或旧 Flight 命令都不会自动恢复。
 
-`ERROR`、transport fault、过温锁存或硬件通信异常不属于普通急停恢复。排除原因后，
-需要重新执行对应 lifecycle 配置/激活或重启流程；不得反复调用恢复接口绕过故障。
+`ERROR`、通信故障、过温锁存或硬件通信异常不属于普通急停恢复。排除原因后，需要重新
+执行对应的生命周期配置/激活或重启流程；不得反复调用恢复接口绕过故障。
 
 正常关机前应先全局急停，确认电机状态为 `EMERGENCY_STOP`、风扇 PWM 为停止值，
 再按现场安全流程断开动力，最后按 `q` 或 `Ctrl+C` 退出软件。
@@ -219,10 +219,10 @@ ros2 service call /fans/reset_e_stop std_srvs/srv/Trigger "{}"
 算法开发按以下顺序阅读：
 
 1. [算法开发者指南](docs/ALGORITHM_DEVELOPER_GUIDE.md)：如何构建、运行 synthetic
-   demo、接入算法和解释状态；
+   演示、接入算法和解释状态；
 2. [Flight Control API](docs/FLIGHT_CONTROL_API.md)：消息、服务、参数和时序契约；
-3. [Flight Control Architecture](docs/FLIGHT_CONTROL_ARCHITECTURE.md)：authority、
-   lease、generation、fail-close 与状态机设计；
+3. [Flight Control Architecture](docs/FLIGHT_CONTROL_ARCHITECTURE.md)：控制权、
+   命令时效租约、generation、失效后安全闭锁与状态机设计；
 4. [硬件参考](docs/HARDWARE_REFERENCE.md)：轴、符号、限位、接线和机械边界。
 
 算法开发默认使用 synthetic/fake 路径，不应通过启动真实硬件节点来验证纯控制逻辑。
@@ -236,7 +236,7 @@ source /opt/ros/jazzy/setup.bash
 ./scripts/ci_software.sh
 ```
 
-它执行安全与 whitespace 检查、Python 编译、五包构建、pure/fake/mock 测试、完整
+它执行安全与空白字符检查、Python 编译、五包构建、pure/fake/mock 测试、完整
 包测试和结果汇总。测试结果只能描述为软件验证，不是 CAN、串口、GPIO、电调或机械
 实机验证。
 
@@ -252,16 +252,16 @@ python3 -m pytest \
   src/windarmor_bringup/test/test_launch_syntax.py -v
 ```
 
-Flight newcomer software-only controller integration demo：
+Flight 新人纯软件控制器集成演示：
 
 ```bash
 PYTHONPATH=src/windarmor_flight_control \
 python3 -m windarmor_flight_control.synthetic_dry_run
 ```
 
-该命令不连接 ROS graph、不访问硬件，也不创建 actuator authority。它与
-`flight_control_dry_run.launch.py` 不同；后者启动 observer Runtime，需要外部 state
-publisher 才能形成 meaningful live preview，不是同一个 newcomer software-only demo。
+该命令不连接 ROS graph、不访问硬件，也不创建执行器控制权。它与
+`flight_control_dry_run.launch.py` 不同；后者启动观测模式 Runtime，需要外部状态发布者
+才能形成有意义的实时预览，不是同一个新人纯软件演示。
 
 运行新增或修改后的测试前，必须重新检查 fixture、插件和依赖没有访问硬件 I/O。
 
@@ -275,19 +275,19 @@ publisher 才能形成 meaningful live preview，不是同一个 newcomer softwa
 | [Flight Control Architecture](docs/FLIGHT_CONTROL_ARCHITECTURE.md) | Flight 长期架构依据 |
 | [IMU/CyberGear 包 README](src/imu_cybergear_ros2/README.md) | 电机/IMU 包专属接口与实现约束 |
 | [v0.4.0 验证记录](docs/verification/v0.4.0/HARDWARE_VERIFICATION_RECORD.md) | 当前版本最终硬件与功能验证证据 |
-| [v0.4.0 历史执行计划](docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md) | 完整过程、无效尝试和 runbook 历史；不是当前授权 |
+| [v0.4.0 历史执行计划](docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md) | 完整过程、无效尝试和执行手册历史；不是当前授权 |
 | [v0.3.2 发布说明](docs/RELEASE_NOTES_v0.3.2.md) | 当前 stable release 的版本化发布记录 |
 | [v0.3.2 RC 检查表](docs/V0.3.2_RC_HARDWARE_CHECKLIST.md) | v0.3.2 历史验证记录 |
 
-`docs/LATEST_FEEDBACK.md` 是仓库内的可变任务交接，不是 release evidence 或长期接口
-来源；`docs/NEXT_COMMAND.md` 是可选的本地任务 scratchpad，且不纳入 Git。
+`docs/LATEST_FEEDBACK.md` 是仓库内的可变任务交接，不是发布证据或长期接口来源；
+`docs/NEXT_COMMAND.md` 是可选的本地任务记录，且不纳入 Git。
 
 ## 发布与验证历史
 
 - **v0.4.0（未发布）：** Gate B/C/D 已完成；最终证据、无效尝试、已知限制和
   非阻塞观察固化在
   [v0.4.0 验证记录](docs/verification/v0.4.0/HARDWARE_VERIFICATION_RECORD.md)。
-- **v0.3.2（stable）：** 发布内容见
+- **v0.3.2（稳定版本）：** 发布内容见
   [发布说明](docs/RELEASE_NOTES_v0.3.2.md)，历史硬件结果见
   [RC 检查表](docs/V0.3.2_RC_HARDWARE_CHECKLIST.md)。
 

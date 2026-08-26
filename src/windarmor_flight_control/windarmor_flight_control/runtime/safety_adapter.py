@@ -1,4 +1,4 @@
-"""Strict ROS-to-core adapters for authoritative safety readback."""
+"""把 ROS 权威安全回读严格转换到 core 模型的适配器。"""
 
 from __future__ import annotations
 
@@ -103,10 +103,10 @@ def _boolean(value: Any, name: str) -> bool:
 
 
 class SafetyReadbackAdapter:
-    """Validate authoritative lower-level safety ordering and cross-field state.
+    """校验权威底层安全回读的顺序和跨字段状态。
 
-    Unknown states, old epochs, and contradictory latches are rejected rather than
-    coerced to safe values. Freshness and the final actuation veto remain Runtime gates.
+    未知状态、旧 epoch 和互相矛盾的锁存会被拒绝，而不会强制转换为安全值。
+    新鲜度和最终执行否决权仍由 Runtime 门槛裁决。
     """
 
     def __init__(self) -> None:

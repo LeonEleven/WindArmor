@@ -441,7 +441,7 @@ class FanCommandManager(Node):
         self._auto_target_pub.publish(target)
 
     def _publish_safety_state(self) -> None:
-        """Publish a core snapshot without producing or advancing PWM output."""
+        """发布核心快照，不产生或推进 PWM 输出。"""
 
         try:
             with self._core_lock:

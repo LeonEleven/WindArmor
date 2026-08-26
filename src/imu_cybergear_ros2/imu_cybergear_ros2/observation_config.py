@@ -1,4 +1,4 @@
-"""Pure configuration contract for the passive CyberGear observer."""
+"""被动 CyberGear 观测器的纯配置契约。"""
 
 from __future__ import annotations
 
@@ -101,7 +101,7 @@ def _topic(name: str, value: object) -> str:
 def build_motor_observation_config(
     raw: Mapping[str, object],
 ) -> MotorObservationConfig:
-    """Validate observer-only parameters without creating ROS or hardware I/O."""
+    """校验观测器专用参数，不创建 ROS 或硬件 I/O。"""
 
     missing = [name for name in OBSERVER_PARAMETER_NAMES if name not in raw]
     if missing:

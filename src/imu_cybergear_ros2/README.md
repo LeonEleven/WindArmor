@@ -1,7 +1,7 @@
 # imu_cybergear_ros2
 
 `imu_cybergear_ros2` 提供 Hiwonder IMU 读取、CyberGear 多电机控制、结构化反馈与
-安全状态，以及 MANUAL、LEGACY AUTO 和 Flight ownership 接口。整机安装、正常启动、
+安全状态，以及 MANUAL、LEGACY AUTO 和 Flight 控制归属接口。整机安装、正常启动、
 风扇操作和 E-stop 恢复请从仓库根目录 [README](../../README.md) 开始；本文只描述
 本包专属行为。
 
@@ -12,7 +12,7 @@
 `motor_ids`、`motor_signs`、`motor_limits_min` 或 `motor_limits_max`，除非用户针对
 该变更明确授权。
 
-全局 `/e_stop`、看门狗、软限位、反馈保护、失权和 lifecycle 清理都属于安全边界，
+全局 `/e_stop`、看门狗、软限位、反馈保护、失权和生命周期清理都属于安全边界，
 不得绕过。当前机械映射与限制见
 [硬件参考](../../docs/HARDWARE_REFERENCE.md)。
 
@@ -21,11 +21,11 @@
 | 组件 | 作用 |
 | --- | --- |
 | `imu_driver_node` | 读取 Hiwonder IMU，发布 `/imu/data_raw` 与 `/imu/status` |
-| `imu_motor_controller_node` | lifecycle 电机控制、键盘、状态、安全和 ownership 接口 |
+| `imu_motor_controller_node` | 生命周期电机控制、键盘、状态、安全和控制归属接口 |
 | `imu_relative_observer_node` | 不控制硬件的相对姿态观察器 |
 | `motor_feedback_observer_node` | 不控制硬件的结构化反馈观察器 |
 | `CyberGearDriver` | USB-CAN / SocketCAN 后端与协议收发 |
-| `MotorManager` | 目标推进、软限位、命令事务、ownership 与安全停止 |
+| `MotorManager` | 目标推进、软限位、命令事务、控制归属与安全停止 |
 | `StateManager` / `SafetyMonitor` | 状态转换、E-stop、watchdog 和反馈故障锁存 |
 
 支持的控制后端为：
@@ -88,11 +88,11 @@ ros2 launch imu_cybergear_ros2 imu_motor_controller.launch.py
 
 MANUAL、AUTO 和 HOME 使用同一固定周期推进器和真实 `dt`，并共同受方向映射、
 速度限制和软限位约束。IMU 回调只更新 AUTO 期望，不直接按消息频率发送电机命令。
-新的 MANUAL 动作、模式切换、E-stop、lifecycle 停止或 Flight takeover 会取消未完成
+新的 MANUAL 动作、模式切换、E-stop、生命周期停止或 Flight 控制权接管会取消未完成
 的 HOME/旧目标。
 
 冷启动在获得有效反馈后以测得位置建立保持目标，不把上次软件会话的零点继续当作
-机械真值。电机断电或机械参考变化后，必须人工回到已知 physical reference posture，
+机械真值。电机断电或机械参考变化后，必须人工回到已知的正确机械参考姿态，
 再显式调用：
 
 ```bash
@@ -108,7 +108,7 @@ IMU 零点通过键盘 `z` 或 `/imu/set_zero` 设置。成功后
 ## 状态与恢复
 
 公开电机状态为：`MANUAL`、`AUTO`、`EMERGENCY_STOP`、`DISABLED`、`ERROR`。
-内部 lifecycle/运行状态遵循：
+内部生命周期/运行状态遵循：
 
 ```text
 UNINITIALIZED  -> INITIALIZING / ERROR / SHUTTING_DOWN
@@ -127,11 +127,11 @@ SHUTTING_DOWN  -> 无其他状态
 以下任一严重事件都会锁存、丢弃未完成运动、逐台尽力停止并进入 `ERROR`：
 
 - 电机命令或停止事务故障；
-- transport 断线或受控重连耗尽；
+- 通信断线或受控重连耗尽；
 - 有效反馈中的非零 CyberGear fault bit；
 - 温度达到 critical 阈值；
 - 连续无效反馈达到限制；
-- 显式启用后的反馈 timeout。
+- 显式启用后的反馈超时。
 
 `ERROR` 不会因后续正常反馈、温度回落、键盘 `r` 或 `/enable_motor=true` 自动清除。
 必须排除原因后受控地重新 configure/activate 或重启节点。
@@ -152,20 +152,20 @@ SHUTTING_DOWN  -> 无其他状态
 
 两个接收后端都依赖被动 0x02 反馈；代码不能证明电机空闲时持续周期反馈。因此强制
 `motor_feedback_timeout_sec` 默认是 `0.0`。只有确认现场固件的空闲反馈行为后才应
-显式启用正 timeout；observer freshness 与该保护参数是不同概念。
+显式启用正超时值；观测新鲜度与该保护参数是不同概念。
 
 温度 warning 只告警、不自动降速；critical 单帧即锁存。重复或并发严重事件共享
 一次主 stop batch，一台停止失败不会阻止其余电机尝试停止。
 
 ## 通信恢复与并发边界
 
-运行期 transport fault 会原子锁存并立即停止控制推进。若配置允许，恢复 worker
+运行期通信故障会原子锁存并立即停止控制推进。若配置允许，恢复工作线程
 使用有限次数与退避重新连接；恢复成功也只回到安全、无旧目标的状态，不继续旧
 MANUAL/AUTO/HOME。首次故障事实保留用于诊断。
 
-backend resource、driver I/O 和 recovery 分别使用独立锁，避免 reader join、cleanup
-与 reconnect 形成反向等待。deactivate、cleanup 和 shutdown 幂等撤销 timer、回调、
-worker 与驱动资源；异常退出仍按尽力停止全部电机处理。
+后端资源、驱动 I/O 和恢复过程分别使用独立锁，避免等待读取线程、清理和重连形成反向等待。
+deactivate、cleanup 和 shutdown 会幂等撤销定时器、回调、工作线程与驱动资源；异常退出仍
+按尽力停止全部电机处理。
 
 ## 配置契约
 
@@ -178,7 +178,7 @@ worker 与驱动资源；异常退出仍按尽力停止全部电机处理。
 - 电机列表非空、长度一致，ID 为唯一的 1–127 整数；
 - 电机名称唯一，方向严格为 `+1.0` 或 `-1.0`；
 - 软限位有限、下限小于上限并位于协议 `[-4π,+4π]`；
-- backend 只接受 `socketcan_hat` 或 `usb_can_serial`；
+- 后端只接受 `socketcan_hat` 或 `usb_can_serial`；
 - 频率、新鲜度、误差阈值和告警限频为正有限值；
 - critical 温度严格高于 warning，重连次数/退避参数合法；
 - 旧标量 ID、方向和软限位参数只为迁移兼容，非默认值会明确失败。
@@ -194,7 +194,7 @@ worker 与驱动资源；异常退出仍按尽力停止全部电机处理。
 | `/imu/data_raw` | `sensor_msgs/Imu` | 原始 IMU 姿态 |
 | `/e_stop` | `std_msgs/Bool` | 全局急停 |
 | `/motors/manual_targets` | `std_msgs/Float64MultiArray` | MANUAL 绝对目标 |
-| Flight command | `windarmor_interfaces/MotorFlightCommand` | 已持有 ownership 的 Flight 命令 |
+| Flight command | `windarmor_interfaces/MotorFlightCommand` | 已持有控制归属的 Flight 命令 |
 
 ### 发布/观察
 
@@ -204,8 +204,8 @@ worker 与驱动资源；异常退出仍按尽力停止全部电机处理。
 | `/imu/zero_generation` | IMU 零点 generation |
 | `/motors/control_mode` | 稳定公开控制模式 |
 | `/motors/feedback` | 结构化电机反馈快照 |
-| `/motors/safety_state` | 电机安全状态与 transition metadata |
-| `/motors/ownership_state` | legacy/Flight ownership 状态 |
+| `/motors/safety_state` | 电机安全状态与转换元数据 |
+| `/motors/ownership_state` | 旧控制路径/Flight 控制归属状态 |
 
 ### 服务
 
@@ -215,14 +215,14 @@ worker 与驱动资源；异常退出仍按尽力停止全部电机处理。
 | `/enable_motor` | 显式停用或恢复普通 E-stop |
 | `/imu/set_zero` | 设置当前 IMU 姿态为零点 |
 | `/motors/set_zero` | 设置当前四电机位置为机械零点 |
-| `/motors/flight_ownership/{prepare,commit,revoke}` | Flight ownership 两阶段切换与撤销 |
+| `/motors/flight_ownership/{prepare,commit,revoke}` | Flight 控制归属两阶段切换与撤销 |
 
-Flight 消息字段、authority epoch、generation、lease 和精确时序契约以
+Flight 消息字段、控制权 epoch、generation、命令时效租约和精确时序契约以
 [Flight Control API](../../docs/FLIGHT_CONTROL_API.md) 为准，不在包 README 重复。
 
 ## 测试
 
-本包测试使用纯函数、fake driver、fake feedback 和进程内 lifecycle 隔离硬件 I/O。
+本包测试使用纯函数、fake 驱动、fake 反馈和进程内生命周期测试隔离硬件 I/O。
 仓库统一纯软件入口为：
 
 ```bash
@@ -231,7 +231,7 @@ source /opt/ros/jazzy/setup.bash
 ```
 
 这些测试不会连接真实 CAN 或串口，也不构成硬件验证。新增测试必须在运行前重新审查
-fixture、backend 和插件没有访问真实硬件。
+fixture、后端和插件没有访问真实硬件。
 
 ## 文档归属
 

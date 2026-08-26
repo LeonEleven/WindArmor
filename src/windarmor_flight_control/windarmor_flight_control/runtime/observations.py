@@ -1,4 +1,4 @@
-"""Immutable intermediate values used by ROS adapters and the aggregator."""
+"""ROS 适配器与状态聚合器使用的不可变中间值。"""
 
 from __future__ import annotations
 

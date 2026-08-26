@@ -123,7 +123,7 @@ class FanControlOutput:
 
 @dataclass(frozen=True)
 class FanSafetySnapshot:
-    """Read-only view of the existing core; it owns no control state."""
+    """现有核心的只读视图；自身不持有控制状态。"""
 
     e_stop_latched: bool
     control_state: str
@@ -201,7 +201,7 @@ def slew_pwm(current: int, target: int, rise_step: int, fall_step: int) -> int:
 
 
 def normalized_flight_command_to_pwm(value: float, config: FanControlConfig) -> int:
-    """Map dimensionless Flight intent to the existing bounded PWM domain."""
+    """将无量纲 Flight 意图映射到现有有界 PWM 域。"""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError("Flight fan command must be numeric")
     value = float(value)
@@ -267,7 +267,7 @@ class FanControlCore:
 
     @property
     def safety_snapshot(self) -> FanSafetySnapshot:
-        """Return authoritative safety readback without advancing control."""
+        """返回权威安全回读信息，不推进控制状态。"""
 
         passive = (
             not self.e_stop_latched

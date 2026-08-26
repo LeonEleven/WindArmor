@@ -1,4 +1,4 @@
-"""Validated configuration for dry-run and opt-in takeover Runtime modes."""
+"""DRY_RUN 与显式接管 Runtime 模式的校验后配置。"""
 
 from __future__ import annotations
 
@@ -185,7 +185,7 @@ def _topic(name: str, value: object) -> str:
 
 
 def build_runtime_config(values: Mapping[str, object]) -> RuntimeConfig:
-    """Validate all timing and interface values before ROS resources exist."""
+    """在创建 ROS 资源前校验全部时序和接口值。"""
 
     converted = dict(values)
     for name in (

@@ -1,4 +1,4 @@
-"""Stable, pure-Python flight API."""
+"""稳定的纯 Python 飞控 API。"""
 
 from .authority import (
     AuthorityGrant,

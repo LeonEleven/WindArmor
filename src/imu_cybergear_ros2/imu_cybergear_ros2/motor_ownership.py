@@ -1,4 +1,4 @@
-"""Pure ordinary-command ownership contract for the motor subsystem."""
+"""电机子系统的普通命令纯 ownership 契约。"""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ class OwnershipResult:
 
 
 class MotorOwnershipCore:
-    """Fail-closed two-phase Flight ownership and local command lease."""
+    """失效关闭的两阶段 Flight ownership 与本地命令 lease。"""
 
     def __init__(
         self, *, handoff_timeout_sec: float, command_timeout_sec: float
@@ -168,7 +168,7 @@ class MotorOwnershipCore:
         *,
         now: float,
     ) -> OwnershipResult:
-        """Validate safe-stop ordering without turning it into a heartbeat."""
+        """校验 safe-stop 顺序，但不把它当作 heartbeat。"""
 
         result = self._validate_command(
             authority_epoch, generation, command_sequence, now=now

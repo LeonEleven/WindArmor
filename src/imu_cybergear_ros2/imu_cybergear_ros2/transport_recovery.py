@@ -1,4 +1,4 @@
-"""Pure-software transport fault events and bounded runtime recovery."""
+"""纯软件 transport 故障事件与有界运行时恢复。"""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from typing import Callable, Optional
 
 
 class TransportEventType(str, Enum):
-    """Stable transport diagnostics, separate from motor feedback callbacks."""
+    """与电机反馈回调分离的稳定 transport 诊断类型。"""
 
     DISCONNECTED = "disconnected"
     READ_ERROR = "read_error"
@@ -24,7 +24,7 @@ class TransportEventType(str, Enum):
 
 @dataclass(frozen=True)
 class TransportEvent:
-    """One immutable transport diagnostic event."""
+    """单个不可变 transport 诊断事件。"""
 
     event_type: TransportEventType
     backend: str
@@ -38,7 +38,7 @@ class TransportEvent:
 
 
 class CyberGearTransportError(RuntimeError):
-    """Base class for errors proving a transport operation failed."""
+    """可证明 transport 操作失败的错误基类。"""
 
     def __init__(self, message: str, *, event: Optional[TransportEvent] = None):
         super().__init__(message)
@@ -46,7 +46,7 @@ class CyberGearTransportError(RuntimeError):
 
 
 class CyberGearDisconnectedError(CyberGearTransportError):
-    """The selected backend has no usable open transport."""
+    """所选后端没有可用且已打开的 transport。"""
 
 
 class TransportRecoveryState(str, Enum):
@@ -92,7 +92,7 @@ class ReconnectPolicy:
             raise ValueError("reconnect_backoff_multiplier must be >= 1.0")
 
     def delay_after_failure(self, attempt: int) -> float:
-        """Delay after the numbered failed attempt, clamped to the maximum."""
+        """返回指定失败次数后的延迟，并限制在最大值内。"""
         if attempt <= 0:
             raise ValueError("attempt must be greater than zero")
         return min(
@@ -111,11 +111,10 @@ class TransportRecoverySnapshot:
 
 
 class TransportRecoveryCoordinator:
-    """Run one bounded, cancellable transport-only recovery sequence.
+    """运行一次有界、可取消且仅涉及 transport 的恢复序列。
 
-    The coordinator never initializes motors and never replays a command.  Its
-    injected callables are expected to serialize driver I/O outside the node
-    state lock.
+    协调器绝不初始化电机，也绝不重放命令。注入的可调用对象应在节点状态锁之外
+    串行化驱动 I/O。
     """
 
     def __init__(
@@ -166,7 +165,7 @@ class TransportRecoveryCoordinator:
             )
 
     def request_recovery(self, event: TransportEvent) -> bool:
-        """Latch the first current-generation fault and start one worker."""
+        """锁存当前 generation 的首个故障并启动一个 worker。"""
         current_generation = self._generation_fn()
         with self._lock:
             if not self._accepting_requests:
@@ -190,7 +189,7 @@ class TransportRecoveryCoordinator:
         return True
 
     def disallow_and_cancel(self, *, join_timeout_sec: float = 2.0) -> bool:
-        """Prevent new work, interrupt backoff, and join the current worker."""
+        """阻止新任务、中断退避并等待当前 worker 退出。"""
         with self._lock:
             self._accepting_requests = False
             self._cancel_event.set()
@@ -210,7 +209,7 @@ class TransportRecoveryCoordinator:
         return not alive
 
     def allow_requests_if_idle(self) -> bool:
-        """Resume normal-session monitoring only when no fault was latched."""
+        """仅在没有故障锁存时恢复 normal session 监控。"""
         with self._lock:
             if self._state is not TransportRecoveryState.IDLE:
                 return False
@@ -219,7 +218,7 @@ class TransportRecoveryCoordinator:
             return True
 
     def clear_callbacks(self) -> None:
-        """Release node-owned callback references after cancellation."""
+        """取消后释放节点持有的回调引用。"""
         with self._lock:
             self._event_sink = lambda _event: None
             self._stop_for_fault = lambda _event: None
@@ -234,9 +233,8 @@ class TransportRecoveryCoordinator:
             try:
                 self._stop_for_fault(fault)
             except Exception:
-                # The injected production stop path is already best-effort;
-                # an unexpected wrapper failure still must not prevent ERROR
-                # latching or bounded transport recovery.
+                # 注入的生产停止路径已采用 best-effort；意外的 wrapper 失败仍不得
+                # 阻止 ERROR 锁存或有界 transport 恢复。
                 pass
             try:
                 self._close_transport()
@@ -290,9 +288,8 @@ class TransportRecoveryCoordinator:
                     continue
 
                 if self._cancel_event.is_set():
-                    # A lifecycle cancellation may race an in-progress open.
-                    # Close a connection that completed after cancellation so
-                    # deactivate/cleanup can never leave it reopened.
+                    # lifecycle 取消可能与正在执行的 open 竞争。关闭取消后才完成的连接，
+                    # 确保 deactivate/cleanup 不会遗留重新打开的连接。
                     try:
                         self._close_transport()
                     finally:
@@ -339,5 +336,5 @@ class TransportRecoveryCoordinator:
         try:
             self._event_sink(event)
         except Exception:
-            # Diagnostics must never terminate the safety/recovery worker.
+            # 诊断不得终止安全/恢复 worker。
             pass

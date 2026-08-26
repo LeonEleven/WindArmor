@@ -1,19 +1,18 @@
-# WindArmor Flight Control API
+# WindArmor 飞控 API
 
-## Audience
+## 阅读对象
 
-本文是算法开发者查阅类型、单位、字段语义、factory 和 validation 的 reference。第一次写
-controller 请先按 [Algorithm Developer Guide](ALGORITHM_DEVELOPER_GUIDE.md) 操作；Runtime、
-authority、ownership、lease 和 rollback 见
-[Flight Control Architecture](FLIGHT_CONTROL_ARCHITECTURE.md)。
+本文供算法开发者查阅类型、单位、字段语义、工厂函数（factory）和校验规则（validation）。
+第一次编写控制器时，请先阅读[算法开发者指南](ALGORITHM_DEVELOPER_GUIDE.md)；Runtime、
+控制权（authority）、控制归属（ownership）、命令时效租约（lease）和回滚（rollback）见
+[飞控架构](FLIGHT_CONTROL_ARCHITECTURE.md)。
 
-v0.4.0 Flight control stack 已完成该 release 对应的 hardware/functional verification，结果和
-限制记录在
-[v0.4.0 Hardware Verification Record](verification/v0.4.0/HARDWARE_VERIFICATION_RECORD.md)。该事实
+v0.4.0 飞控栈已完成该版本对应的硬件与功能验证，结果和限制记录在
+[v0.4.0 硬件与功能验证记录](verification/v0.4.0/HARDWARE_VERIFICATION_RECORD.md)。该事实
 不表示任意新算法、性能边界或新硬件场景已经验证或获得授权。默认配置仍为
 `flight_takeover_enabled=false`。
 
-## Quick contract
+## 核心契约
 
 算法边界是纯 Python：
 
@@ -27,11 +26,11 @@ class FlightController:
 ```
 
 - 输入是不可变 `FlightState`，输出是新的 `FlightCommand`；
-- normal command 包含全部配置 motor keys 和左右 fan payload；
-- 无法安全计算时返回 payload-free `FlightCommand.safe_stop()`；
-- 算法不 import ROS/hardware library，不 publish/call service，不管理 authority；
-- Runtime 与 lower-level safety 始终保留最终拒绝权；
-- 算法测试使用 fake/synthetic state，不构成实机验证。
+- 普通命令包含全部配置电机键和左右风扇载荷；
+- 无法安全计算时返回不含载荷的 `FlightCommand.safe_stop()`；
+- 算法不导入 ROS/硬件库，不发布消息、不调用服务，也不管理控制权；
+- Runtime 与底层安全机制始终保留最终拒绝权；
+- 算法测试使用 fake/synthetic 状态，不构成实机验证。
 
 ## FlightController
 
@@ -42,9 +41,9 @@ def reset(self) -> None:
     ...
 ```
 
-只清理 algorithm-local state，例如积分、滤波历史、baseline 或算法内部 mode。Runtime 创建
-controller 后调用它；新的 atomic authority session 提交时也会 reset，并丢弃 handoff 前的
-preview。它不能清除 ERROR/E-STOP、enable hardware、set zero 或恢复 authority。
+只清理算法内部状态，例如积分、滤波历史、基线或算法内部模式。Runtime 创建控制器后会
+调用它；新的原子控制权会话提交时也会调用 `reset()`，并丢弃交接前的预览。它不能清除
+ERROR/E-STOP、启用硬件、设置零点或恢复控制权。
 
 ### `update(state, dt)`
 
@@ -53,10 +52,10 @@ def update(self, state: FlightState, dt: float) -> FlightCommand:
     ...
 ```
 
-`dt` 是相邻 controller tick 的本地 monotonic 时间差，单位秒。它必须按可变的正有限值处理，
-不能假设固定频率，也不应在算法中读取 ROS clock 或 hardware clock。
+`dt` 是相邻控制器周期之间的本地单调时钟时间差，单位秒。算法必须把它作为可变的正有限值
+处理，不能假设固定频率，也不应读取 ROS 时钟或硬件时钟。
 
-## Controller factory
+## 控制器工厂函数
 
 配置使用 `module.path:factory_name`：
 
@@ -64,7 +63,7 @@ def update(self, state: FlightState, dt: float) -> FlightCommand:
 controller_factory: "windarmor_flight_control.algorithms.flight_controller:create_controller"
 ```
 
-factory 支持以下 current contract：
+工厂函数支持以下当前契约：
 
 ```python
 def create_controller(
@@ -74,77 +73,76 @@ def create_controller(
     ...
 ```
 
-loader 也兼容只接受 `required_motor_names` 的旧 factory。module import、attribute lookup、
-signature binding、factory execution 或返回对象缺少 callable `reset/update` 时抛出
-`ControllerLoadError`。factory 和算法模块必须保持 no-ROS/no-hardware import boundary。
+加载器也兼容只接受 `required_motor_names` 的旧工厂函数。模块导入、属性查找、函数签名
+绑定、工厂函数执行失败，或返回对象缺少可调用的 `reset/update` 时，都会抛出
+`ControllerLoadError`。工厂函数和算法模块必须保持不导入 ROS/硬件的边界。
 
-当前 factory：
+当前工厂函数：
 
-- default：`algorithms.flight_controller:create_controller`，继续使用 stateless API fixture；
-- newcomer：`algorithms.example_algorithm_controller:create_controller`，non-default、
-  software-first；
-- verification：`algorithms.bounded_verification_controller:create_controller`，仅用于受控
-  release/hardware verification，不是新算法模板。
+- 默认：`algorithms.flight_controller:create_controller`，继续使用无状态 API fixture；
+- 新人示例：`algorithms.example_algorithm_controller:create_controller`，非默认、软件优先；
+- 验证专用：`algorithms.bounded_verification_controller:create_controller`，仅用于受控的
+  版本/硬件验证，不是新算法模板。
 
 ## FlightState
 
-`FlightState` 及嵌套值是 frozen dataclass。`motors` 在构造时复制为只读 mapping，因此算法
-不能修改当前 snapshot 或 adapter cache。
+`FlightState` 及其嵌套值都是冻结的 dataclass。`motors` 在构造时复制为只读映射，因此算法
+不能修改当前状态快照或适配器缓存。
 
-### Top-level fields
+### 顶层字段
 
-| Field | Python type | Unit / meaning | `None`? | Safe usage |
+| 字段 | Python 类型 | 单位 / 含义 | 是否可为 `None` | 安全使用说明 |
 |---|---|---|---|---|
-| `timestamp_sec` | `float` | Runtime-local monotonic seconds | No | 只作 snapshot 时间，不与 wall/ROS time 混用 |
-| `sequence` | `int` | Runtime-local non-negative snapshot sequence | No | 只比较同一 Runtime session 内顺序 |
-| `imu` | `ImuState` | paired IMU snapshot | No | 先检查 `valid/fresh` |
-| `motors` | `Mapping[str, MotorState]` | logical motor → feedback | No | normal output 使用同一 required key set |
-| `fans` | `FanSystemState` | observed fan state/output | No | unknown 与明确 stopped 分开 |
-| `system` | `SystemState` | Runtime safety/authority summary | No | freshness 与 actuation readiness 分开判断 |
+| `timestamp_sec` | `float` | Runtime 内部单调时钟时间，单位秒 | 否 | 只作状态快照时间，不与墙上时钟或 ROS 时间混用 |
+| `sequence` | `int` | Runtime 内部非负状态快照序号 | 否 | 只比较同一 Runtime 会话内的顺序 |
+| `imu` | `ImuState` | 已配对的 IMU 状态快照 | 否 | 先检查 `valid/fresh` |
+| `motors` | `Mapping[str, MotorState]` | 逻辑电机名 → 电机反馈 | 否 | 普通输出使用同一组必要键 |
+| `fans` | `FanSystemState` | 已观测的风扇状态 / 输出 | 否 | 未知状态与明确停止分开处理 |
+| `system` | `SystemState` | Runtime 安全状态与控制权摘要 | 否 | 分别判断新鲜度和执行器就绪条件 |
 
 ### ImuState
 
-| Field | Type | Unit / frame / sign | `None` and validity |
+| 字段 | 类型 | 单位 / 坐标系 / 符号 | `None` 与有效性 |
 |---|---|---|---|
-| `orientation` | `Quaternion \| None` | unitless `x/y/z/w`, normalized by adapter | unknown 时 `None`; valid IMU 必须存在 |
-| `roll_rad` | `float \| None` | rad; raw orientation Euler roll | unknown 时 `None` |
-| `pitch_rad` | `float \| None` | rad; raw orientation Euler pitch | unknown 时 `None` |
-| `yaw_rad` | `float \| None` | rad; raw orientation Euler yaw | unknown 时 `None` |
-| `relative_roll_rad` | `float \| None` | rad; axis-corrected roll minus current zero reference, normalized | valid paired state 必须存在 |
-| `relative_pitch_rad` | `float \| None` | rad; axis-corrected pitch minus current zero reference, normalized | valid paired state 必须存在 |
-| `angular_velocity_rad_s` | `Vector3 \| None` | rad/s in IMU frame | valid state 必须存在 |
-| `linear_acceleration_m_s2` | `Vector3 \| None` | m/s² in IMU frame | valid state 必须存在 |
-| `sample_age_sec` | `float \| None` | non-negative local age, seconds | valid/fresh 时必须存在 |
-| `valid` | `bool` | structure, finite values, connection and zero generation valid | No |
-| `fresh` | `bool` | valid and age within configured threshold | `True` requires `valid=True` |
-| `connected` | `bool \| None` | observed IMU connection | unobserved is `None`, not false |
-| `zero_generation` | `int \| None` | observed non-negative IMU-zero generation | unobserved is `None` |
+| `orientation` | `Quaternion \| None` | 无量纲 `x/y/z/w`，由适配器归一化 | 未知时为 `None`；有效 IMU 必须存在 |
+| `roll_rad` | `float \| None` | rad；原始姿态的欧拉滚转角 | 未知时为 `None` |
+| `pitch_rad` | `float \| None` | rad；原始姿态的欧拉俯仰角 | 未知时为 `None` |
+| `yaw_rad` | `float \| None` | rad；原始姿态的欧拉偏航角 | 未知时为 `None` |
+| `relative_roll_rad` | `float \| None` | rad；轴向修正后的滚转角减去当前零点，并完成归一化 | 有效配对状态必须存在 |
+| `relative_pitch_rad` | `float \| None` | rad；轴向修正后的俯仰角减去当前零点，并完成归一化 | 有效配对状态必须存在 |
+| `angular_velocity_rad_s` | `Vector3 \| None` | IMU 坐标系中的 rad/s | 有效状态必须存在 |
+| `linear_acceleration_m_s2` | `Vector3 \| None` | IMU 坐标系中的 m/s² | 有效状态必须存在 |
+| `sample_age_sec` | `float \| None` | 非负的本地样本年龄，单位秒 | `valid/fresh` 时必须存在 |
+| `valid` | `bool` | 结构、有限数值、连接和零点代次均有效 | 否 |
+| `fresh` | `bool` | 有效且年龄未超过配置阈值 | `True` 要求 `valid=True` |
+| `connected` | `bool \| None` | 已观测的 IMU 连接状态 | 未观测时为 `None`，不是 false |
+| `zero_generation` | `int \| None` | 已观测的非负 IMU 零点代次 | 未观测时为 `None` |
 
-raw 与 relative observation 必须使用相同 source stamp 才能配对。当前没有公开
+原始观测与相对观测必须使用相同来源时间戳才能配对。当前没有公开
 `relative_yaw_rad`。物理安装为 X+ 前、Y+ 左、Z+ 上；API 正负值沿发布的 corrected frame，
-算法不得未经机械审核推断 actuator 方向。详见 [Hardware Reference](HARDWARE_REFERENCE.md)。
+算法不得未经机械审核推断执行器方向。详见[硬件参考](HARDWARE_REFERENCE.md)。
 
-示例：`relative_pitch_rad=0.10` 表示当前 corrected pitch 相对最新 zero reference 为
-`+0.10 rad`，不是 `+0.10°`，也不自动表示某个 motor 应正转。
+示例：`relative_pitch_rad=0.10` 表示修正后的当前俯仰角相对最新零点为 `+0.10 rad`，
+不是 `+0.10°`，也不自动表示某个电机应正转。
 
 ### MotorState
 
-| Field | Type | Unit / meaning | `None` and safe usage |
+| 字段 | 类型 | 单位 / 含义 | `None` 与安全使用说明 |
 |---|---|---|---|
-| `name` | `str` | stable logical name | non-empty; 与 mapping key 相同 |
-| `position_rad` | `float \| None` | CyberGear feedback position, rad | no verified feedback 时 `None`，不是零 |
-| `velocity_rad_s` | `float \| None` | rad/s | no verified feedback 时 `None` |
-| `torque_nm` | `float \| None` | N·m | 不得推导 current |
-| `temperature_c` | `float \| None` | °C | no verified feedback 时 `None` |
-| `device_mode` | `int \| None` | verified protocol device mode | presence 受完整 feedback 约束 |
-| `fault_flags` | `int \| None` | verified unsigned firmware fault bits | healthy 要求为 `0` |
-| `feedback_age_sec` | `float \| None` | non-negative local age, seconds | valid/fresh 时存在 |
-| `has_feedback` | `bool` | complete feedback frame presence | false 时物理字段必须全为 `None` |
-| `valid` | `bool` | complete frame passes structural/protocol checks | No |
-| `fresh` | `bool` | valid feedback within threshold | `True` requires valid |
-| `healthy` | `bool` | valid + fresh + adapter safety checks | `True` requires zero fault flags |
+| `name` | `str` | 稳定的逻辑名称 | 非空；与映射键相同 |
+| `position_rad` | `float \| None` | CyberGear 反馈位置，rad | 没有可验证反馈时为 `None`，不是零 |
+| `velocity_rad_s` | `float \| None` | rad/s | 没有可验证反馈时为 `None` |
+| `torque_nm` | `float \| None` | N·m | 不得据此推导电流 |
+| `temperature_c` | `float \| None` | °C | 没有可验证反馈时为 `None` |
+| `device_mode` | `int \| None` | 已验证的协议设备模式 | 是否存在受完整反馈约束 |
+| `fault_flags` | `int \| None` | 已验证的无符号固件故障位 | `healthy` 要求为 `0` |
+| `feedback_age_sec` | `float \| None` | 非负的本地反馈年龄，单位秒 | `valid/fresh` 时存在 |
+| `has_feedback` | `bool` | 是否存在完整反馈帧 | false 时物理字段必须全为 `None` |
+| `valid` | `bool` | 完整帧通过结构与协议检查 | 否 |
+| `fresh` | `bool` | 有效反馈未超过新鲜度阈值 | `True` 要求 `valid=True` |
+| `healthy` | `bool` | 有效、新鲜且通过适配器安全检查 | `True` 要求故障位为零 |
 
-Current logical names and units:
+当前逻辑名称和单位：
 
 ```text
 left_lift    position in rad
@@ -153,49 +151,50 @@ right_pitch  position in rad
 right_lift   position in rad
 ```
 
-这些名称是算法 key，不是 CAN ID。normal command 必须包含配置中的完整 key set；保持其他轴
-应显式输出其本次 baseline target，不能省略 key 或依赖旧 frame。
+这些名称是算法键，不是 CAN ID。普通命令必须包含配置中的完整键集合；保持其他轴时应
+显式输出本次基线目标，不能省略键或依赖旧帧。
 
-### Fan state
+### 风扇状态
 
 每个 `FanChannelState`：
 
-| Field | Type | Meaning |
+| 字段 | 类型 | 含义 |
 |---|---|---|
-| `applied_command` | `float \| None` | observed normalized applied output in `[0,1]`; not RPM/thrust |
-| `output_known` | `bool` | 是否有依据认为 applied output 已知 |
+| `applied_command` | `float \| None` | 已观测的归一化实际输出，范围 `[0,1]`；不是 RPM 或推力 |
+| `output_known` | `bool` | 是否有依据确认实际输出已知 |
 
-`output_known=False` 时 `applied_command` 必须为 `None`；known value 才能是 `[0,1]`。
+`output_known=False` 时 `applied_command` 必须为 `None`；只有已知值才能位于 `[0,1]`。
 `FanSystemState.enabled` 和 `control_state` 均可为 `None`，表示尚未观测；它不同于明确的
-`enabled=False` 或明确 state。空字符串不是合法 unknown。
+`enabled=False` 或明确状态。空字符串不是合法的未知值。
 
 ### SystemState
 
-| Field | Type | Meaning / safe usage |
+| 字段 | 类型 | 含义 / 安全使用说明 |
 |---|---|---|
 | `command_authority` | `CommandAuthority` | `NONE/MANUAL/LEGACY_AUTO/FLIGHT_CONTROL` |
-| `authority_epoch` | `int` | current Flight Runtime session identity; no Flight authority 时 `0` |
-| `authority_generation` | `int` | current authority generation; no Flight authority 时 `0` |
-| `e_stop_active` | `bool \| None` | authoritative aggregate; unknown is `None`, never treat as false |
-| `motor_control_mode` | `str \| None` | observed public motor mode |
-| `fan_control_state` | `str \| None` | observed fan manager state |
-| `flight_control_active` | `bool` | Runtime authority state is active |
-| `actuation_allowed` | `bool` | Runtime has satisfied current dispatch gate |
-| `required_inputs_fresh` | `bool` | paired IMU fresh **and** every configured motor feedback fresh |
+| `authority_epoch` | `int` | 当前 Flight Runtime 会话标识；没有 Flight 控制权时为 `0` |
+| `authority_generation` | `int` | 当前控制权代次；没有 Flight 控制权时为 `0` |
+| `e_stop_active` | `bool \| None` | 权威聚合结果；未知时为 `None`，绝不能当作 false |
+| `motor_control_mode` | `str \| None` | 已观测的公开电机模式 |
+| `fan_control_state` | `str \| None` | 已观测的风扇管理器状态 |
+| `flight_control_active` | `bool` | Runtime 控制权状态是否为 ACTIVE |
+| `actuation_allowed` | `bool` | Runtime 是否已满足当前命令下发门槛 |
+| `required_inputs_fresh` | `bool` | 已配对 IMU 新鲜，且每个配置电机反馈都新鲜 |
 
-`required_inputs_fresh` deliberately excludes fan output/state, motor/fan authoritative safety readback,
-E-STOP clearance, ownership/token readiness and authority commit. It is an input-freshness summary, not
-“the whole system is ready.” An algorithm commonly uses false as a reason to safe-stop, but must not use
-true as permission to touch hardware. `actuation_allowed` is the separate Runtime dispatch decision;
-lower-level managers, E-STOP, ERROR, watchdogs, leases and soft limits still retain final veto.
+`required_inputs_fresh` 表示当前已配对 IMU 数据和全部配置电机反馈是否满足 Runtime 的
+新鲜度条件。它有意排除风扇输出/状态、电机和风扇的权威安全回读、E-STOP 是否解除、
+控制归属/token 是否就绪以及控制权提交；它不是“整个系统已经可以执行”的总状态。
+算法通常可在其为 false 时请求安全停止，但绝不能在其为 true 时自行接触硬件。
+`actuation_allowed` 是 Runtime 独立作出的命令下发裁决；底层管理器、E-STOP、ERROR、
+看门狗、命令时效租约和软限位仍保留最终否决权。
 
-Examples:
+示例：
 
 ```python
 if not state.system.required_inputs_fresh:
     return FlightCommand.safe_stop()
 
-# This is still only an algorithm intent. Do not dispatch hardware yourself.
+# 这仍然只是算法控制意图，算法不得自行向硬件下发命令。
 command_is_preview = not state.system.actuation_allowed
 ```
 
@@ -215,15 +214,15 @@ class FlightCommand:
     request_safe_stop: bool = False
 ```
 
-### Normal command
+### 普通命令
 
 - `request_safe_stop=False`；
-- `motor_positions_rad` 包含且只包含全部 required motor keys；values 是有限 rad；
-- `fan_commands.left/right` 是有限 `[0.0,1.0]` normalized command；
-- `0.0` fan command 是 stop intent；`1.0` 不是 RPM、thrust 或 PWM microseconds；
-- validation 不 silent clamp、不补缺失 key；adapter/lower layer 继续执行软限位和 PWM mapping。
+- `motor_positions_rad` 包含且只包含全部必要电机键；各值为有限的 rad；
+- `fan_commands.left/right` 是 `[0.0,1.0]` 内的有限归一化命令；
+- `0.0` 风扇命令表示停止意图；`1.0` 不是 RPM、推力或 PWM 微秒值；
+- 校验过程不会静默限幅或补齐缺失键；适配器和底层继续执行软限位与 PWM 映射。
 
-### Safe-stop command
+### 安全停止命令
 
 ```python
 FlightCommand.safe_stop()
@@ -239,36 +238,36 @@ FlightCommand(
 )
 ```
 
-safe-stop 与 normal payload 互斥；不能携带 actuator targets，也不能复用上一帧。它是算法放弃
-普通控制的意图，不等于 system E-STOP、不清除 ERROR，也不恢复 legacy control。
+safe-stop 与普通载荷互斥；不能携带执行器目标，也不能复用上一帧。它表示算法放弃普通
+控制意图，不等于系统 E-STOP、不清除 ERROR，也不恢复旧控制路径。
 
-## Units and coordinate conventions
+## 单位与坐标约定
 
-| Quantity | Unit / convention |
+| 物理量 | 单位 / 约定 |
 |---|---|
-| angles and motor positions | rad |
-| angular velocity | rad/s |
-| torque | N·m |
-| temperature | °C |
-| linear acceleration | m/s² |
-| snapshot age / `dt` | monotonic seconds |
-| fan command | dimensionless `[0,1]` |
-| quaternion | unitless `x,y,z,w` |
+| 角度与电机位置 | rad |
+| 角速度 | rad/s |
+| 力矩 | N·m |
+| 温度 | °C |
+| 线加速度 | m/s² |
+| 状态快照年龄 / `dt` | 单调时钟秒数 |
+| 风扇命令 | 无量纲 `[0,1]` |
+| 四元数 | 无量纲 `x,y,z,w` |
 
-不要把 degrees、PWM microseconds、CAN ID、motor sign 或 physical pin 混入算法 interface。
+不要把角度制、PWM 微秒值、CAN ID、电机方向符号或物理引脚混入算法接口。
 
-## Validity, freshness and `None`
+## 有效性、新鲜度与 `None`
 
-- `None`：来源尚未观测、当前 unknown 或不能验证；
+- `None`：来源尚未观测、当前未知或不能验证；
 - `valid`：结构、有限值和来源契约通过；
-- `fresh`：valid 且年龄在 configured threshold 内；
-- `healthy`：motor valid/fresh 且 adapter/safety checks 没有设备健康故障；
-- `False`：明确裁决为 false，不是 unknown 的替代。
+- `fresh`：有效且年龄在配置阈值内；
+- `healthy`：电机有效、新鲜，且适配器/安全检查没有设备健康故障；
+- `False`：明确裁决为 false，不是未知状态的替代。
 
-连接不保证已有样本，valid old sample 不等于 fresh，收到正常 frame 也不能自动清除 latched
-ERROR。算法不能用数值零、空字符串或 false 填充 unknown。
+连接不保证已有样本，有效的旧样本不等于新鲜，收到正常帧也不能自动清除已锁存的 ERROR。
+算法不能用数值零、空字符串或 false 填充未知状态。
 
-## Validation rules
+## 校验规则
 
 ```python
 from windarmor_flight_control.core.validation import (
@@ -283,21 +282,21 @@ command = controller.update(state, dt=0.02)
 validate_flight_command(command, required)
 ```
 
-validation 是 side-effect-free pure function，失败时抛出 `FlightValidationError`，不修改输入、
-不访问硬件、不修正非法值。主要拒绝：
+校验函数是无副作用的纯函数，失败时抛出 `FlightValidationError`，不修改输入、不访问硬件、
+也不修正非法值。主要拒绝：
 
-- NaN/Inf、负 age、非法 boolean/presence 组合；
-- invalid/fresh/healthy 矛盾；
-- unknown 被伪装成已知；
-- motor key 缺失或多余；
-- normal payload 缺失；
-- fan command 超出 `[0,1]`；
-- safe-stop 混入 actuator payload；
-- authority/token/actuation cross-field 冲突。
+- NaN/Inf、负年龄、非法的布尔值/存在性组合；
+- `invalid/fresh/healthy` 互相矛盾；
+- 未知状态被伪装成已知；
+- 电机键缺失或多余；
+- 普通载荷缺失；
+- 风扇命令超出 `[0,1]`；
+- safe-stop 混入执行器载荷；
+- 控制权/token/执行许可的跨字段冲突。
 
-## Minimal examples
+## 最小示例
 
-### Fake unit state
+### Fake 单元测试状态
 
 ```python
 from windarmor_flight_control.algorithms import ExampleAlgorithmController
@@ -310,9 +309,9 @@ controller.reset()
 command = controller.update(state, 0.02)
 ```
 
-`make_fake_flight_state()` 的数字是 test fixture，不是真实机械中位或硬件 safety default。
+`make_fake_flight_state()` 中的数值是测试 fixture，不是真实机械中位或硬件安全默认值。
 
-### Targeted tests
+### 定向测试
 
 ```bash
 PYTHONPATH=src/windarmor_flight_control \
@@ -320,27 +319,27 @@ python3 -m pytest -p no:cacheprovider \
   src/windarmor_flight_control/test/test_example_algorithm_controller.py -q
 ```
 
-### Software-only synthetic DRY_RUN
+### 纯软件 synthetic DRY_RUN
 
 ```bash
 PYTHONPATH=src/windarmor_flight_control \
 python3 -m windarmor_flight_control.synthetic_dry_run
 ```
 
-该 demo 用 factory loader、fake `FlightState` 和真实 validation 生成 human-readable preview；
-它保持 `authority=NONE`、`actuation_allowed=false`，不创建 ROS/hardware objects。
+该演示通过工厂加载器、fake `FlightState` 和真实校验逻辑生成易读的预览；它保持
+`authority=NONE`、`actuation_allowed=false`，不创建 ROS 或硬件对象。
 
-## Advanced references
+## 进阶参考
 
-- step-by-step tutorial：[Algorithm Developer Guide](ALGORITHM_DEVELOPER_GUIDE.md)
-- Runtime/safety/authority internals：[Flight Control Architecture](FLIGHT_CONTROL_ARCHITECTURE.md)
-- physical mapping/frame/wiring：[Hardware Reference](HARDWARE_REFERENCE.md)
-- release-specific hardware evidence：
-  [v0.4.0 Hardware Verification Record](verification/v0.4.0/HARDWARE_VERIFICATION_RECORD.md)
-- complete historical execution/provenance：
-  [v0.4.0 Hardware Verification Plan](V0.4.0_HARDWARE_VERIFICATION_PLAN.md)
-- actual behavior：`core/`、`algorithms/`、`runtime/`、config 和 tests
+- 分步教程：[算法开发者指南](ALGORITHM_DEVELOPER_GUIDE.md)
+- Runtime/安全/控制权内部机制：[飞控架构](FLIGHT_CONTROL_ARCHITECTURE.md)
+- 物理映射、坐标系和接线：[硬件参考](HARDWARE_REFERENCE.md)
+- 特定版本的硬件证据：
+  [v0.4.0 硬件与功能验证记录](verification/v0.4.0/HARDWARE_VERIFICATION_RECORD.md)
+- 完整历史执行过程与来源：
+  [v0.4.0 硬件验证执行计划](V0.4.0_HARDWARE_VERIFICATION_PLAN.md)
+- 实际行为：`core/`、`algorithms/`、`runtime/`、配置和测试
 
-算法不得直接访问 CyberGear/CAN/serial/GPIO/PWM、hardware service/backend，不得清除
-ERROR/E-STOP、enable/disable hardware、set zero、修改 authority 或绕过 manager、watchdog、
-soft limit 和 shutdown。需要这些机制的维护者应进入 Architecture，而不是扩展算法 API。
+算法不得直接访问 CyberGear/CAN/串口/GPIO/PWM 或硬件服务/后端，不得清除 ERROR/E-STOP、
+启用/停用硬件、设置零点、修改控制权，或绕过管理器、看门狗、软限位和关闭清理。需要这些
+机制的维护者应查阅架构文档，而不是扩展算法 API。

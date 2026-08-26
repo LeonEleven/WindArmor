@@ -1,4 +1,4 @@
-"""Authority identity, ordering, and post-grant barriers for command envelopes."""
+"""命令包络的控制权标识、顺序与授权后屏障。"""
 
 from __future__ import annotations
 
@@ -12,10 +12,10 @@ from .validation import FlightValidationError, validate_flight_command
 
 @dataclass(frozen=True)
 class FlightCommandEnvelope:
-    """One validated intent bound to an authority token and post-cutoff state.
+    """绑定到控制权 token 和截止点后状态的一条已校验控制意图。
 
-    Receivers reject old epoch/generation pairs and duplicate/out-of-order sequence
-    numbers. A safe-stop intent remains payload-free inside the envelope.
+    接收方拒绝旧 epoch/generation 组合以及重复或乱序的 sequence。safe-stop
+    控制意图在命令包络内仍不携带载荷。
     """
 
     authority_epoch: int
@@ -91,7 +91,7 @@ def validate_command_envelope(
 
 
 class CommandEnvelopeSequencer:
-    """Creates no envelope until a post-grant FlightState is supplied."""
+    """只有取得控制权后的 ``FlightState`` 到达后才创建命令包络。"""
 
     def __init__(self, required_motor_names: Iterable[str]) -> None:
         self._required_motor_names = tuple(required_motor_names)

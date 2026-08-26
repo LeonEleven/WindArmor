@@ -216,9 +216,8 @@ class ImuMotorControllerNode(LifecycleNode):
         self.declare_parameter("m4_min", -1.57)
         self.declare_parameter("m4_max", 0.0)
 
-        # Safety thresholds cover stale commands/feedback, thermal/fault latches,
-        # position error and transport recovery. Units are encoded in parameter names;
-        # motor_current_limit_a is reserved because 0x02 feedback has no numeric current.
+        # 安全阈值覆盖命令/反馈过期、温度/故障锁存、位置误差和 transport 恢复。
+        # 单位编码在参数名中；由于 0x02 反馈没有数值电流，motor_current_limit_a 仅作保留。
         self.declare_parameter("watchdog_timeout_ms", 200)
         self.declare_parameter("motor_temp_limit_degC", 80.0)
         self.declare_parameter("motor_temp_critical_degC", 90.0)
@@ -309,8 +308,8 @@ class ImuMotorControllerNode(LifecycleNode):
         self._motor_feedback_received_at: Dict[int, float] = {}
         self._motor_feedback_generations: Dict[int, int] = {}
         self._motor_feedback_structured_sequence = 0
-        # This sequence spans lifecycle reconfigure within the same process so
-        # observers never accept an old safety snapshot as a new one.
+        # 此序列跨越同一进程内的 lifecycle reconfigure，避免观测器把旧安全快照
+        # 当作新快照接收。
         self._motor_safety_state_sequence = 1
         self._motor_ownership_state_sequence = 1
         self._motor_protection_flags: Dict[int, bool] = {}
@@ -784,8 +783,8 @@ class ImuMotorControllerNode(LifecycleNode):
             keyboard = self._keyboard
             transport_recovery = self._transport_recovery
 
-            # No close/release operation may race a worker that can reopen the
-            # transport.  Cancellation precedes every driver I/O below.
+            # close/release 操作不得与可能重新打开 transport 的 worker 竞争；
+            # 下方任何驱动 I/O 之前都先执行取消。
             if transport_recovery is not None:
                 attempt(
                     "cancel_transport_recovery",
@@ -1042,7 +1041,7 @@ class ImuMotorControllerNode(LifecycleNode):
             )
 
     def _publish_motor_safety_state(self) -> None:
-        """Publish authoritative readback without touching the motor driver."""
+        """发布权威回读信息，不接触电机驱动。"""
 
         publisher = self._motor_safety_state_pub
         if publisher is None:
@@ -1081,7 +1080,7 @@ class ImuMotorControllerNode(LifecycleNode):
             )
 
     def _publish_structured_motor_feedback(self) -> None:
-        """Publish a complete observer snapshot without any driver operation."""
+        """发布完整观测器快照，不执行任何驱动操作。"""
 
         publisher = self._motor_feedback_structured_pub
         config = self._config
@@ -1139,7 +1138,7 @@ class ImuMotorControllerNode(LifecycleNode):
             )
 
     def _on_driver_feedback_error(self, exc: Exception) -> None:
-        """Keep reader threads alive while making callback failures diagnosable."""
+        """保持读取线程存活，同时让回调失败可诊断。"""
         self.get_logger().error(f"电机反馈回调异常（读取线程继续运行）: {exc}")
 
     def _transport_connection_generation(self) -> int:
@@ -1149,7 +1148,7 @@ class ImuMotorControllerNode(LifecycleNode):
         return int(getattr(driver, "connection_generation", 0))
 
     def _on_driver_transport_event(self, event: TransportEvent) -> None:
-        """Latch a current-generation runtime fault without driver I/O."""
+        """不执行驱动 I/O，锁存当前 generation 的运行时故障。"""
         if event.event_type not in (
             TransportEventType.DISCONNECTED,
             TransportEventType.READ_ERROR,
@@ -1187,7 +1186,7 @@ class ImuMotorControllerNode(LifecycleNode):
             )
 
     def _on_transport_recovery_event(self, event: TransportEvent) -> None:
-        """Publish recovery diagnostics without changing the ERROR latch."""
+        """发布恢复诊断信息，不改变 ERROR 锁存。"""
         self._publish_transport_event(event)
         if event.event_type is TransportEventType.RECONNECTED:
             self.get_logger().warn(
@@ -1235,7 +1234,7 @@ class ImuMotorControllerNode(LifecycleNode):
                 driver.close()
 
     def _connect_transport_once(self) -> None:
-        """Reopen only the transport/reader; never initialize any motor."""
+        """仅重新打开 transport/读取器，绝不初始化任何电机。"""
         if not self._running:
             raise RuntimeError("lifecycle is inactive; reconnect cancelled")
         with self._driver_io_lock:

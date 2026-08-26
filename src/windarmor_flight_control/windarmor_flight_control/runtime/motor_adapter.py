@@ -1,4 +1,4 @@
-"""Structured motor feedback conversion and Flight-specific freshness."""
+"""结构化电机反馈转换与 Flight 专用新鲜度判断。"""
 
 from __future__ import annotations
 
@@ -43,10 +43,10 @@ def _unsigned_int(value: object, name: str, maximum: int) -> int:
 
 
 class MotorAdapter:
-    """Convert a complete configured feedback frame into read-only motor state.
+    """把完整的配置电机反馈帧转换为只读电机状态。
 
-    Missing feedback and locally stale samples fail closed in the snapshot. This
-    adapter observes lower-level state; it does not issue commands or grant authority.
+    反馈缺失或样本在本地过期时，状态快照执行失效后安全闭锁。本适配器只观测
+    底层状态，不发送命令，也不授予控制权。
     """
 
     def __init__(self, required_motor_names: Iterable[str]) -> None:

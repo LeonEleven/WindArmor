@@ -1,4 +1,4 @@
-"""Observer-only motor safety snapshots built from authoritative in-memory state."""
+"""依据权威内存状态构造的观测器专用电机安全快照。"""
 
 from dataclasses import dataclass
 
@@ -25,7 +25,7 @@ def build_motor_safety_snapshot(
     node_active: bool,
     feedback_safety_fault_latched: bool,
 ) -> MotorSafetySnapshot:
-    """Copy safety state without driver access or state transitions."""
+    """复制安全状态，不访问驱动，也不执行状态转换。"""
 
     if not isinstance(node_active, bool):
         raise TypeError("node_active must be a bool")

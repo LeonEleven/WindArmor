@@ -1,4 +1,4 @@
-"""Pure fake-state helpers for algorithm examples and unit tests."""
+"""供算法示例和单元测试使用的纯 fake 状态辅助函数。"""
 
 from __future__ import annotations
 
@@ -21,10 +21,10 @@ from .core.models import (
 def make_fake_flight_state(
     motor_names: Iterable[str], *, with_feedback: bool = True
 ) -> FlightState:
-    """Create a fully observed in-memory state without ROS or hardware access.
+    """创建观测完整的内存状态，且不访问 ROS 或硬件。
 
-    All numeric values are explicit test fixtures, not real safety defaults.
-    Setting ``with_feedback`` false makes actuation unavailable.
+    所有数值都是显式测试 fixture，不是真实安全默认值。把 ``with_feedback``
+    设为 false 会使执行许可不可用。
     """
 
     names = tuple(motor_names)
@@ -105,7 +105,7 @@ def make_fake_flight_state(
 
 
 def make_unobserved_flight_state(motor_names: Iterable[str]) -> FlightState:
-    """Create a startup-like state whose external observations are unknown."""
+    """创建外部观测均为未知、类似启动阶段的状态。"""
 
     state = make_fake_flight_state(motor_names, with_feedback=False)
     unknown_output = FanChannelState(applied_command=None, output_known=False)
@@ -147,7 +147,7 @@ def make_unobserved_flight_state(motor_names: Iterable[str]) -> FlightState:
 
 
 def make_stale_flight_state(motor_names: Iterable[str]) -> FlightState:
-    """Create observed, structurally valid data that is no longer fresh."""
+    """创建已观测、结构有效但不再新鲜的数据。"""
 
     state = make_fake_flight_state(motor_names)
     stale_motors = {

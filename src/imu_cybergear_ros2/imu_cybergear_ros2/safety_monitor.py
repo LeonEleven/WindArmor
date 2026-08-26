@@ -128,7 +128,7 @@ class SafetyMonitor:
         return self._health
 
     def start_feedback_monitor(self) -> None:
-        """Start a fresh activation window; create a timer only when enabled."""
+        """启动新的激活窗口；仅在启用时创建定时器。"""
         self.stop_feedback_monitor()
         self._health.activate(self._monotonic())
         if self._health.timeout_enabled:
@@ -183,7 +183,7 @@ class SafetyMonitor:
                     self._trip_motor_safety(decision)
                 return
 
-            # Only a complete valid frame may replace the most recent feedback.
+            # 只有完整合法的帧才能替换最近一次反馈。
             with self._node._lock:
                 self._node._motor_feedback[mid] = status
                 received_times = getattr(
@@ -213,8 +213,7 @@ class SafetyMonitor:
                     < getattr(self._node, "_motor_temp_critical_deg_c", 90.0)
                 )
 
-            # Safety decisions precede optional ROS publication, so a publisher
-            # failure can never suppress an ERROR trip.
+            # 安全决策先于可选的 ROS 发布，因此 publisher 失败绝不能抑制 ERROR 跳变。
             if decision.action is MotorHealthAction.WARNING:
                 self._warn_throttled(
                     f"temperature:{mid}", decision.diagnostic_message
@@ -269,7 +268,7 @@ class SafetyMonitor:
             self._node.get_logger().error(f"处理电机反馈时发生异常: {exc}")
 
     def _feedback_safety_actions_allowed(self) -> bool:
-        """Keep ingestion independent while preserving lifecycle safety actions."""
+        """保持采集独立，同时保留 lifecycle 安全动作。"""
         if self._motor_mgr is None or self._state is None:
             return False
         return self._state.state not in (

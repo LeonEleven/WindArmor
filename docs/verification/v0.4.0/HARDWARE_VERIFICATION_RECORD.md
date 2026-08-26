@@ -14,8 +14,8 @@
 | Gate B | **COMPLETE** |
 | Gate C | **COMPLETE** |
 | Gate D | **FUNCTIONAL REGRESSION PASS / COMPLETE** |
-| v0.4.0 发布状态 | **尚未发布；release readiness 仍待后续发布清理** |
-| stable release | v0.3.2 |
+| v0.4.0 发布状态 | **尚未发布；发布准备状态仍待后续收口** |
+| 当前稳定版本 | v0.3.2 |
 
 完整逐次执行过程、现场命令、失败尝试和修复推导保留在
 [v0.4.0 硬件验证执行计划](../../V0.4.0_HARDWARE_VERIFICATION_PLAN.md) 中。
@@ -39,8 +39,8 @@
 | `left_pitch` | CAN ID 3 | 左俯仰电机 |
 | `right_pitch` | CAN ID 2 | 右俯仰电机 |
 | `right_lift` | CAN ID 1 | 右升降电机 |
-| LEFT fan | GPIO12，物理 pin 32 | 本轮带电风扇 |
-| RIGHT fan | GPIO26，物理 pin 37 | Flight 验证期间 ESC 保持断电 |
+| LEFT fan | GPIO12，物理引脚 32 | 本轮带电风扇 |
+| RIGHT fan | GPIO26，物理引脚 37 | Flight 验证期间 ESC 保持断电 |
 | CAN HAT INT_1 | GPIO13 | 保留给 Waveshare 2-CH CAN HAT+ |
 
 机械、接线、方向和限制的当前权威来源是
@@ -78,26 +78,26 @@ Gate C 为 **COMPLETE**。以下 session 是各场景最终有效证据：
 
 | Gate | 最终 session | 故障/场景 | 结果 |
 | --- | --- | --- | --- |
-| C1 | `gate-evidence-20260820T024541.024256Z-924522` | stale IMU | PASS |
+| C1 | `gate-evidence-20260820T024541.024256Z-924522` | IMU 数据过期 | PASS |
 | C2 | `gate-evidence-20260820T070959.631365Z-1037382` | Runtime `SIGSTOP` / lease 失效 | PASS |
 | C3 | `gate-evidence-20260821T062508.750044Z-1360504` | Runtime 优雅退出与重启隔离 | PASS |
 | C4a | `gate-evidence-20260824T013006.286027Z-1631895` | motor lifecycle deactivate | PASS |
 | C4b | `gate-evidence-20260824T030542.834602Z-1754254` | 全局 `/e_stop` / watchdog | PASS |
 
-### 4.1 C1 — stale IMU
+### 4.1 C1 — IMU 数据过期
 
 - 受限目标：`left_pitch` 为捕获基线 `+0.05 rad`，其余三电机保持基线；
   LEFT fan `0.05`，RIGHT fan `0.0`。
 - 供电边界：四电机和 LEFT ESC 参与；RIGHT ESC 断电。
 - 操作者观察到 LEFT 风扇低速旋转并停止；电机动作只记录为小幅正向动作，不能把
   软件反馈值改写成肉眼精确角度。
-- stale IMU 后控制权按预期撤销，电机和风扇回到安全状态。
+- IMU 数据过期后控制权按预期撤销，电机和风扇回到安全状态。
 - 最终结论：**PASS**。
 
 ### 4.2 C2 — Runtime `SIGSTOP`
 
 - 受限目标和供电边界与 C1 相同。
-- continuous recorder 记录命令序号 0–130，共 131 条。
+- 连续记录器记录命令序号 0–130，共 131 条。
 - Runtime 停止后，以最后 command ROS stamp 为共同基准，motor owner 在
   `0.260380983 s` 时变为 `none`，fan owner 在 `0.293756485 s` 时失效。
 - 上述 helper/recorder 差值是可重复的观察值，不单独定义新的实时 SLA。
@@ -105,16 +105,16 @@ Gate C 为 **COMPLETE**。以下 session 是各场景最终有效证据：
 
 ### 4.3 C3 — 优雅退出与重启隔离
 
-- continuous recorder 记录旧实例命令序号 0–148，共 149 条。
+- 连续记录器记录旧实例命令序号 0–148，共 149 条。
 - 旧 Runtime epoch 为 `254107543912471`、generation 1，并以退出码 0 正常结束。
 - 新 Runtime epoch 为 `254214835192101`；新实例启动后保持 DRY_RUN，未接收旧实例
   命令，证明旧命令没有跨 epoch 继承。
 - 操作者观察到 LEFT 风扇低速旋转并在故障后停止。
 - 最终结论：**PASS**。
 
-### 4.4 C4a — motor lifecycle deactivate
+### 4.4 C4a — 电机生命周期停用
 
-- continuous recorder 记录命令序号 0–149，共 150 条；Runtime epoch 为
+- 连续记录器记录命令序号 0–149，共 150 条；Runtime epoch 为
   `495604390791197`。
 - motor controller 被 deactivate 后，`node_active=false`，Runtime 权限闭锁，
   故障路径 fail closed。
@@ -124,9 +124,9 @@ Gate C 为 **COMPLETE**。以下 session 是各场景最终有效证据：
   安全收尾，不是 C4a 的故障触发源。
 - 最终结论：**PASS**。
 
-### 4.5 C4b — 全局 E-stop / watchdog
+### 4.5 C4b — 全局 E-stop / 看门狗
 
-- continuous recorder 记录命令序号 0–99，共 100 条；Runtime epoch 为
+- 连续记录器记录命令序号 0–99，共 100 条；Runtime epoch 为
   `501315221790256`、generation 1。
 - 受限目标为 `left_pitch` 基线 `+0.05 rad`、其余电机保持基线，LEFT fan `0.05`、
   RIGHT fan `0.0`。
@@ -191,8 +191,8 @@ Gate D 的判定由三类证据组成：
 2. 用户对当前功能行为的确认；
 3. Gate C 对 v0.4.0 新增失权、重启隔离和 E-stop 安全路径的实机交叉验证。
 
-本 Gate 没有增加新的带电 session，也没有为 HOME、E-stop recovery 或显式控制权
-reclaim 重新生成 continuous recorder 证据。相关矩阵结论为 PASS，但证据等级必须
+本 Gate 没有增加新的带电会话，也没有为 HOME、E-stop 恢复或显式重新取得控制权生成新的
+连续记录器证据。相关矩阵结论为 PASS，但证据等级必须
 保持为“历史操作者验证/用户确认 + 当前安全路径交叉验证”，不能升级描述为新的
 记录器实机验证。
 
@@ -204,9 +204,9 @@ reclaim 重新生成 continuous recorder 证据。相关矩阵结论为 PASS，�
 
 | 证据 | 能证明什么 | 不能证明什么 |
 | --- | --- | --- |
-| continuous recorder | ROS 瞬态历史、命令、ownership、状态和 PWM 样本 | 操作者是否看见物理运动；未记录的总线/机械事实 |
-| timing/helper | 预定义事件之间的时序和进程状态 | 新的通用实时 SLA；物理效果 |
-| operator observation | 现场可见/可听的低速运动、停止和异常 | 软件内部精确角度、精确 PWM 或精确毫秒时间 |
+| 连续记录器 | ROS 瞬态历史、命令、控制归属、状态和 PWM 样本 | 操作者是否看见物理运动；未记录的总线/机械事实 |
+| 时序辅助工具 | 预定义事件之间的时序和进程状态 | 新的通用实时 SLA；物理效果 |
+| 操作者观察 | 现场可见/可听的低速运动、停止和异常 | 软件内部精确角度、精确 PWM 或精确毫秒时间 |
 | 软件 CI / fake / mock | 纯软件逻辑、接口、回归和 fail-close 行为 | 真实 CAN、真实串口、GPIO、电调或机械验证 |
 
 软件反馈约为 `+0.05 rad` 只表示测量/控制证据；除非操作者明确报告，否则不得写成
@@ -230,10 +230,10 @@ Cannot shutdown a ROS adapter that is not running
   证据，没有带电物理旋转验证。
 - C4b 在 E-stop 前没有观察到明显风扇旋转；该场景的正面证据是控制路径、记录器
   PWM 和停止结果。
-- Gate D 的 HOME、E-stop recovery 和显式 reclaim 等条目含历史操作者/用户确认，
-  不是新建 continuous recorder session。
+- Gate D 的 HOME、E-stop 恢复和显式重新取得控制权等条目含历史操作者/用户确认，
+  不是新建连续记录器会话。
 - 本轮没有验证性能、RPM、推力、全包线飞行能力或新的硬实时 SLA。
-- 本记录不代表 v0.4.0 已发布，也不改变 stable release 仍为 v0.3.2 的事实。
+- 本记录不代表 v0.4.0 已发布，也不改变当前稳定版本仍为 v0.3.2 的事实。
 
 ## 12. 最终处置
 

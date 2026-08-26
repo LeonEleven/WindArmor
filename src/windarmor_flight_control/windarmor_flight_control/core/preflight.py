@@ -1,4 +1,4 @@
-"""Pure, explainable preflight evaluation for authority preparation."""
+"""用于控制权准备、可解释的纯预检逻辑。"""
 
 from __future__ import annotations
 
@@ -80,10 +80,10 @@ class PreflightResult:
 
 
 def evaluate_preflight(context: PreflightContext) -> PreflightResult:
-    """Return the first point-in-time blocker in safety-first deterministic order.
+    """按安全优先的确定顺序返回当前时点的第一个阻塞原因。
 
-    READY permits the handoff attempt only; Runtime and lower-level safety/ownership
-    readback continue to supervise freshness and may revoke actuation afterward.
+    READY 只允许尝试控制权交接；Runtime 与底层安全/控制归属回读仍会持续监督
+    新鲜度，并可在之后撤销执行许可。
     """
 
     state = context.state

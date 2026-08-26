@@ -1,4 +1,4 @@
-"""Read-only fan observation normalization with explicit stale-to-unknown."""
+"""只读风扇观测归一化，并将过期观测显式转为未知。"""
 
 from __future__ import annotations
 
@@ -18,10 +18,10 @@ def _finite(value: object, name: str) -> float:
 
 
 class FanAdapter:
-    """Normalize observed applied PWM and turn stale observations into unknown.
+    """归一化已观测的实际 PWM，并把过期观测转为未知。
 
-    The result is readback, not the requested ``FanCommand``; this adapter never
-    publishes PWM, controls hardware, or grants authority.
+    结果是回读值，而不是请求的 ``FanCommand``；本适配器绝不发布 PWM、控制硬件
+    或授予控制权。
     """
 
     def __init__(self, minimum_pwm_us: float, maximum_pwm_us: float) -> None:

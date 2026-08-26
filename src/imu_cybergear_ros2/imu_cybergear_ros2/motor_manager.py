@@ -252,7 +252,7 @@ class MotorManager:
     def _startup_hold_position(
         self, motor_id: int, *, after_generation: int
     ) -> float:
-        """Return a new, validated type-2 position in native driver coordinates."""
+        """返回采用驱动原生坐标且通过校验的新 type-2 位置。"""
         with self._node._lock:
             generation = int(
                 getattr(self._node, "_motor_feedback_generations", {}).get(
@@ -353,7 +353,7 @@ class MotorManager:
     # ------------------------------------------------------------------
 
     def start_feedback_acquisition(self) -> None:
-        """Periodically request type-2 feedback without changing hold targets."""
+        """周期性请求 type-2 反馈，不改变保持目标。"""
         if self._feedback_acquisition_timer is not None:
             return
         self._feedback_acquisition_timer = self._node.create_timer(
@@ -362,14 +362,14 @@ class MotorManager:
         )
 
     def stop_feedback_acquisition(self) -> None:
-        """Stop feedback probes before lifecycle teardown or transport close."""
+        """在 lifecycle 拆除或 transport 关闭前停止反馈探测。"""
         timer = self._feedback_acquisition_timer
         self._feedback_acquisition_timer = None
         if timer is not None:
             self._node.destroy_timer(timer)
 
     def _feedback_probe_snapshot(self):
-        """Return the current safe owner and exact committed hold targets."""
+        """返回当前安全 owner 和准确的已提交保持目标。"""
         with self._node._lock:
             if (
                 not self._node._is_active
@@ -386,8 +386,8 @@ class MotorManager:
                 if not self._state.is_auto_running():
                     return None
             elif owner is MotorCommandOwner.FLIGHT_CONTROL:
-                # A newly committed Flight generation has no authoritative
-                # target until its first normal envelope is accepted.
+                # 新提交的 Flight generation 在首个 normal envelope 被接受前
+                # 没有权威目标。
                 if (
                     not self._state.is_auto_running()
                     or self._ownership.last_command_sequence is None
@@ -403,11 +403,10 @@ class MotorManager:
             )
 
     def _feedback_acquisition_tick(self) -> None:
-        """Re-send each exact authoritative loc_ref to obtain its type-2 reply.
+        """重新发送每个准确的权威 loc_ref，以取得其 type-2 回复。
 
-        CyberGear communication type 18 replies with a complete type-2 status
-        frame.  This path never commits a target, changes a mode, enables a
-        motor, sets zero, or restores an ownership session.
+        CyberGear 通信类型 18 会回复完整的 type-2 状态帧。此路径绝不提交目标、
+        更改模式、使能电机、设置零点或恢复 ownership session。
         """
         snapshot = self._feedback_probe_snapshot()
         if snapshot is None:
@@ -790,8 +789,7 @@ class MotorManager:
             ):
                 self._node._on_driver_transport_event(event)
                 return
-            # Unit-level/fallback drivers without the event channel retain the
-            # established command-fault stop and ERROR behavior.
+            # 没有事件通道的单元级/fallback 驱动保留既有的命令故障停止和 ERROR 行为。
             self.stop_motors_for_fault_once(
                 reason=f"transport_command_fault:{command_type}"
             )
@@ -828,7 +826,7 @@ class MotorManager:
             )
 
     def enter_transport_error(self, event: TransportEvent) -> bool:
-        """Latch the first transport fault without waiting for driver I/O."""
+        """不等待驱动 I/O，锁存首个 transport 故障。"""
         with self._node._lock:
             if getattr(self._node, "_transport_fault_active", False):
                 return False
@@ -854,11 +852,10 @@ class MotorManager:
         return True
 
     def enter_safety_error(self, snapshot: MotorSafetyFaultSnapshot) -> bool:
-        """Latch one feedback-safety fault and execute exactly one stop batch.
+        """锁存一个反馈安全故障，并准确执行一批停止操作。
 
-        The node state lock is released before any driver I/O.  Concurrent or
-        repeated feedback faults retain the first immutable snapshot and do not
-        issue another stop batch.
+        在任何驱动 I/O 前释放节点状态锁。并发或重复的反馈故障保留首个不可变快照，
+        且不发出另一批停止操作。
         """
         with self._node._lock:
             if getattr(self._node, "_motor_safety_fault_active", False):
@@ -920,7 +917,7 @@ class MotorManager:
         )
 
     def _ordinary_commands_blocked_unlocked(self) -> bool:
-        """Read latch booleans while holding the driver I/O lock, never state lock."""
+        """持有驱动 I/O 锁而非状态锁时读取各锁存布尔值。"""
         return bool(
             self._node._command_fault_active
             or getattr(self._node, "_motor_safety_fault_active", False)
@@ -953,7 +950,7 @@ class MotorManager:
         return all_stopped
 
     def stop_motors_for_fault_once(self, *, reason: str) -> bool:
-        """Claim and run the session's one main emergency/error stop batch."""
+        """认领并执行本 session 唯一的一批主要紧急/错误停止操作。"""
         with self._node._lock:
             if getattr(self._node, "_fault_stop_batch_claimed", False):
                 return False
@@ -962,7 +959,7 @@ class MotorManager:
         return True
 
     def reset_fault_stop_batch_after_recovery(self) -> None:
-        """Permit a later independent e-stop only after successful normal recovery."""
+        """仅在正常恢复成功后，才允许后续独立 e-stop。"""
         with self._node._lock:
             if not getattr(self._node, "_motor_safety_fault_active", False):
                 self._node._fault_stop_batch_claimed = False
@@ -1114,8 +1111,8 @@ class MotorManager:
             authority_epoch, generation, now=now, safe=safe
         )
         if result.success:
-            # Quiesce only the request that actually acquired (or already owns)
-            # the reservation; stale requests must not disturb a legacy owner.
+            # 仅静默实际取得（或已拥有）reservation 的请求；过期请求不得干扰
+            # legacy owner。
             self.halt_motion()
         self._notify_ownership_changed()
         return result
@@ -1355,7 +1352,7 @@ class MotorManager:
         return success
 
     def _zero_reference_fault_latched(self) -> bool:
-        """Abort the direct zeroing flow once any session fault is latched."""
+        """任一 session 故障锁存后，中止直接置零流程。"""
         if not self._ordinary_commands_blocked_unlocked():
             return False
         self._node.get_logger().error(

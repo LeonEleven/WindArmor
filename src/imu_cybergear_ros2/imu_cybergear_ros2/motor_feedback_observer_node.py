@@ -1,4 +1,4 @@
-"""Passive CyberGear feedback observer with no actuator API calls."""
+"""不调用执行器 API 的被动 CyberGear 反馈观测器。"""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ from .transport_recovery import TransportEvent
 
 
 class MotorFeedbackObserverNode(LifecycleNode):
-    """Open only a transport reader and publish validated 0x02 feedback."""
+    """仅打开 transport 读取器并发布通过校验的 0x02 反馈。"""
 
     def __init__(
         self,
@@ -73,8 +73,8 @@ class MotorFeedbackObserverNode(LifecycleNode):
                 driver.register_feedback_error_callback(self._on_feedback_error)
             if hasattr(driver, "register_transport_event_callback"):
                 driver.register_transport_event_callback(self._on_transport_event)
-            # Commit the non-connected driver before ROS resource creation so a
-            # later configure failure can release every callback deterministically.
+            # 在创建 ROS 资源前提交尚未连接的驱动，使后续 configure 失败时能够
+            # 确定性地释放每个回调。
             self._config = config
             self._driver = driver
 

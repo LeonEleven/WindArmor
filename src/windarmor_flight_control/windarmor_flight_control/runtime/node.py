@@ -1,4 +1,4 @@
-"""Flight Runtime with opt-in, ownership-gated actuator command transport."""
+"""显式启用且受控制归属约束的 Flight Runtime 执行器命令传输。"""
 
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ def _ignore_runtime_shutdown_signals() -> None:
 
 
 def _runtime_shutdown_signal_handler(_signum, _frame) -> None:
-    # Block a second signal before transferring control to main's cleanup path.
+    # 在把控制权交给 main 的清理路径前屏蔽第二个关闭信号。
     _ignore_runtime_shutdown_signals()
     raise KeyboardInterrupt
 
@@ -84,11 +84,10 @@ def _restore_signal_handlers(previous_handlers: Mapping[int, object]) -> None:
 
 
 class FlightControlRuntimeNode(Node):
-    """Run Flight control with takeover disabled unless explicitly configured.
+    """运行 Flight 控制；除非显式配置，否则控制权接管保持停用。
 
-    When enabled, actuator intent is dispatched only through the ownership
-    protocol and FlightCommandEnvelope; this node never accesses hardware
-    drivers or backends directly.
+    启用后，执行器控制意图只能通过控制归属协议和 ``FlightCommandEnvelope`` 下发；
+    本节点绝不直接访问硬件驱动或后端。
     """
 
     def __init__(
@@ -168,8 +167,8 @@ class FlightControlRuntimeNode(Node):
             reliability=ReliabilityPolicy.RELIABLE,
         )
 
-        # Status/preview publishers always exist. The executable envelope
-        # publisher is created below only when takeover is explicitly enabled.
+        # 状态/预览发布者始终存在；只有显式启用控制权接管时，才会在下方创建
+        # 可执行命令包络发布者。
         self._status_pub = self.create_publisher(
             FlightRuntimeStatus,
             self._config.runtime_status_topic,
@@ -1090,7 +1089,7 @@ class FlightControlRuntimeNode(Node):
     def _best_effort_revoke(
         self, owner: OwnershipDomain, token: tuple[int, int] | None
     ) -> None:
-        """Attempt cleanup exactly once without entering rollback again."""
+        """只尝试一次清理，且不再次进入回滚。"""
 
         if token is None:
             return
@@ -1226,7 +1225,7 @@ class FlightControlRuntimeNode(Node):
         try:
             token = self._cleanup_token()
 
-            # Local fail-closed is complete before any external cleanup call.
+            # 调用任何外部清理接口前，先在本地完成失效后安全闭锁。
             self._command_dispatch_enabled = False
             self._handoff.fail(reason)
             self._handoff.reserved.clear()

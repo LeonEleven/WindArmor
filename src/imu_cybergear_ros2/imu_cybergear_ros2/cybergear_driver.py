@@ -280,7 +280,7 @@ class _BaseCyberGearBackend:
         max_attempts: Optional[int] = None,
         fault: bool = False,
     ) -> Optional[TransportEvent]:
-        """Create and dispatch a transport event outside backend resource locks."""
+        """在后端资源锁之外创建并分发 transport 事件。"""
         event_generation = (
             self.connection_generation if generation is None else generation
         )
@@ -455,7 +455,7 @@ class UsbCanSerialBackend(_BaseCyberGearBackend):
         self._feedback_callbacks.append(callback)
 
     def register_feedback_error_callback(self, callback: Callable[[Exception], None]) -> None:
-        """Register a diagnostic sink for feedback callback failures."""
+        """注册反馈回调失败的诊断接收器。"""
         self._feedback_error_callbacks.append(callback)
 
     def clear_feedback_callbacks(self) -> None:
@@ -623,7 +623,7 @@ class UsbCanSerialBackend(_BaseCyberGearBackend):
             try:
                 callback(exc)
             except Exception:
-                # A diagnostic callback must not terminate the reader thread.
+                # 诊断回调不得终止读取线程。
                 continue
 
 
@@ -718,7 +718,7 @@ class SocketCanHatBackend(_BaseCyberGearBackend):
         self._feedback_callbacks.append(callback)
 
     def register_feedback_error_callback(self, callback: Callable[[Exception], None]) -> None:
-        """Register a diagnostic sink for feedback callback failures."""
+        """注册反馈回调失败的诊断接收器。"""
         self._feedback_error_callbacks.append(callback)
 
     def clear_feedback_callbacks(self) -> None:
@@ -839,7 +839,7 @@ class SocketCanHatBackend(_BaseCyberGearBackend):
             try:
                 callback(exc)
             except Exception:
-                # A diagnostic callback must not terminate the reader thread.
+                # 诊断回调不得终止读取线程。
                 continue
 
 
@@ -902,7 +902,7 @@ class CyberGearDriver:
 
     @property
     def connection_generation(self) -> int:
-        """Monotonically increasing successful transport connection token."""
+        """返回单调递增的 transport 成功连接令牌。"""
         return self._impl.connection_generation
 
     def connect_with_retry(
@@ -946,7 +946,7 @@ class CyberGearDriver:
             self._impl.register_feedback_callback(callback)
 
     def register_feedback_error_callback(self, callback: Callable[[Exception], None]) -> None:
-        """Register a callback-error diagnostic sink on either backend."""
+        """在任一后端注册回调错误诊断接收器。"""
         if hasattr(self._impl, "register_feedback_error_callback"):
             self._impl.register_feedback_error_callback(callback)
 
@@ -958,11 +958,11 @@ class CyberGearDriver:
     def register_transport_event_callback(
         self, callback: Callable[[TransportEvent], None]
     ) -> None:
-        """Register a transport diagnostic callback, separate from feedback."""
+        """注册与反馈通道分离的 transport 诊断回调。"""
         self._impl.register_transport_event_callback(callback)
 
     def clear_transport_event_callbacks(self) -> None:
-        """Release transport callback references during lifecycle cleanup."""
+        """在 lifecycle cleanup 期间释放 transport 回调引用。"""
         self._impl.clear_transport_event_callbacks()
 
     def report_transport_event(
@@ -977,7 +977,7 @@ class CyberGearDriver:
         max_attempts: Optional[int] = None,
         fault: bool = False,
     ) -> Optional[TransportEvent]:
-        """Expose one unified event channel to the runtime coordinator."""
+        """向运行时协调器提供统一事件通道。"""
         return self._impl.report_transport_event(
             event_type,
             operation=operation,

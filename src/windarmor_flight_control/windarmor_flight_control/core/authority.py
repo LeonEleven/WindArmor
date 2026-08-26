@@ -1,4 +1,4 @@
-"""ROS-independent command-authority and arming state machine."""
+"""不依赖 ROS 的命令控制权与预备状态机。"""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from enum import Enum
 
 
 class CommandAuthority(str, Enum):
-    """The sole ordinary command owner selected by the Runtime."""
+    """Runtime 选定的唯一普通命令控制归属。"""
 
     NONE = "NONE"
     MANUAL = "MANUAL"
@@ -17,10 +17,10 @@ class CommandAuthority(str, Enum):
 
 @dataclass(frozen=True)
 class AuthorityGrant:
-    """Authority identity scoped to one Runtime process and one prepare attempt.
+    """限定于一个 Runtime 进程和一次 prepare 尝试的控制权标识。
 
-    ``generation`` is unique only inside ``authority_epoch``; the pair prevents a
-    command from surviving restart/session boundaries. It grants no hardware access.
+    ``generation`` 只在 ``authority_epoch`` 内唯一；二者组成的标识可防止命令跨越
+    重启或会话边界继续生效。该标识不授予硬件访问权。
     """
 
     authority: CommandAuthority
@@ -31,7 +31,7 @@ class AuthorityGrant:
 
 @dataclass(frozen=True)
 class OwnerAcknowledgement:
-    """Diagnostic owner acknowledgement; never an authority grant or cutoff."""
+    """用于诊断的 owner 确认；它绝不是控制权授予或原子截止点。"""
 
     owner: OwnershipDomain
     authority_epoch: int
@@ -41,7 +41,7 @@ class OwnerAcknowledgement:
 
 @dataclass(frozen=True)
 class AuthorityCommitResult:
-    """One-shot result emitted by an explicit, atomic authority commit."""
+    """显式原子控制权提交产生的一次性结果。"""
 
     authority_epoch: int
     generation: int
@@ -65,14 +65,14 @@ class OwnershipDomain(str, Enum):
 
 
 class AuthorityTransitionError(RuntimeError):
-    """Raised when a requested transition violates the authority contract."""
+    """请求的状态转换违反控制权契约时抛出。"""
 
 
 class AuthorityStateMachine:
-    """Bind owner acknowledgements to one epoch/generation before atomic commit.
+    """在原子提交前，把 owner 确认绑定到同一个 epoch/generation。
 
-    Cancel or inhibit invalidates the attempt token; returning to DRY_RUN requires
-    an explicit reset and never restores an old owner or command automatically.
+    cancel 或 inhibit 会使本次尝试的 token 失效；返回 DRY_RUN 需要显式重置，
+    且绝不会自动恢复旧 owner 或旧命令。
     """
 
     def __init__(self, *, authority_epoch: int, takeover_supported: bool) -> None:
@@ -217,7 +217,7 @@ class AuthorityStateMachine:
         *,
         owner_observed_state_sequence: int,
     ) -> bool:
-        """Record one diagnostic owner ack without granting authority."""
+        """记录一次诊断性 owner 确认，但不授予控制权。"""
 
         if not self._takeover_supported:
             return False
@@ -251,7 +251,7 @@ class AuthorityStateMachine:
         generation: int,
         current_runtime_state_sequence: int,
     ) -> AuthorityCommitResult:
-        """Atomically grant authority at the Runtime's current state boundary."""
+        """在 Runtime 当前状态边界原子授予控制权。"""
 
         if not self._takeover_supported:
             raise AuthorityTransitionError("authority takeover is not supported")

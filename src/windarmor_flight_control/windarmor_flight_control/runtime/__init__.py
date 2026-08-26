@@ -1,4 +1,4 @@
-"""ROS-dependent observation and authority-preparation runtime.
+"""依赖 ROS 的状态观测与控制权准备 Runtime。
 
-Importing the pure package root does not import this module.
+导入纯算法包根目录时不会导入本模块。
 """

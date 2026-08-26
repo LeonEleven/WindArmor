@@ -1,4 +1,4 @@
-"""Pure ordinary-command ownership contract for the fan subsystem."""
+"""风扇子系统的普通命令纯 ownership 契约。"""
 
 from __future__ import annotations
 
@@ -140,7 +140,7 @@ class FanOwnershipCore:
     def accept_safe_stop(
         self, epoch: int, generation: int, sequence: int, *, now: float
     ) -> OwnershipResult:
-        """Validate safe-stop ordering without turning it into a heartbeat."""
+        """校验 safe-stop 顺序，但不把它当作 heartbeat。"""
 
         result = self._validate_command(epoch, generation, sequence, now=now)
         if result is not None:

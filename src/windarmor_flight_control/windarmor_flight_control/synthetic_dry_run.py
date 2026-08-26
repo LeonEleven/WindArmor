@@ -1,4 +1,4 @@
-"""Human-readable, software-only DRY_RUN for the newcomer example controller."""
+"""面向新人示例控制器、易读的纯软件 DRY_RUN。"""
 
 from __future__ import annotations
 
@@ -74,7 +74,7 @@ def _print_command(
 
 
 def run_demo(pitches_rad: Iterable[float], stream: TextIO = sys.stdout) -> None:
-    """Run deterministic fake ticks without constructing ROS or hardware objects."""
+    """运行确定性的 fake 周期，且不构造 ROS 或硬件对象。"""
 
     pitches = tuple(float(value) for value in pitches_rad)
     if not pitches or any(not math.isfinite(value) for value in pitches):

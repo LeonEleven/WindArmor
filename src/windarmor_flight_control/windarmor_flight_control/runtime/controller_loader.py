@@ -1,4 +1,4 @@
-"""Explicit import-and-factory loading for pure FlightController objects."""
+"""通过显式导入和工厂函数加载纯 ``FlightController`` 对象。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from ..core.controller import FlightController
 
 
 class ControllerLoadError(RuntimeError):
-    """Configured controller import or factory contract failure."""
+    """配置的控制器导入或工厂契约失败。"""
 
 
 def load_controller(
@@ -18,11 +18,10 @@ def load_controller(
     required_motor_names: Iterable[str],
     configuration: Mapping[str, object] | None = None,
 ) -> FlightController:
-    """Load ``module.path:factory`` without fallback or authority side effects.
+    """按 ``module.path:factory`` 加载，且不回退、不产生控制权副作用。
 
-    Factories receive required motor names and, when their signature accepts it, an
-    optional configuration mapping. Import/factory failures are configuration errors;
-    algorithm modules must not rely on ROS or hardware side effects during loading.
+    工厂函数接收必要电机名称；函数签名允许时，还接收可选配置映射。导入或工厂函数
+    失败属于配置错误；算法模块在加载期间不得依赖 ROS 或硬件副作用。
     """
 
     if not isinstance(factory_contract, str) or factory_contract.count(":") != 1:

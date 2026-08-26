@@ -1,4 +1,4 @@
-"""Read-only IMU relative-attitude adapter for Flight observation."""
+"""供 Flight 观测使用的只读 IMU 相对姿态适配器。"""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from .imu_protocol import corrected_relative_roll_pitch
 
 
 class ImuRelativeObserverNode(LifecycleNode):
-    """Publish corrected roll/pitch without control services or actuator access."""
+    """发布校正后的 roll/pitch，不提供控制服务，也不访问执行器。"""
 
     def __init__(self) -> None:
         super().__init__("imu_relative_observer_node")

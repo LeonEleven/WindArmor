@@ -1,4 +1,4 @@
-"""Software-first pitch example for newcomer algorithm development."""
+"""面向新人算法开发的软件优先俯仰控制示例。"""
 
 from __future__ import annotations
 
@@ -17,13 +17,11 @@ TARGET_MOTOR_NAME = "left_pitch"
 
 
 class ExampleAlgorithmController:
-    """Map relative pitch to one bounded motor offset and two fan previews.
+    """把相对俯仰角映射为一个受限电机偏移和两路风扇预览。
 
-    This educational controller has no ROS or hardware dependencies. It captures
-    one complete motor-position baseline after reset, then keeps that baseline
-    fixed until the next reset or until an unsafe input clears it.
-    Its constants are software examples, not mechanical tuning values, and loading
-    it never grants actuator authority. It is not the default production controller.
+    该教学控制器不依赖 ROS 或硬件。重置后，它会捕获一次完整电机位置基线，
+    并保持该基线不变，直到再次重置或不安全输入将其清除。代码中的常量只是软件
+    示例值，不是机械调参值；加载本控制器不会授予执行器控制权。它不是默认生产控制器。
     """
 
     def __init__(self, required_motor_names: Iterable[str]) -> None:
@@ -39,7 +37,7 @@ class ExampleAlgorithmController:
         self._baseline_positions_rad: Mapping[str, float] | None = None
 
     def reset(self) -> None:
-        """Discard algorithm-local feedback captured during an earlier run."""
+        """丢弃算法在先前运行中捕获的本地反馈。"""
 
         self._baseline_positions_rad = None
 
@@ -79,7 +77,7 @@ class ExampleAlgorithmController:
         return FlightCommand.safe_stop()
 
     def update(self, state: FlightState, dt: float) -> FlightCommand:
-        """Return a complete preview frame, or safe-stop for unusable input."""
+        """返回完整预览帧；输入不可用时返回 safe-stop。"""
 
         pitch = state.imu.relative_pitch_rad
         if (
@@ -128,7 +126,7 @@ def create_controller(
     required_motor_names: tuple[str, ...],
     configuration: Mapping[str, object] | None = None,
 ) -> ExampleAlgorithmController:
-    """Create the non-default educational controller for tests and DRY_RUN."""
+    """为测试和 DRY_RUN 创建非默认教学控制器。"""
 
     del configuration
     return ExampleAlgorithmController(required_motor_names)

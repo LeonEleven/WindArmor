@@ -1,4 +1,4 @@
-"""Thread-safe monotonic aggregation into immutable FlightState snapshots."""
+"""以线程安全、单调的方式聚合为不可变 ``FlightState`` 状态快照。"""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from .safety_adapter import SafetyReadbackAdapter
 
 @dataclass(frozen=True)
 class RuntimeSnapshot:
-    """One coherent algorithm state plus separately authoritative safety readback."""
+    """一份一致的算法状态，以及单独提供的权威安全回读。"""
 
     flight_state: FlightState
     motor_safety: MotorSafetyReadback | None
@@ -29,10 +29,10 @@ class RuntimeSnapshot:
 
 
 class StateAggregator:
-    """Pair observations under one lock and emit monotonic immutable snapshots.
+    """在同一把锁内配对观测，并生成单调、不可变的状态快照。
 
-    Missing or stale observations stay unknown instead of becoming healthy defaults.
-    Aggregation is read-only and neither grants authority nor controls hardware.
+    缺失或过期观测保持未知，不会变成健康默认值。聚合过程只读，既不授予控制权，
+    也不控制硬件。
     """
 
     def __init__(self, config: RuntimeConfig) -> None:
@@ -116,7 +116,7 @@ class StateAggregator:
         if not math.isfinite(received_at) or received_at < 0.0:
             raise ValueError("e-stop receive time must be finite and non-negative")
         with self._lock:
-            # /e_stop is a trigger channel, not authoritative clear readback.
+            # /e_stop 是触发通道，不是“急停已解除”的权威回读。
             if active:
                 self._e_stop_triggered_at = received_at
 
