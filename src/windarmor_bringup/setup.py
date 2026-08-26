@@ -6,7 +6,7 @@ package_name = "windarmor_bringup"
 
 setup(
     name=package_name,
-    version="0.3.2",
+    version="0.4.0",
     packages=[],
     data_files=[
         (

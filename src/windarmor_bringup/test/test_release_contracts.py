@@ -9,11 +9,13 @@ from windarmor_fan_controller.fan_control import FanControlConfig, FanControlSta
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-RELEASE_VERSION = "0.3.2"
+RELEASE_VERSION = "0.4.0"
 PACKAGES = (
     "imu_cybergear_ros2",
     "windarmor_fan_controller",
     "windarmor_bringup",
+    "windarmor_interfaces",
+    "windarmor_flight_control",
 )
 
 
@@ -101,13 +103,18 @@ def _yaml_value(path: Path, key: str):
         return raw
 
 
-def test_three_package_release_metadata_is_consistent_and_frozen() -> None:
+def test_workspace_release_metadata_is_consistent_and_frozen() -> None:
     for package in PACKAGES:
         package_root = REPO_ROOT / "src" / package
         package_xml = _package_xml_metadata(package_root / "package.xml")
-        setup_py = _setup_metadata(package_root / "setup.py")
         assert package_xml["name"] == package
         assert package_xml["version"] == RELEASE_VERSION
+        assert package_xml["license"] == "Apache-2.0"
+
+        setup_path = package_root / "setup.py"
+        if not setup_path.exists():
+            continue
+        setup_py = _setup_metadata(setup_path)
         for key in (
             "name",
             "version",

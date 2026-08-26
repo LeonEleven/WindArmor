@@ -14,7 +14,8 @@
 | Gate B | **COMPLETE** |
 | Gate C | **COMPLETE** |
 | Gate D | **FUNCTIONAL REGRESSION PASS / COMPLETE** |
-| v0.4.0 发布状态 | **尚未发布；发布准备状态仍待后续收口** |
+| 发布准备状态 | **READY** |
+| v0.4.0 发布状态 | **NOT YET RELEASED** |
 | 当前稳定版本 | v0.3.2 |
 
 完整逐次执行过程、现场命令、失败尝试和修复推导保留在
@@ -240,6 +241,7 @@ Cannot shutdown a ROS adapter that is not running
 基于 Gate B、C、D 的最终有效证据，v0.4.0 的硬件与功能验证判定为
 **COMPLETE**。已知限制均已显式保留，没有仍然阻塞该验证结论的 open Gate。
 
-发布仍是独立流程：需要完成文档整理、发布检查、版本和变更记录确认后，才能改变
-“尚未发布”的状态。本文不会随 `docs/LATEST_FEEDBACK.md` 的日常交接更新而重写；若
-未来发现影响 v0.4.0 结论的新事实，应以可审查的版本化修订明确记录原因和证据。
+发布准备状态现为 **READY**，v0.4.0 仍为 **NOT YET RELEASED**。创建 tag 和 GitHub
+Release 仍是独立流程，必须在 release-prep commit 审核及对应软件 CI 成功后另行授权。
+本文不会随 `docs/LATEST_FEEDBACK.md` 的日常交接更新而重写；若未来发现影响 v0.4.0
+结论的新事实，应以可审查的版本化修订明确记录原因和证据。

@@ -4,7 +4,7 @@ package_name = "imu_cybergear_ros2"
 
 setup(
     name=package_name,
-    version="0.3.2",
+    version="0.4.0",
     packages=find_packages(exclude=["test"]),
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),

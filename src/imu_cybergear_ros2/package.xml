@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>imu_cybergear_ros2</name>
-  <version>0.3.2</version>
+  <version>0.4.0</version>
   <description>ROS 2 package for IMU-driven CyberGear motor control with safety watchdog, emergency stop, motor feedback monitoring, and automatic reconnection.</description>
   <maintainer email="elevenlianm@foxmail.com">LeonEleven</maintainer>
   <license>Apache-2.0</license>

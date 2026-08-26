@@ -6,10 +6,10 @@
 
 ## 当前任务
 
-- 任务：`DOC-3.1 final language hotfix`
+- 任务：`v0.4.0 FINAL RELEASE PREPARATION`
 - 日期：2026-08-26
 - task-start branch：`master`
-- task-start HEAD：`464007bab53521e9bfd73841ab2e5cf256add647`
+- task-start HEAD：`1c17898a5f86533673437769e57a738962b04c2d`
 - 当前 stable release：v0.3.2
 - 当前开发目标：v0.4.0（未发布）
 - Gate B / C / D：**COMPLETE / COMPLETE / COMPLETE**
@@ -18,9 +18,27 @@
 - DOC-2：**COMPLETE / REVIEW PASS**
 - DOC-3：**COMPLETE / REVIEW PASS**
 - DOC-3.1：**COMPLETE / REVIEW PASS**
-- release readiness：**PENDING FINAL REVIEW**
+- 五包版本元数据：**PREPARED AS 0.4.0**
+- 根许可证：**Apache License 2.0 PRESENT**
+- v0.4.0 release notes：**PREPARED**
+- release readiness：**READY FOR FINAL RELEASE COMMIT**
+- v0.4.0 release status：**NOT YET RELEASED**
 
-## DOC-3.1 final language hotfix
+## v0.4.0 final release preparation
+
+本轮完成发布前仓库整理，不改变生产控制行为、公开 ROS 接口、配置、launch 或硬件映射。
+
+- 五个 ROS 2 包的 `package.xml` 版本均已准备为 `0.4.0`；四个 Python 包的
+  `setup.py` 版本与对应 `package.xml` 一致；
+- 仓库根目录已补齐标准 Apache License 2.0 全文；
+- 已新增 `RELEASE_NOTES_v0.4.0.md`，汇总功能变化、兼容性、验证状态、已知限制和发布状态；
+- README 与 v0.4 verification record 已更新为 release readiness `READY`，同时明确
+  v0.4.0 尚未打 tag、尚未发布，当前 stable release 仍为 v0.3.2；
+- 发布契约测试已覆盖全部五包版本和许可证，并继续校验四个 Python 包的 setup metadata；
+- Gate B / C / D、hardware / functional verification、DOC-1 / DOC-2 / DOC-3 / DOC-3.1
+  均保持 `COMPLETE`；历史 session、测量值、PASS/FAIL/NOT VERIFIED 和证据判断未改变。
+
+## 前序 DOC-3.1 final language hotfix
 
 本轮只修复五份长期新人文档中残留的普通英文说明，未扩大到历史文档、源码或运行时文本。
 
@@ -33,7 +51,7 @@
 - 相对 Markdown 链接检查为 67 checked、missing 0，`git diff --check` 为 PASS；
 - 按任务要求，纯文字微修未重复运行 full CI，也未执行任何硬件测试。
 
-## DOC-3.1 结果
+## 前序 DOC-3.1 结果
 
 本轮将面向中文维护者和算法开发者的说明改为以中文为主，同时严格保留正式标识符、接口、
 状态值、硬件缩写、单位、命令参数和历史证据。生产控制行为没有改变。
@@ -84,38 +102,32 @@ Architecture 复核确认仍明确：epoch/generation 身份隔离、两阶段�
 命令包络截止点、回滚顺序、Runtime 重启/关闭隔离、E-STOP/ERROR 优先级、底层最终否决权，
 以及故障后绝不自动恢复 MANUAL/AUTO/HOME、owner、authority 或旧目标。
 
-## 验证
+## 本轮最终发布准备验证
 
-已执行且通过的纯软件验证：
+已执行且通过的发布准备纯软件验证：
 
-- `python3 -m compileall -q`：IMU/电机、风扇、Flight 三包 Python source PASS；
-- Python 行为 AST 对比：42 files checked，behavioral AST differences 0；
-- 定向 pytest 按包运行：IMU/电机 183 passed、风扇 129 passed、Flight 251 passed，合计
-  563 passed；
-- `source /opt/ros/jazzy/setup.bash && ./scripts/ci_software.sh`：PASS；五包 build 完成，
-  hardware verification tooling 26 passed、motor package 431 passed、fan safety 159 passed、
-  Flight/interface 318 passed；最终 `colcon test-result` 为
-  `939 tests, 0 errors, 0 failures, 0 skipped`；
-- 相对 Markdown link check：16 files scanned、67 links checked、missing 0；
-- 核心文档 heading 层级/数量、Markdown link target 和反引号标识符差异检查：PASS；
-- `git diff --check`：PASS。
-
-首次把三个包的 `test/` 目录放入同一 pytest 进程时，因共享顶层模块名 `test` 在 collection
-阶段出现 `ModuleNotFoundError`，0 tests executed；改为按包独立进程后上述 563 项全部通过。
-首次链接检查也因 `git ls-files` 的 Unicode 路径转义未完成扫描；改用 NUL 分隔路径后完成
-67 项检查且 missing 0。这两项均为验证命令组织问题，不是生产代码或文档链接失败。
+- 发布契约定向 pytest：`6 passed`；
+- 五包 `package.xml` 均为 `0.4.0`，四个 `setup.py` 与对应包元数据一致；
+- 根 `LICENSE` 与系统标准 Apache-2.0 文本逐字节一致；
+- 相对 Markdown link check：17 files scanned、81 links checked、missing 0；
+- `git diff --check`：PASS；
+- `source /opt/ros/jazzy/setup.bash && ./scripts/ci_software.sh`：PASS，五包 build 完成，
+  最终 `939 tests, 0 errors, 0 failures, 0 skipped`。
 
 以上均为构建、pure/fake/mock 或静态验证，不是真实 CAN、串口、GPIO、电调、风扇或机械
 实机验证。本轮未启动 ROS 节点/launch，未访问硬件 I/O，未改变树莓派运行时状态，也未给
 actuator 通电。
 
-## 变更边界
+## 本轮最终发布准备的变更边界
 
 - production behavior changed：**NO**
-- comments/docstrings changed：**YES**
+- package metadata changed：**YES — VERSION ONLY**
+- root license added：**YES**
+- release documentation/status changed：**YES**
+- comments/docstrings changed：**NO**
 - runtime logs changed：**NO**
 - machine-readable markers changed：**NO**
-- tests changed：**NO**
+- tests changed：**YES — RELEASE METADATA CONTRACT ONLY**
 - scripts changed：**NO**
 - configs changed：**NO**
 - launch changed：**NO**
@@ -127,6 +139,7 @@ actuator 通电。
 
 ## 下一任务
 
-DOC-3.1 状态为 `COMPLETE / REVIEW PASS`。下一步是 v0.4.0 final
-release-readiness review：复核当前未提交 diff、版本和 release checklist，并由用户另行决定
-是否 commit/push/tag/release。该复核不自动授权任何 Git 发布动作或新的真实硬件操作。
+先 review 本轮 release-preparation commit，再单独创建 final release status commit；确认该提交
+对应的 GitHub Actions CI 成功后，才创建 annotated `v0.4.0` tag，最后创建 GitHub Release。
+v0.4.0 当前仍为 **NOT YET RELEASED**；本交接不自动授权 commit、push、tag、release 或任何
+新的真实硬件操作。
