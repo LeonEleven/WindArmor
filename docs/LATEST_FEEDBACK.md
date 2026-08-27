@@ -6,34 +6,50 @@
 
 ## 当前任务
 
-- 任务：`v0.4.0 FINAL RELEASE PREPARATION`
-- 日期：2026-08-26
+- 任务：`v0.4.0 FINAL RELEASE STATUS COMMIT`
+- 日期：2026-08-27
 - task-start branch：`master`
-- task-start HEAD：`1c17898a5f86533673437769e57a738962b04c2d`
-- 当前 stable release：v0.3.2
-- 当前开发目标：v0.4.0（未发布）
+- task-start HEAD：`d08b1f79d7c3d04ed28bb65cf12aab2cf61ced67`
+- 当前 stable release：v0.4.0
+- previous stable / history：v0.3.2
 - Gate B / C / D：**COMPLETE / COMPLETE / COMPLETE**
 - hardware / functional verification：**COMPLETE**
 - DOC-1：**COMPLETE / REVIEW PASS**
 - DOC-2：**COMPLETE / REVIEW PASS**
 - DOC-3：**COMPLETE / REVIEW PASS**
 - DOC-3.1：**COMPLETE / REVIEW PASS**
-- 五包版本元数据：**PREPARED AS 0.4.0**
+- 五包版本元数据：**0.4.0**
 - 根许可证：**Apache License 2.0 PRESENT**
-- v0.4.0 release notes：**PREPARED**
-- release readiness：**READY FOR FINAL RELEASE COMMIT**
-- v0.4.0 release status：**NOT YET RELEASED**
+- v0.4.0 release notes：**RELEASED SNAPSHOT**
+- release readiness：**READY / COMPLETE**
+- GitHub Hosted WindArmor Software CI：**SUCCESS — `d08b1f7` / run `32937801681`**
+- v0.4.0 release status：**RELEASED**
 
-## v0.4.0 final release preparation
+## v0.4.0 final release status
 
-本轮完成发布前仓库整理，不改变生产控制行为、公开 ROS 接口、配置、launch 或硬件映射。
+本任务只将当前状态文档切换为 v0.4.0 正式发布快照，不改变任何工程或验证事实。
+
+- 基线为 `master` / `d08b1f7`，对应 GitHub Hosted WindArmor Software CI 已成功，
+  run ID 为 `32937801681`；
+- 只修改 README、v0.4.0 release notes、v0.4.0 verification record 和本交接文档；
+- README 将 v0.4.0 标记为当前正式稳定发布，v0.3.2 保留为上一稳定版本历史；
+- release notes 的功能、兼容性、验证数据、已知限制和技术事实保持不变；
+- verification record 只改变 release readiness/status/current stable 相关表述；
+- Gate、session、timestamp、数值、PASS/FAIL/NOT VERIFIED 和 evidence classification
+  均未改变；
+- 未运行或影响真实硬件，也未修改 production、test、config、launch、interface 或 package metadata；
+- annotated `v0.4.0` tag 和 GitHub Release 尚未执行，仍需用户单独授权。
+
+## 前序 v0.4.0 final release preparation
+
+前序任务完成发布前仓库整理，不改变生产控制行为、公开 ROS 接口、配置、launch 或硬件映射。
 
 - 五个 ROS 2 包的 `package.xml` 版本均已准备为 `0.4.0`；四个 Python 包的
   `setup.py` 版本与对应 `package.xml` 一致；
 - 仓库根目录已补齐标准 Apache License 2.0 全文；
 - 已新增 `RELEASE_NOTES_v0.4.0.md`，汇总功能变化、兼容性、验证状态、已知限制和发布状态；
-- README 与 v0.4 verification record 已更新为 release readiness `READY`，同时明确
-  v0.4.0 尚未打 tag、尚未发布，当前 stable release 仍为 v0.3.2；
+- README 与 v0.4 verification record 在前序阶段更新为 release readiness `READY`；
+  该阶段状态现已由本轮 `RELEASED` 正式发布快照取代；
 - 发布契约测试已覆盖全部五包版本和许可证，并继续校验四个 Python 包的 setup metadata；
 - Gate B / C / D、hardware / functional verification、DOC-1 / DOC-2 / DOC-3 / DOC-3.1
   均保持 `COMPLETE`；历史 session、测量值、PASS/FAIL/NOT VERIFIED 和证据判断未改变。
@@ -102,10 +118,11 @@ Architecture 复核确认仍明确：epoch/generation 身份隔离、两阶段�
 命令包络截止点、回滚顺序、Runtime 重启/关闭隔离、E-STOP/ERROR 优先级、底层最终否决权，
 以及故障后绝不自动恢复 MANUAL/AUTO/HOME、owner、authority 或旧目标。
 
-## 本轮最终发布准备验证
+## 最终发布状态验证
 
 已执行且通过的发布准备纯软件验证：
 
+- release-prep commit `d08b1f7` 对应 GitHub Hosted CI run `32937801681`：`success`；
 - 发布契约定向 pytest：`6 passed`；
 - 五包 `package.xml` 均为 `0.4.0`，四个 `setup.py` 与对应包元数据一致；
 - 根 `LICENSE` 与系统标准 Apache-2.0 文本逐字节一致；
@@ -118,20 +135,18 @@ Architecture 复核确认仍明确：epoch/generation 身份隔离、两阶段�
 实机验证。本轮未启动 ROS 节点/launch，未访问硬件 I/O，未改变树莓派运行时状态，也未给
 actuator 通电。
 
-## 本轮最终发布准备的变更边界
+## 本轮最终发布状态的变更边界
 
 - production behavior changed：**NO**
-- package metadata changed：**YES — VERSION ONLY**
-- root license added：**YES**
 - release documentation/status changed：**YES**
-- comments/docstrings changed：**NO**
-- runtime logs changed：**NO**
-- machine-readable markers changed：**NO**
-- tests changed：**YES — RELEASE METADATA CONTRACT ONLY**
+- package metadata changed：**NO**
+- tests changed：**NO**
 - scripts changed：**NO**
 - configs changed：**NO**
 - launch changed：**NO**
 - public ROS interfaces changed：**NO**
+- comments/docstrings changed：**NO**
+- runtime logs changed：**NO**
 - hardware executed or affected：**NO**
 - historical verification facts/status/evidence changed：**NO**
 - branch created/switched：**NO**
@@ -139,7 +154,10 @@ actuator 通电。
 
 ## 下一任务
 
-先 review 本轮 release-preparation commit，再单独创建 final release status commit；确认该提交
-对应的 GitHub Actions CI 成功后，才创建 annotated `v0.4.0` tag，最后创建 GitHub Release。
-v0.4.0 当前仍为 **NOT YET RELEASED**；本交接不自动授权 commit、push、tag、release 或任何
+v0.4.0 final release status 文档快照完成后，下一步只剩：
+
+1. 创建 annotated `v0.4.0` tag；
+2. 创建 GitHub Release。
+
+两项操作仍须用户单独明确授权；本任务不自动授权 commit、push、tag、release，也不授权任何
 新的真实硬件操作。

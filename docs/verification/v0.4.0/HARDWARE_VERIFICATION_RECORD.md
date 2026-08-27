@@ -1,6 +1,6 @@
 # WindArmor v0.4.0 硬件与功能验证记录
 
-> **版本化验证记录。** 本文是 v0.4.0 发布候选当前最终硬件与功能验证结论的
+> **版本化验证记录。** 本文是 v0.4.0 正式发布的最终硬件与功能验证结论的
 > 长期来源。它记录已经完成的验证，不是新的带电授权、现场 runbook 或操作命令。
 > 任何后续实机操作仍须遵守仓库根目录 `AGENTS.md` 的硬件安全规则和逐场景授权门槛。
 
@@ -14,9 +14,9 @@
 | Gate B | **COMPLETE** |
 | Gate C | **COMPLETE** |
 | Gate D | **FUNCTIONAL REGRESSION PASS / COMPLETE** |
-| 发布准备状态 | **READY** |
-| v0.4.0 发布状态 | **NOT YET RELEASED** |
-| 当前稳定版本 | v0.3.2 |
+| 发布准备状态 | **READY / COMPLETE** |
+| v0.4.0 发布状态 | **RELEASED** |
+| 当前稳定版本 | v0.4.0 |
 
 完整逐次执行过程、现场命令、失败尝试和修复推导保留在
 [v0.4.0 硬件验证执行计划](../../V0.4.0_HARDWARE_VERIFICATION_PLAN.md) 中。
@@ -234,14 +234,13 @@ Cannot shutdown a ROS adapter that is not running
 - Gate D 的 HOME、E-stop 恢复和显式重新取得控制权等条目含历史操作者/用户确认，
   不是新建连续记录器会话。
 - 本轮没有验证性能、RPM、推力、全包线飞行能力或新的硬实时 SLA。
-- 本记录不代表 v0.4.0 已发布，也不改变当前稳定版本仍为 v0.3.2 的事实。
+- 本记录对应 v0.4.0 正式发布快照；发布状态不扩大上述验证证据的适用范围。
 
 ## 12. 最终处置
 
 基于 Gate B、C、D 的最终有效证据，v0.4.0 的硬件与功能验证判定为
 **COMPLETE**。已知限制均已显式保留，没有仍然阻塞该验证结论的 open Gate。
 
-发布准备状态现为 **READY**，v0.4.0 仍为 **NOT YET RELEASED**。创建 tag 和 GitHub
-Release 仍是独立流程，必须在 release-prep commit 审核及对应软件 CI 成功后另行授权。
-本文不会随 `docs/LATEST_FEEDBACK.md` 的日常交接更新而重写；若未来发现影响 v0.4.0
-结论的新事实，应以可审查的版本化修订明确记录原因和证据。
+发布准备状态为 **READY / COMPLETE**，v0.4.0 发布状态为 **RELEASED**，当前稳定版本为
+v0.4.0。本文不会随 `docs/LATEST_FEEDBACK.md` 的日常交接更新而重写；若未来发现影响
+v0.4.0 结论的新事实，应以可审查的版本化修订明确记录原因和证据。

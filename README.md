@@ -6,14 +6,13 @@ WindArmor 是运行于树莓派 5、Ubuntu 24.04 和 ROS 2 Jazzy 的飞行机器
 
 ## 当前版本
 
-- 当前正式稳定发布：**v0.3.2**
-- 当前开发目标：**v0.4.0（尚未发布）**
+- 当前正式稳定发布：**v0.4.0**
 - v0.4.0 Gate B、C、D 硬件与功能验证：**COMPLETE**
-- v0.4.0 发布准备状态：**READY**
+- v0.4.0 发布状态：**RELEASED / 正式发布快照**
 
 v0.4.0 的版本内容见[发布说明](docs/RELEASE_NOTES_v0.4.0.md)，最终验证判定及限制见
-[硬件与功能验证记录](docs/verification/v0.4.0/HARDWARE_VERIFICATION_RECORD.md)。发布准备
-已经就绪，但尚未创建 `v0.4.0` tag 或 GitHub Release，也不改变 v0.3.2 的稳定版本身份。
+[硬件与功能验证记录](docs/verification/v0.4.0/HARDWARE_VERIFICATION_RECORD.md)。v0.4.0
+现为当前正式发布快照；v0.3.2 保留为上一稳定版本的历史记录。
 
 ## 安全边界
 
@@ -275,9 +274,9 @@ python3 -m windarmor_flight_control.synthetic_dry_run
 | [Flight Control Architecture](docs/FLIGHT_CONTROL_ARCHITECTURE.md) | Flight 长期架构依据 |
 | [IMU/CyberGear 包 README](src/imu_cybergear_ros2/README.md) | 电机/IMU 包专属接口与实现约束 |
 | [v0.4.0 验证记录](docs/verification/v0.4.0/HARDWARE_VERIFICATION_RECORD.md) | 当前版本最终硬件与功能验证证据 |
-| [v0.4.0 发布说明](docs/RELEASE_NOTES_v0.4.0.md) | 当前发布候选的版本内容、兼容性和限制；尚未发布 |
+| [v0.4.0 发布说明](docs/RELEASE_NOTES_v0.4.0.md) | 当前正式版本的内容、兼容性和限制 |
 | [v0.4.0 历史执行计划](docs/V0.4.0_HARDWARE_VERIFICATION_PLAN.md) | 完整过程、无效尝试和执行手册历史；不是当前授权 |
-| [v0.3.2 发布说明](docs/RELEASE_NOTES_v0.3.2.md) | 当前稳定版本的版本化发布记录 |
+| [v0.3.2 发布说明](docs/RELEASE_NOTES_v0.3.2.md) | 上一稳定版本的历史发布记录 |
 | [v0.3.2 RC 检查表](docs/V0.3.2_RC_HARDWARE_CHECKLIST.md) | v0.3.2 历史验证记录 |
 
 `docs/LATEST_FEEDBACK.md` 是仓库内的可变任务交接，不是发布证据或长期接口来源；
@@ -285,11 +284,11 @@ python3 -m windarmor_flight_control.synthetic_dry_run
 
 ## 发布与验证历史
 
-- **v0.4.0（发布准备已就绪，尚未发布）：** 版本内容见
+- **v0.4.0（当前稳定版本 / 正式发布快照）：** 版本内容见
   [v0.4.0 发布说明](docs/RELEASE_NOTES_v0.4.0.md)；Gate B/C/D 已完成，最终证据、
   无效尝试、已知限制和非阻塞观察固化在
   [v0.4.0 验证记录](docs/verification/v0.4.0/HARDWARE_VERIFICATION_RECORD.md)。
-- **v0.3.2（稳定版本）：** 发布内容见
+- **v0.3.2（上一稳定版本 / 历史）：** 发布内容见
   [发布说明](docs/RELEASE_NOTES_v0.3.2.md)，历史硬件结果见
   [RC 检查表](docs/V0.3.2_RC_HARDWARE_CHECKLIST.md)。
 

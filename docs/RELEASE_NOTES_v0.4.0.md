@@ -1,7 +1,6 @@
 # WindArmor v0.4.0
 
-> **发布准备状态：READY TO RELEASE。** 本版本尚未创建 `v0.4.0` tag，也尚未发布
-> GitHub Release；当前正式稳定版本仍是 v0.3.2。
+> **发布状态：RELEASED / v0.4.0。** 本文是 v0.4.0 正式发布快照的版本化说明。
 
 ## 版本定位
 
@@ -121,9 +120,9 @@ MANUAL、HOME 和 LEGACY AUTO 正常操作路径继续保留。
 939 tests, 0 errors, 0 failures, 0 skipped
 ```
 
-本说明不写死 GitHub Actions run number；最终发布仍须以 release-prep push 后对应的 GitHub
-Hosted CI 成功结果为准。软件 CI、fake、mock 和 DRY_RUN 不构成真实 CAN、串口、GPIO、
-电调或机械验证。
+release-prep commit `d08b1f7` 对应的 GitHub Hosted WindArmor Software CI 已成功；本说明
+不写死 GitHub Actions run number。软件 CI、fake、mock 和 DRY_RUN 不构成真实 CAN、串口、
+GPIO、电调或机械验证。
 
 ## 已知限制
 
@@ -144,9 +143,6 @@ Hosted CI 成功结果为准。软件 CI、fake、mock 和 DRY_RUN 不构成真�
 
 ## 发布状态
 
-- **READY TO RELEASE**；
-- **NOT YET TAGGED / NOT YET RELEASED**；
-- 当前正式稳定版本仍为 v0.3.2。
-
-完成 release-prep commit 审核及对应 GitHub Hosted CI 后，才可在用户另行明确授权下创建
-annotated `v0.4.0` tag 和 GitHub Release。
+- **RELEASED / v0.4.0**；
+- 当前正式稳定版本为 v0.4.0；
+- v0.3.2 保留为上一稳定版本的历史记录。
