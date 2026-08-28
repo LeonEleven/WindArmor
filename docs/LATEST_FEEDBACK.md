@@ -6,10 +6,10 @@
 
 ## 当前任务
 
-- 任务：`v0.4.0 FINAL RELEASE STATUS COMMIT`
+- 任务：`POST-v0.4.0 DEVELOPMENT WORKFLOW GOVERNANCE`
 - 日期：2026-08-27
 - task-start branch：`master`
-- task-start HEAD：`d08b1f79d7c3d04ed28bb65cf12aab2cf61ced67`
+- task-start HEAD：`e44bd9bbb617237c8ece85540c198eca56815a40`
 - 当前 stable release：v0.4.0
 - previous stable / history：v0.3.2
 - Gate B / C / D：**COMPLETE / COMPLETE / COMPLETE**
@@ -20,12 +20,29 @@
 - DOC-3.1：**COMPLETE / REVIEW PASS**
 - 五包版本元数据：**0.4.0**
 - 根许可证：**Apache License 2.0 PRESENT**
-- v0.4.0 release notes：**RELEASED SNAPSHOT**
-- release readiness：**READY / COMPLETE**
-- GitHub Hosted WindArmor Software CI：**SUCCESS — `d08b1f7` / run `32937801681`**
+- v0.4.0 tag / GitHub Release：**RELEASED — `e44bd9b`**
+- GitHub Hosted WindArmor Software CI：**SUCCESS — `e44bd9b` / run `33031586305`**
+- collaboration model：**master + develop + short-lived task branches**
+- `develop` branch status：**NOT CREATED IN THIS TASK**
 - v0.4.0 release status：**RELEASED**
 
-## v0.4.0 final release status
+## post-v0.4.0 collaboration governance
+
+v0.4.0 已正式发布。本任务只建立后续多人协作的文档与仓库规则，不改变发布快照或工程行为。
+
+- annotated `v0.4.0` tag 与 GitHub Release 已发布，精确指向 `e44bd9b`；
+- `AGENTS.md` 已更新稳定版本基线、分支职责、master promotion 和 AI agent 权限边界；
+- 新增 `DEVELOPMENT_WORKFLOW.md`，作为人类开发成员的分支、PR、CI、release/hotfix 指南；
+- Algorithm Developer Guide 只增加 Git / 协作流程，README 只增加文档导航；
+- 正式模型为 `master`、`develop` 与短期 `feature/*`、`fix/*`、`docs/*`、`experiment/*`；
+- `hotfix/*` 从 `master` 创建，`release/*` 从 `develop` 按需创建；
+- 当前任务没有创建 `develop` 或其它分支；创建和推送 `develop` 必须取得新的明确授权；
+- production behavior、tests、scripts、config、launch 和 interfaces 均未修改，未执行硬件。
+- README、Algorithm Guide、Development Workflow 和 AGENTS branch policy 一致性断言：PASS；
+- Markdown relative link check：18 files scanned、88 links checked、missing 0；
+- `git diff --check`：PASS；纯文档任务未重复运行 full software CI。
+
+## 前序 v0.4.0 final release status
 
 本任务只将当前状态文档切换为 v0.4.0 正式发布快照，不改变任何工程或验证事实。
 
@@ -38,7 +55,7 @@
 - Gate、session、timestamp、数值、PASS/FAIL/NOT VERIFIED 和 evidence classification
   均未改变；
 - 未运行或影响真实硬件，也未修改 production、test、config、launch、interface 或 package metadata；
-- annotated `v0.4.0` tag 和 GitHub Release 尚未执行，仍需用户单独授权。
+- annotated `v0.4.0` tag 和 GitHub Release 已在后续授权任务中完成，目标为 `e44bd9b`。
 
 ## 前序 v0.4.0 final release preparation
 
@@ -118,7 +135,7 @@ Architecture 复核确认仍明确：epoch/generation 身份隔离、两阶段�
 命令包络截止点、回滚顺序、Runtime 重启/关闭隔离、E-STOP/ERROR 优先级、底层最终否决权，
 以及故障后绝不自动恢复 MANUAL/AUTO/HOME、owner、authority 或旧目标。
 
-## 最终发布状态验证
+## 前序最终发布状态验证
 
 已执行且通过的发布准备纯软件验证：
 
@@ -135,29 +152,29 @@ Architecture 复核确认仍明确：epoch/generation 身份隔离、两阶段�
 实机验证。本轮未启动 ROS 节点/launch，未访问硬件 I/O，未改变树莓派运行时状态，也未给
 actuator 通电。
 
-## 本轮最终发布状态的变更边界
+## 本轮协作治理的变更边界
 
+- governance documentation/rules changed：**YES**
+- `AGENTS.md` changed：**YES**
+- `docs/DEVELOPMENT_WORKFLOW.md` created：**YES**
+- Algorithm Developer Guide changed：**YES — GIT/COLLABORATION ONLY**
+- README changed：**YES — NAVIGATION ONLY**
 - production behavior changed：**NO**
-- release documentation/status changed：**YES**
-- package metadata changed：**NO**
-- tests changed：**NO**
-- scripts changed：**NO**
-- configs changed：**NO**
-- launch changed：**NO**
-- public ROS interfaces changed：**NO**
-- comments/docstrings changed：**NO**
-- runtime logs changed：**NO**
+- tests/scripts changed：**NO**
+- configs/launch/public interfaces changed：**NO**
 - hardware executed or affected：**NO**
-- historical verification facts/status/evidence changed：**NO**
 - branch created/switched：**NO**
+- `develop` created：**NO**
 - commit/push/tag/release：**NO**
 
 ## 下一任务
 
-v0.4.0 final release status 文档快照完成后，下一步只剩：
+下一步严格按以下顺序进行：
 
-1. 创建 annotated `v0.4.0` tag；
-2. 创建 GitHub Release。
+1. assistant/user review 本轮 governance docs；
+2. 用户另行授权后 commit/push 到 `master`；
+3. 再取得 fresh explicit authorization；
+4. 从届时最新 `master` 创建 `develop`；
+5. push `origin/develop`。
 
-两项操作仍须用户单独明确授权；本任务不自动授权 commit、push、tag、release，也不授权任何
-新的真实硬件操作。
+本交接不自动授权创建、切换或推送 `develop`，也不授权任何新的真实硬件操作。

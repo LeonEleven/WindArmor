@@ -423,3 +423,22 @@ E-STOP、物理断电、供电、现场观察、执行与证据分类。
 - [ ] 没有修改默认控制器、控制权接管或硬件配置；
 - [ ] 维护者已理解请求边界和故障行为；
 - [ ] 若提议 LEVEL 3，已单独准备授权、E-STOP、物理断电和证据计划。
+
+## 20. Git / 协作流程
+
+完整分支职责、PR、release/hotfix 和保护规则见
+[开发协作流程](DEVELOPMENT_WORKFLOW.md)。算法成员的标准协作顺序是：
+
+1. 从 `develop` 获取最新集成代码；
+2. 为单一算法任务创建 `feature/algo-<short-name>` 短期分支；
+3. 实现算法并运行对应 unit test；
+4. 运行纯软件 synthetic DRY_RUN，确认输出、safe-stop 和无执行许可状态；
+5. push 任务分支并向 `develop` 创建 PR；
+6. 等待 WindArmor Software CI；
+7. 由 maintainer review 算法边界、API、测试和安全假设；
+8. review 与 CI 通过后合入 `develop`，再删除短期分支。
+
+算法任务通常只修改 algorithms、algorithm tests 和必要算法文档。共享 `FlightController`、
+`FlightState`、`FlightCommand` 或 controller factory contract 的变化必须作为 API change
+协调，不得静默改变。代码合入 `develop` 只表示软件集成完成；任何真实电机、风扇、CAN、
+串口、GPIO 或 PWM 测试仍须维护者准备受限范围，并由用户/operator 独立明确授权。

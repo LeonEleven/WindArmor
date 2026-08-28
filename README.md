@@ -272,6 +272,7 @@ python3 -m windarmor_flight_control.synthetic_dry_run
 | [算法开发者指南](docs/ALGORITHM_DEVELOPER_GUIDE.md) | 算法开发主入口 |
 | [Flight Control API](docs/FLIGHT_CONTROL_API.md) | 稳定算法接口契约 |
 | [Flight Control Architecture](docs/FLIGHT_CONTROL_ARCHITECTURE.md) | Flight 长期架构依据 |
+| [开发协作流程](docs/DEVELOPMENT_WORKFLOW.md) | 多人协作、Git 分支、PR、CI、release 与 hotfix 规则 |
 | [IMU/CyberGear 包 README](src/imu_cybergear_ros2/README.md) | 电机/IMU 包专属接口与实现约束 |
 | [v0.4.0 验证记录](docs/verification/v0.4.0/HARDWARE_VERIFICATION_RECORD.md) | 当前版本最终硬件与功能验证证据 |
 | [v0.4.0 发布说明](docs/RELEASE_NOTES_v0.4.0.md) | 当前正式版本的内容、兼容性和限制 |

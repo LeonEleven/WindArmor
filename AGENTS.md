@@ -8,9 +8,10 @@
 
 WindArmor 是运行于树莓派 5（Ubuntu 24.04、ROS 2 Jazzy）的飞行机器人
 工作空间，整合 Hiwonder IMU、4 个 CyberGear 微电机和 2 个涵道风扇。
-`v0.3.2` 是当前正式稳定发布基线；当前开发分支正在推进 `v0.4.0`，但未发布
-的 `HEAD` 不属于 stable release。实际工作基线以当前分支、`HEAD` 和任务开始时
-已有的工作区修改为准。
+`v0.4.0` 是当前正式稳定发布基线，`v0.3.2` 保留为上一稳定版本历史。后续开发采用
+`master`、`develop` 和短期任务分支模型；分支是否已经创建以及任务实际基线，仍以当前
+分支、`HEAD`、远端状态和任务开始时已有的工作区修改为准。未发布的开发 `HEAD` 不属于
+stable release。
 
 - `AGENTS.md`：最高硬件安全与 Git/协作规则。
 - `README.md`：当前用户安装、运行、公开接口与状态概览。
@@ -19,6 +20,7 @@ WindArmor 是运行于树莓派 5（Ubuntu 24.04、ROS 2 Jazzy）的飞行机器
 - `docs/FLIGHT_CONTROL_API.md`：算法开发 API 依据。
 - `src/` 中各 ROS 2 包的源代码、`config/`、`launch/` 和测试：实际行为的
   最终依据。
+- `docs/DEVELOPMENT_WORKFLOW.md`：面向开发成员的分支、PR、CI、release/hotfix 协作流程。
 - release notes 和对应 RC checklist：仅作为相应历史版本的发布与验证证据。
 
 `docs/NEXT_COMMAND.md` 是可选的本地当前任务 scratchpad，用户可以用它传递长任务
@@ -90,6 +92,35 @@ WindArmor 是运行于树莓派 5（Ubuntu 24.04、ROS 2 Jazzy）的飞行机器
 4. 不自动创建 commit、push 或 tag。执行其中任何操作前，先汇报修改和
    验证结果并等待用户明确确认。
 5. 控制代码改变后，同步更新相关测试和 `README.md`。
+
+### 分支与协作治理
+
+v0.4.0 发布后的正式分支模型为 `master`、`develop` 和短期任务分支。定义该模型不代表
+`develop` 已经存在，也不授权 agent 创建或切换任何分支。
+
+- `master` 是稳定、已验证、可发布并对应正式 release/tag 的主线；不作为日常开发入口，
+  推荐只通过经过 CI 和 review 的 PR 接收变更。
+- `develop` 是下一版本集成主线；正常 feature、fix 和 docs 原则上先合入该分支。它必须
+  保持可构建、软件 CI green 且无已知严重破坏，但不代表任何真实硬件执行授权。
+- `feature/*`、`fix/*`、`docs/*` 和 `experiment/*` 是从 `develop` 创建的短期任务分支；
+  一个分支只承载一个可 review/test/merge 的工作单元，PR 合入 `develop` 后删除。
+- `hotfix/*` 从 `master` 创建，修复进入 `master` 并发布后必须同步回 `develop`。
+- `release/*` 按需从 `develop` 创建，不要求长期存在；冻结后只接收 bug fix、文档、版本
+  元数据、发布说明和验证驱动修复，最终通过 PR 进入 `master`，必要修复同步回 `develop`。
+- 不使用按个人身份划分的长期集成分支。
+
+从 `develop` 或 release branch 提升到 `master` 前，至少必须确认 required software CI、
+integration review、文档和 release-readiness review 通过，release blocker 已关闭；涉及
+真实执行器行为的变更还必须完成该版本所需的硬件验证。正式 tag 只能在 `master` 合入完成
+后创建。
+
+任何 AI agent / Codex 均不得仅因上述分支模型存在就自行创建或切换分支。每次创建、切换、
+合并、rebase、push、删除分支或执行其它 Git 状态变更，都必须以用户针对当前任务的明确授权
+和分支范围为准。获得某个任务分支授权后，agent 只能在该范围内工作，不得擅自切换
+`master`、合并、rebase、force push 或删除分支。
+
+面向人类开发成员的分支命名、PR、算法协作、release/hotfix 和推荐保护规则见
+`docs/DEVELOPMENT_WORKFLOW.md`。
 
 源代码注释、README、正式技术文档、测试说明和发布文档应描述工程设计、行为、
 约束与验证结果，不记录生成工具、实现助手或模型身份作为实现来源。必要的第三方
