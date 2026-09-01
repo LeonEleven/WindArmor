@@ -217,14 +217,18 @@ ros2 service call /fans/reset_e_stop std_srvs/srv/Trigger "{}"
 
 算法开发按以下顺序阅读：
 
-1. [算法开发者指南](docs/ALGORITHM_DEVELOPER_GUIDE.md)：如何构建、运行 synthetic
-   演示、接入算法和解释状态；
-2. [Flight Control API](docs/FLIGHT_CONTROL_API.md)：消息、服务、参数和时序契约；
-3. [Flight Control Architecture](docs/FLIGHT_CONTROL_ARCHITECTURE.md)：控制权、
+1. [Algorithm Getting Started](docs/ALGORITHM_GETTING_STARTED.md)：Intel macOS 环境、从
+   `develop` 创建 `feature/algo-*`、单元测试、synthetic DRY_RUN、Docker Jazzy 软件验证和
+   PR 的第一天完整流程；
+2. [算法开发者指南](docs/ALGORITHM_DEVELOPER_GUIDE.md)：正式 API、安全边界、算法接入和
+   评审规范；
+3. [Flight Control API](docs/FLIGHT_CONTROL_API.md)：消息、服务、参数和时序契约；
+4. [Flight Control Architecture](docs/FLIGHT_CONTROL_ARCHITECTURE.md)：控制权、
    命令时效租约、generation、失效后安全闭锁与状态机设计；
-4. [硬件参考](docs/HARDWARE_REFERENCE.md)：轴、符号、限位、接线和机械边界。
+5. [硬件参考](docs/HARDWARE_REFERENCE.md)：轴、符号、限位、接线和机械边界。
 
-算法开发默认使用 synthetic/fake 路径，不应通过启动真实硬件节点来验证纯控制逻辑。
+算法开发从 `develop` 的 `feature/algo-*` 短期分支开始，默认使用 synthetic/fake 路径，不应
+通过启动真实硬件节点来验证纯控制逻辑。
 
 ## 测试
 
@@ -269,7 +273,8 @@ python3 -m windarmor_flight_control.synthetic_dry_run
 | 文档 | 角色 |
 | --- | --- |
 | [硬件参考](docs/HARDWARE_REFERENCE.md) | 当前硬件、机械、坐标和接线契约 |
-| [算法开发者指南](docs/ALGORITHM_DEVELOPER_GUIDE.md) | 算法开发主入口 |
+| [Algorithm Getting Started](docs/ALGORITHM_GETTING_STARTED.md) | 算法新人第一天环境、测试、DRY_RUN、Docker 与 PR 流程 |
+| [算法开发者指南](docs/ALGORITHM_DEVELOPER_GUIDE.md) | 正式算法 API、安全和开发规范 |
 | [Flight Control API](docs/FLIGHT_CONTROL_API.md) | 稳定算法接口契约 |
 | [Flight Control Architecture](docs/FLIGHT_CONTROL_ARCHITECTURE.md) | Flight 长期架构依据 |
 | [开发协作流程](docs/DEVELOPMENT_WORKFLOW.md) | 多人协作、Git 分支、PR、CI、release 与 hotfix 规则 |
