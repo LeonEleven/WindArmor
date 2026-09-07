@@ -222,12 +222,16 @@ ros2 service call /fans/reset_e_stop std_srvs/srv/Trigger "{}"
    PR 的第一天完整流程；
 2. [算法研发路线](docs/ALGORITHM_ROADMAP.md)：v0.5.0 Balance Recovery 的能力递进、
    Milestone、异步研发轨、Task Spec 与 benchmark 原则；
-3. [算法开发者指南](docs/ALGORITHM_DEVELOPER_GUIDE.md)：正式 API、安全边界、算法接入和
+3. [ALG-001 Task Spec](docs/algorithm_tasks/ALG-001.md)：基础姿态反馈的输入、软件符号、
+   fail-close 与未来任务边界；
+4. [Algorithm Benchmark](docs/ALGORITHM_BENCHMARK.md)：版本化 qualification、场景、容差和
+   历史同级比较契约；
+5. [算法开发者指南](docs/ALGORITHM_DEVELOPER_GUIDE.md)：正式 API、安全边界、算法接入和
    评审规范；
-4. [Flight Control API](docs/FLIGHT_CONTROL_API.md)：消息、服务、参数和时序契约；
-5. [Flight Control Architecture](docs/FLIGHT_CONTROL_ARCHITECTURE.md)：控制权、
+6. [Flight Control API](docs/FLIGHT_CONTROL_API.md)：消息、服务、参数和时序契约；
+7. [Flight Control Architecture](docs/FLIGHT_CONTROL_ARCHITECTURE.md)：控制权、
    命令时效租约、generation、失效后安全闭锁与状态机设计；
-6. [硬件参考](docs/HARDWARE_REFERENCE.md)：轴、符号、限位、接线和机械边界。
+8. [硬件参考](docs/HARDWARE_REFERENCE.md)：轴、符号、限位、接线和机械边界。
 
 算法开发从 `develop` 的 `feature/algo-*` 短期分支开始，默认使用 synthetic/fake 路径，不应
 通过启动真实硬件节点来验证纯控制逻辑。
@@ -277,6 +281,8 @@ python3 -m windarmor_flight_control.synthetic_dry_run
 | [硬件参考](docs/HARDWARE_REFERENCE.md) | 当前硬件、机械、坐标和接线契约 |
 | [Algorithm Getting Started](docs/ALGORITHM_GETTING_STARTED.md) | 算法新人第一天环境、测试、DRY_RUN、Docker 与 PR 流程 |
 | [算法研发路线](docs/ALGORITHM_ROADMAP.md) | v0.5.0 Balance Recovery 能力路线、Milestone、任务与 benchmark 原则 |
+| [ALG-001 Task Spec](docs/algorithm_tasks/ALG-001.md) | 基础姿态反馈的独立 v1 能力与安全边界 |
+| [Algorithm Benchmark](docs/ALGORITHM_BENCHMARK.md) | 算法 qualification、版本化场景与历史同级比较契约 |
 | [算法开发者指南](docs/ALGORITHM_DEVELOPER_GUIDE.md) | 正式算法 API、安全和开发规范 |
 | [Flight Control API](docs/FLIGHT_CONTROL_API.md) | 稳定算法接口契约 |
 | [Flight Control Architecture](docs/FLIGHT_CONTROL_ARCHITECTURE.md) | Flight 长期架构依据 |

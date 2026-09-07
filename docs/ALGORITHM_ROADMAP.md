@@ -63,6 +63,8 @@ M1 主要通过纯函数单元测试、边界测试和 synthetic DRY_RUN 验证�
 ### ALG-001 — Basic Attitude Feedback
 
 主要能力：根据单轴姿态误差（第一候选通常为 `relative_pitch_rad`）产生基础恢复控制意图。
+独立规范见 [ALG-001 Task Spec v1](algorithm_tasks/ALG-001.md)，统一资格与历史比较规则见
+[Algorithm Benchmark v1](ALGORITHM_BENCHMARK.md)。
 
 资格验证重点：
 
@@ -293,13 +295,12 @@ release 前必须完成该版本所需的真实硬件验证；否则发布说明
 
 ## 11. 下一推荐任务
 
-下一独立工作单元是：
+ALG-001 的 Task Spec 与 Benchmark v1 contract 已建立。下一独立工作单元是：
 
 ```text
-ALG-001 Task Spec
-+
-Algorithm Benchmark v1 contract
+ALG-001 implementation candidate
 ```
 
-该任务应先固定 ALG-001 的符号与安全预期、fixture、容差、qualification 和 benchmark 元数据，
-再决定候选实现；它不应实现 ALG-002 及后续能力，也不自动进入任何真实硬件测试。
+实现必须从同一冻结的 [ALG-001 Task Spec v1](algorithm_tasks/ALG-001.md) 和
+[Algorithm Benchmark v1 / ALG-001 Profile v1](ALGORITHM_BENCHMARK.md) 出发，保留独立 lineage；
+不得实现 ALG-002 及后续能力，也不自动进入任何真实硬件测试。

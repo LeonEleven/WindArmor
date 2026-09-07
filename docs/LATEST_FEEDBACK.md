@@ -7,93 +7,89 @@
 ## 当前状态
 
 - 日期：2026-09-07
-- 当前任务：`v0.5.0-001 — Balance Recovery Algorithm R&D Roadmap`
-- task-start baseline：`origin/develop` / `47f0bf96ac13210aadf8dfaf3ffe77f77b1fc25a`
-- 当前任务分支：`docs/v0.5-balance-recovery-roadmap`
+- 当前任务：`v0.5.0-002 — ALG-001 Task Spec + Algorithm Benchmark v1 Contract`
+- task-start baseline：`origin/develop` / `30d4e02c84a12604de81ff3d1fd24f25759a40c1`
+- 当前任务分支：`docs/v0.5-alg001-benchmark-contract`
 - 当前 stable release：**v0.4.0**
 - previous stable / history：v0.3.2
-- 下一版本研发目标：**v0.5.0 — Balance Recovery**
-- 当前阶段：**Algorithm R&D planning / roadmap**
-- collaboration model：**master + develop + short-lived task branches**
-- `develop`：**已建立，当前下一版本集成主线**
-- GitHub branch protection：**维护者已确认建立；精确配置以 GitHub 当前设置为准**
-- PR #2 required Software CI：**PASS**
+- 下一版本研发目标：**v0.5.0 — Balance Recovery；未发布**
+- 当前阶段：**Algorithm specification / benchmark contract**
+- `v0.5.0-001` roadmap：**已进入 `develop`**
+- `develop` Software CI：**已验证工作正常**
+- ALG-001 implementation：**不存在 / NOT IMPLEMENTED**
 - 新的真实 actuator 验证：**未执行**
-- v0.5.0 release：**未发布；当前仅为研发目标**
+- 当前硬件授权：**无**
 
 ## 本任务
 
-本任务建立长期维护的 [`ALGORITHM_ROADMAP.md`](ALGORITHM_ROADMAP.md)，不实现或选择具体
-控制算法。路线图定义：
+本任务建立两个长期文档资产：
 
-- ALG-001 至 ALG-008 的单一主要能力递进；
-- M1 Basic Feedback、M2 Recovery Controller、M3 Full Balance Recovery；
-- Fast Progression Track 与 Independent Learning / Validation Track 的异步推进规则；
-- implementation lineage、独立 ALG Task Spec、qualification 和历史同级比较原则；
-- 从纯函数、synthetic DRY_RUN 到 replay/dynamic benchmark、可信仿真和受限硬件验证的
-  证据升级；
-- 软件研发完成与真实 Balance Recovery 已验证之间不可混用的结论边界。
+- [`algorithm_tasks/ALG-001.md`](algorithm_tasks/ALG-001.md)：ALG-001 Task Spec v1；
+- [`ALGORITHM_BENCHMARK.md`](ALGORITHM_BENCHMARK.md)：Algorithm Benchmark v1 Contract 与
+  ALG-001 Profile v1。
 
-`DEVELOPMENT_WORKFLOW.md` 同步为 `develop` 已投入使用的当前事实，并记录 branch protection
-的高层确认；精确保护规则仍以 GitHub 当前设置为准。README 只增加路线图入口，改善算法
-研发文档的可发现性。
+核心决策：
+
+- `target_pitch_rad = 0`，`pitch_error_rad = target - relative_pitch_rad`；
+- 使用 task-local `pitch_feedback_intent` 评分基础比例反馈的软件符号、幅值关系和重复性；
+- 软件 feedback sign 不代表任何已验证的电机/风扇物理方向；
+- LEVEL A 评分抽象 intent，LEVEL B 只评分 controller/`FlightCommand` 合法性和 fail-close；
+- 在 ALG-006 以前，不从 motor/fan payload 反推物理 control allocation；相关指标明确为当前
+  不可评分；
+- Hard Qualification 与 comparative metrics 分离，任何安全 gate FAIL 都是
+  `ALG-001 NOT QUALIFIED`；
+- 本任务只制定规范，不创建 candidate、benchmark runner 或 production test。
+
+## 规范与场景
+
+- Task Spec：`v1`；Benchmark Contract：`v1`；ALG-001 Profile：`v1`；fixture：
+  `ALG001-FIXTURE-v1`；
+- 正常场景：`ALG001-N00`、`P01`、`P02`、`N01`、`N02`，synthetic pitch 为
+  `0`、`±0.05`、`±0.10 rad`；
+- fail-close：`ALG001-F01`–`F08` 和 `D01`–`D04`；
+- reset：`ALG001-R01`；
+- `relative_pitch_rad` 的 NaN/Inf、valid IMU 中缺失 pitch、motor key 缺失由前置 state
+  validation 拒绝；合法 invalid/unobserved/stale/unhealthy state 和非法 `dt` 由 controller
+  返回无载荷 safe-stop；
+- ALG-002 damping、ALG-003 filtering、ALG-004 output shaping、ALG-005 recovery process、
+  ALG-006 allocation、ALG-007 multi-axis 和 ALG-008 dynamic recovery 均保留为 future-task
+  boundary。
 
 ## 本任务验证
 
 - `git diff --check`：**PASS**；
-- Markdown 相对链接扫描：**34 files scanned、116 links checked、missing 0**；
-- PR #2 首次创建后，`develop` branch protection 要求的 `software-ci` 保持
-  **Expected / Waiting for status to be reported**，且没有对应 GitHub Actions run；
-- 根因是当时的 GitHub Actions workflow 仅监听 `master`；当前 PR 增加最小 branch trigger
-  对齐，使 Software CI 同时支持 `master` 和 `develop`；
-- trigger 修复提交并推送后，GitHub Actions 已产生真实的 `WindArmor Software CI` run
-  `34079155920`，required job/context `software-ci` 为 **PASS**，PR #2 required checks 为
-  **PASS**；这确认了面向 `develop` 的 required Software CI 已能正常工作；
-- 本地 full ROS 2 software CI：**未执行**；本次 bootstrap 只修改 workflow branch trigger 和
-  Markdown，不改变 CI job/test 内容或 production behavior；
-- 硬件验证：**未执行**；本任务不需要且未获任何新硬件运行授权。
+- Markdown relative-link scan：**36 files scanned、131 links checked、missing 0**；
+- `python3 scripts/check_ci_safety.py`：**PASS（2 files checked）**；
+- full ROS 2 build/test：**未执行**；本任务只修改 Markdown，不改变 executable behavior；
+- hardware validation：**未执行**；本任务不需要且没有硬件授权。
 
 ## 历史证据保留
 
 v0.4.0 的 Gate B/C/D、PASS/FAIL/NOT VERIFIED、有效与无效 session、接线映射、release
-blocker、安全结论、证据等级和已知限制均已长期保存在：
+blocker、安全结论、证据等级和已知限制已长期保存在：
 
 - [v0.4.0 硬件与功能验证记录](verification/v0.4.0/HARDWARE_VERIFICATION_RECORD.md)；
 - [v0.4.0 硬件验证历史执行计划](V0.4.0_HARDWARE_VERIFICATION_PLAN.md)；
 - [v0.4.0 发布说明](RELEASE_NOTES_v0.4.0.md)。
 
-本文件切换到 v0.5.0 当前状态不会删除或改变上述历史证据。v0.4.0 仍是当前正式稳定发布，
-其 Gate B/C/D 和 hardware/functional verification 结论仍为 COMPLETE；这些历史结论不授权
-任何新的硬件操作，也不能扩展为 v0.5.0 算法或真实 Balance Recovery 已验证。
+本次更新没有删除或改变这些历史证据。它们不授权新的硬件操作，也不能扩展为 ALG-001 或
+v0.5.0 真实 Balance Recovery 已验证。
 
 ## 变更与安全边界
 
-- roadmap / governance / navigation documentation changed：**YES**
-- GitHub Actions CI branch trigger changed：**YES**
-- CI job/test contents changed：**NO**
-- production behavior changed：**NO**
-- hardware behavior changed：**NO**
-- develop PR required `software-ci` verification：**PASS**
-- algorithm / Runtime / hardware manager / driver changed：**NO**
-- Flight API 或 ROS topic/service contract changed：**NO**
-- motor/fan 参数或 CAN/GPIO/PWM 映射 changed：**NO**
+- specification / benchmark / navigation documentation changed：**YES**
+- production code / tests / Runtime / Flight API changed：**NO**
+- default/example controller 或 synthetic DRY_RUN behavior changed：**NO**
+- ALG-001 candidate / parameters / implementation created：**NO**
+- motor/fan 参数、CAN/GPIO/PWM、机械限位或硬件映射 changed：**NO**
 - package version changed to v0.5.0：**NO**
-- 真实 IMU、CAN、电机、风扇或 GPIO/PWM accessed：**NO**
+- 真实 IMU、CAN、电机、风扇、GPIO/PWM 或串口 accessed：**NO**
 - powered test：**NO**
-- 当前任务分支已有已提交并推送至远端的 roadmap 变更；
-- merge to `develop`：**尚未完成**；
-- tag / release：**未创建**；
-- PR 生命周期状态以 GitHub 当前状态为准。
+- commit / push / PR / merge / tag / release：**NO**
 
 ## 下一推荐任务
 
-建立独立、可 review 的：
-
-```text
-ALG-001 Task Spec
-+
-Algorithm Benchmark v1 contract
-```
-
-下一任务仍应从软件验证开始，固定基础姿态反馈的符号、输入、输出、安全行为、fixture、
-容差、qualification 和 benchmark 元数据；不得自动实现后续 ALG 能力或进入真实硬件验证。
+用户 review 并明确授权本任务的 commit、push 和 PR 后，下一工作单元才是正式启动
+`ALG-001 implementation candidate`。该任务应从同一个冻结的 Task Spec v1、Algorithm
+Benchmark v1 和 ALG-001 Profile v1 出发，建立可追溯且彼此独立的 implementation lineage；
+不得自动提前创建 candidate 或进入硬件验证。
