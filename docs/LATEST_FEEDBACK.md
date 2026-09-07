@@ -68,7 +68,10 @@ blocker、安全结论、证据等级和已知限制均已长期保存在：
 - package version changed to v0.5.0：**NO**
 - 真实 IMU、CAN、电机、风扇或 GPIO/PWM accessed：**NO**
 - powered test：**NO**
-- commit / push / PR / merge / tag / release：**NO**
+- 当前任务分支已有已提交并推送至远端的 roadmap 变更；
+- merge to `develop`：**尚未完成**；
+- tag / release：**未创建**；
+- PR 生命周期状态以 GitHub 当前状态为准。
 
 ## 下一推荐任务
 
