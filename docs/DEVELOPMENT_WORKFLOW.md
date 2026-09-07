@@ -4,8 +4,8 @@
 CI、硬件授权与发布协作方式。仓库级强制规则仍以根目录 [`AGENTS.md`](../AGENTS.md) 为准；
 本文不能放宽其中的硬件安全门槛或 Git 操作限制。
 
-当前正式稳定版本为 v0.4.0。本流程定义未来的 `develop` 集成主线，但本次文档任务不创建
-`develop` 或任何其它分支；实际分支创建必须由用户另行明确授权。
+当前正式稳定版本为 v0.4.0。`develop` 已建立并作为下一版本的实际集成主线；分支已经存在
+不代表任何 agent 获得创建、切换、合并、推送或删除分支的隐式授权。
 
 ## 分支模型
 
@@ -98,7 +98,8 @@ develop
 hardware manager 和 hardware driver 不属于普通算法任务范围；确需修改时必须明确提出 API
 或安全边界变化并接受维护者 review。
 
-详细的控制器契约、测试命令和硬件边界见
+v0.5.0 Balance Recovery 的能力递进、Milestone、异步研发轨、Task Spec 与 benchmark 原则见
+[算法研发路线](ALGORITHM_ROADMAP.md)。详细的控制器契约、测试命令和硬件边界见
 [算法开发者指南](ALGORITHM_DEVELOPER_GUIDE.md)。
 
 ## Pull Request 与 CI
@@ -194,9 +195,10 @@ master
 
 应避免共享 API 在集成期间无通知漂移，使短期算法分支直到合并时才发现不兼容。
 
-## 推荐 GitHub branch protection
+## GitHub branch protection
 
-以下是建议配置，本文件不表示 GitHub 当前已经启用这些设置。
+维护者已确认仓库的 branch protection 已建立。具体规则可能继续调整，精确生效配置以
+GitHub 当前设置为准；以下条目是本仓库应保持的保护目标，不用于虚构或替代远端配置。
 
 `master` 推荐：
 
