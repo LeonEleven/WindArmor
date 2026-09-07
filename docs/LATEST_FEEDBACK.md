@@ -17,6 +17,7 @@
 - collaboration model：**master + develop + short-lived task branches**
 - `develop`：**已建立，当前下一版本集成主线**
 - GitHub branch protection：**维护者已确认建立；精确配置以 GitHub 当前设置为准**
+- PR #2 required Software CI：**PASS**
 - 新的真实 actuator 验证：**未执行**
 - v0.5.0 release：**未发布；当前仅为研发目标**
 
@@ -43,10 +44,12 @@
 - Markdown 相对链接扫描：**34 files scanned、116 links checked、missing 0**；
 - PR #2 首次创建后，`develop` branch protection 要求的 `software-ci` 保持
   **Expected / Waiting for status to be reported**，且没有对应 GitHub Actions run；
-- 根因是现有 GitHub Actions workflow 仅监听 `master`；当前 PR 增加最小 branch trigger
-  对齐，使 Software CI 同时支持 `master` 和 `develop`；这不是 CI PASS，实际结果必须等待
-  修改提交并推送后由 GitHub Actions 运行确认；
-- full ROS 2 software CI：**未执行**；本次 bootstrap 只修改 workflow branch trigger 和
+- 根因是当时的 GitHub Actions workflow 仅监听 `master`；当前 PR 增加最小 branch trigger
+  对齐，使 Software CI 同时支持 `master` 和 `develop`；
+- trigger 修复提交并推送后，GitHub Actions 已产生真实的 `WindArmor Software CI` run
+  `34079155920`，required job/context `software-ci` 为 **PASS**，PR #2 required checks 为
+  **PASS**；这确认了面向 `develop` 的 required Software CI 已能正常工作；
+- 本地 full ROS 2 software CI：**未执行**；本次 bootstrap 只修改 workflow branch trigger 和
   Markdown，不改变 CI job/test 内容或 production behavior；
 - 硬件验证：**未执行**；本任务不需要且未获任何新硬件运行授权。
 
@@ -70,6 +73,7 @@ blocker、安全结论、证据等级和已知限制均已长期保存在：
 - CI job/test contents changed：**NO**
 - production behavior changed：**NO**
 - hardware behavior changed：**NO**
+- develop PR required `software-ci` verification：**PASS**
 - algorithm / Runtime / hardware manager / driver changed：**NO**
 - Flight API 或 ROS topic/service contract changed：**NO**
 - motor/fan 参数或 CAN/GPIO/PWM 映射 changed：**NO**
