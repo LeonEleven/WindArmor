@@ -41,9 +41,13 @@
 
 - `git diff --check`：**PASS**；
 - Markdown 相对链接扫描：**34 files scanned、116 links checked、missing 0**；
-- GitHub branch protection 精确配置：本地 `gh` 认证无效，**未独立读取**；文档只保留维护者
-  已确认的高层事实，并明确以 GitHub 当前设置为准；
-- full ROS 2 software CI：**未执行**；本任务仅修改 Markdown，不改变可执行行为；
+- PR #2 首次创建后，`develop` branch protection 要求的 `software-ci` 保持
+  **Expected / Waiting for status to be reported**，且没有对应 GitHub Actions run；
+- 根因是现有 GitHub Actions workflow 仅监听 `master`；当前 PR 增加最小 branch trigger
+  对齐，使 Software CI 同时支持 `master` 和 `develop`；这不是 CI PASS，实际结果必须等待
+  修改提交并推送后由 GitHub Actions 运行确认；
+- full ROS 2 software CI：**未执行**；本次 bootstrap 只修改 workflow branch trigger 和
+  Markdown，不改变 CI job/test 内容或 production behavior；
 - 硬件验证：**未执行**；本任务不需要且未获任何新硬件运行授权。
 
 ## 历史证据保留
@@ -62,6 +66,10 @@ blocker、安全结论、证据等级和已知限制均已长期保存在：
 ## 变更与安全边界
 
 - roadmap / governance / navigation documentation changed：**YES**
+- GitHub Actions CI branch trigger changed：**YES**
+- CI job/test contents changed：**NO**
+- production behavior changed：**NO**
+- hardware behavior changed：**NO**
 - algorithm / Runtime / hardware manager / driver changed：**NO**
 - Flight API 或 ROS topic/service contract changed：**NO**
 - motor/fan 参数或 CAN/GPIO/PWM 映射 changed：**NO**
