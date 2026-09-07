@@ -85,11 +85,13 @@ v0.5.0 真实 Balance Recovery 已验证。
 - package version changed to v0.5.0：**NO**
 - 真实 IMU、CAN、电机、风扇、GPIO/PWM 或串口 accessed：**NO**
 - powered test：**NO**
-- commit / push / PR / merge / tag / release：**NO**
+- 本任务规范变更已存在于远端短期任务分支；
+- PR / merge 生命周期状态以 GitHub 当前状态为准；
+- tag / release：**未创建**。
 
 ## 下一推荐任务
 
-用户 review 并明确授权本任务的 commit、push 和 PR 后，下一工作单元才是正式启动
-`ALG-001 implementation candidate`。该任务应从同一个冻结的 Task Spec v1、Algorithm
-Benchmark v1 和 ALG-001 Profile v1 出发，建立可追溯且彼此独立的 implementation lineage；
-不得自动提前创建 candidate 或进入硬件验证。
+本任务经 review、required Software CI 验证并通过 PR 合入 `develop` 后，下一工作单元才是
+正式启动 `ALG-001 implementation candidate`。该任务应从同一个冻结的 Task Spec v1、
+Algorithm Benchmark v1 和 ALG-001 Profile v1 出发，建立可追溯且彼此独立的
+implementation lineage；不得自动提前创建 candidate 或进入硬件验证。
