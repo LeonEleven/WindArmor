@@ -236,6 +236,10 @@ ros2 service call /fans/reset_e_stop std_srvs/srv/Trigger "{}"
 算法开发从 `develop` 的 `feature/algo-*` 短期分支开始，默认使用 synthetic/fake 路径，不应
 通过启动真实硬件节点来验证纯控制逻辑。
 
+ALG-001 Candidate A 是 v0.5.0 开发中的非默认纯软件候选，实现 Basic Attitude Feedback
+的抽象比例反馈意图。它尚未定义或验证真实电机/风扇方向，不表示 Balance Recovery 已实现，
+也不授权硬件运行；系统默认控制器保持不变。
+
 ## 测试
 
 仓库完整纯软件 CI 入口为：
