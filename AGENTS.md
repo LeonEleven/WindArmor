@@ -95,8 +95,10 @@ stable release。
 
 ### 分支与协作治理
 
-v0.4.0 发布后的正式分支模型为 `master`、`develop` 和短期任务分支。定义该模型不代表
-`develop` 已经存在，也不授权 agent 创建或切换任何分支。
+v0.4.0 发布后的正式分支模型为 `master`、`develop` 和短期任务分支；`develop` 已建立并作为
+下一版本集成主线。分支模型的存在本身不构成 agent 创建、切换、合并、rebase、删除分支或
+其它 Git 状态变更的授权；具体 Git 权限仍以当前任务授权和下述 Remote Review Checkpoint
+规则为准。
 
 - `master` 是稳定、已验证、可发布并对应正式 release/tag 的主线；不作为日常开发入口，
   推荐只通过经过 CI 和 review 的 PR 接收变更。
