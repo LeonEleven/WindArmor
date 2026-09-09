@@ -74,23 +74,46 @@ effectiveness，或机器人受到推动后会重新站稳。
 
 ### 5.1 Hard Qualification
 
-以下 gate 必须全部 PASS：
+Hard Qualification 分为全局共同门槛和对应 Task Profile 定义的行为资格门槛，两部分都必须
+全部 PASS。
 
-- candidate、factory 和配置可追溯，执行可重复；
+#### 全局 Hard Qualification
+
+所有 candidate 都必须满足：
+
+- candidate、factory、固定配置和 implementation commit 可追溯，执行可重复；
+- 对应 Task Spec、Benchmark Contract 和 Task Profile version 已固定并记录；
 - 输入安全处理和 validation-layer 分类正确；
 - 所有要求的 fail-close 场景返回合法、无载荷的 safe-stop，或在规定的前置 validation
   layer 被拒绝；
-- neutral、direction、monotonic magnitude、proportional consistency 和 finite output；
 - reset 与 repeatability；
+- 所有要求的输出为 finite；
 - Level B `FlightCommand` 通过 validation，普通命令为完整 motor frame 和合法 fan command；
 - future-task boundary review PASS；
 - 测试不导入或访问 ROS/hardware I/O，`hardware access: NO`。
 
-任何一项 FAIL，结果必须为 `NOT QUALIFIED`。安全失败不能由其它数值表现抵消。
+#### Task-specific behavior qualification
+
+正常控制行为的具体 gate 由对应 Task Profile 定义，不由全局 Contract 为所有 Task 统一规定
+total feedback 的方向或输入—输出关系。例如：
+
+- ALG-001 Profile v1 要求 neutral、direction、monotonic magnitude、proportional
+  consistency 和 symmetry；
+- ALG-002 Profile v1 要求 ALG-001 inheritance、zero-rate behavior、diverging damping、
+  recovering damping、zero-pitch moving damping、signed damping separation 和 mirror
+  consistency。
+
+因此，全局 Contract 不要求所有 Task 的 total feedback 始终与 `pitch_error` 同号。ALG-002
+recovering behavior 仍按其 Profile 的 `P02 > P00`、`N02 < N00` 判定，并允许 total intent
+在合理阻尼作用下穿过零点反号。
+
+任何全局或对应 Task Profile 的 Hard Qualification 项 FAIL，结果都必须为 `NOT QUALIFIED`。
+安全失败或 task-specific behavior 失败不能由其它数值表现或 comparative metrics 抵消。
 
 ### 5.2 Comparative metrics
 
-通过 hard gates 后，可以独立记录：
+Comparative metrics 由对应 Task Profile 定义，只有全局和 task-specific Hard Qualification
+全部 PASS 后才能记录和比较。例如，ALG-001 Profile 可以记录：
 
 - proportional consistency error；
 - symmetry error；
@@ -99,22 +122,30 @@ effectiveness，或机器人受到推动后会重新站稳。
 - test coverage quality（同时报告工具、范围和未覆盖项）；
 - configuration clarity（review 结论与具体理由）。
 
+ALG-002 Profile v1 使用其已定义的 damping separation、damping separation mirror error、
+mirror symmetry error、zero-pitch damping symmetry、repeatability delta、implementation
+complexity 和 configuration clarity；具体计算口径仍以该 Profile 为准。
+
 这些指标不合成为未经依据的 100 分总分，且 `Kp` 越大不表示更优。若未来引入 score，必须
-版本化权重依据，并在 score 之外先通过全部 hard gates。
+版本化权重依据，并在 score 之外先通过全部 hard gates。不同 Task 的指标不能组成跨 Task
+的直接排名。
 
 ## 6. Candidate independence 与历史比较
 
-两个 candidate 只有同时满足以下条件，才可作公平的 ALG-001 同级比较：
+两个 candidate 只有属于相同 Task，并同时满足以下条件，才可作公平的历史同级比较：
 
 - 相同 Task Spec version；
 - 相同 Benchmark Contract version；
-- 相同 ALG-001 Profile version；
+- 相同 Task Profile version；
 - 相同 fixture/scenario set 和 tolerance；
 - 可追溯 baseline、固定配置和各自独立 implementation commit；
 - 相同执行层级；环境差异已记录且不会被隐藏。
 
+例如 `ALG-001 Candidate A` 与 `ALG-001 Candidate B` 可以在满足上述条件后比较；同一规则也
+适用于 `ALG-002 Candidate A` 与 `ALG-002 Candidate B`。
+
 如果一个 candidate 后来基于另一个 candidate 的实现修改，必须记录新的 lineage/hybrid，
-不得再称为完全独立实现。不同 task、版本或 Level 的结果只能带限制地说明，不能包装成直接
+不得再称为完全独立实现。不同 Task、版本或 Level 的结果只能带限制地说明，不能包装成直接
 排名。
 
 ## 7. ALG-001 Profile v1
