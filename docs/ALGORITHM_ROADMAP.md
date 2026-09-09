@@ -66,6 +66,10 @@ M1 主要通过纯函数单元测试、边界测试和 synthetic DRY_RUN 验证�
 独立规范见 [ALG-001 Task Spec v1](algorithm_tasks/ALG-001.md)，统一资格与历史比较规则见
 [Algorithm Benchmark v1](ALGORITHM_BENCHMARK.md)。
 
+ALG-001 Candidate A 已针对固定 implementation commit 完成 Level A/B 纯软件资格验证，结论为
+[`ALG-001 QUALIFIED`](algorithm_results/ALG-001_CANDIDATE_A.md)。该结论不包含动态仿真、真实
+执行器方向或硬件验证。
+
 资格验证重点：
 
 - 正、负和零附近输入对应的输出方向符合该 Task Spec；
@@ -79,8 +83,14 @@ multi-axis recovery 属于后续任务，不应顺手加入。
 
 ### ALG-002 — Motion Trend / Damping
 
-主要能力：在姿态误差之外使用角速度等运动趋势，使控制器能够区分“已经倾斜且仍快速继续
-倾倒”和“已经倾斜但正在恢复”。
+主要能力：在姿态误差之外使用统一的软件 pitch rate 观察运动趋势，使控制器能够区分
+“已经倾斜且仍快速继续倾倒”和“已经倾斜但正在恢复”。
+
+独立规范见 [ALG-002 Task Spec v1](algorithm_tasks/ALG-002.md)，固定资格场景见
+[Algorithm Benchmark v1 / ALG-002 Profile v1](ALGORITHM_BENCHMARK.md#9-alg-002-profile-v1)。
+此前的 pitch-rate 坐标阻塞已由 v0.5.0-004A 解除；ALG-002 只消费统一后的
+`relative_pitch_rad` 和 `relative_pitch_rate_rad_s`，不自行解释 raw gyro 轴或符号。当前阶段
+为 Task Spec / Benchmark Profile 建立，controller 尚未实现。
 
 资格验证重点：
 
@@ -295,12 +305,14 @@ release 前必须完成该版本所需的真实硬件验证；否则发布说明
 
 ## 11. 下一推荐任务
 
-ALG-001 的 Task Spec 与 Benchmark v1 contract 已建立。下一独立工作单元是：
+ALG-001 Candidate A 已 QUALIFIED，pitch-rate API blocker 已由 v0.5.0-004A 解除。当前独立
+工作单元是建立：
 
 ```text
-ALG-001 implementation candidate
+ALG-002 Task Spec v1 + ALG-002 Benchmark Profile v1
 ```
 
-实现必须从同一冻结的 [ALG-001 Task Spec v1](algorithm_tasks/ALG-001.md) 和
-[Algorithm Benchmark v1 / ALG-001 Profile v1](ALGORITHM_BENCHMARK.md) 出发，保留独立 lineage；
-不得实现 ALG-002 及后续能力，也不自动进入任何真实硬件测试。
+本规范经评审并合入 `develop` 后，下一工作单元才可基于冻结的
+[ALG-002 Task Spec v1](algorithm_tasks/ALG-002.md) 和
+[Algorithm Benchmark v1 / ALG-002 Profile v1](ALGORITHM_BENCHMARK.md#9-alg-002-profile-v1)
+实现 ALG-002 Candidate A。当前任务不实现 candidate，也不自动进入任何真实硬件测试。
