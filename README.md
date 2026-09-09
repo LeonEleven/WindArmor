@@ -224,14 +224,16 @@ ros2 service call /fans/reset_e_stop std_srvs/srv/Trigger "{}"
    Milestone、异步研发轨、Task Spec 与 benchmark 原则；
 3. [ALG-001 Task Spec](docs/algorithm_tasks/ALG-001.md)：基础姿态反馈的输入、软件符号、
    fail-close 与未来任务边界；
-4. [Algorithm Benchmark](docs/ALGORITHM_BENCHMARK.md)：版本化 qualification、场景、容差和
+4. [ALG-002 Task Spec](docs/algorithm_tasks/ALG-002.md)：运动趋势与阻尼的统一 pitch-rate
+   输入、软件关系和资格边界；
+5. [Algorithm Benchmark](docs/ALGORITHM_BENCHMARK.md)：版本化 qualification、场景、容差和
    历史同级比较契约；
-5. [算法开发者指南](docs/ALGORITHM_DEVELOPER_GUIDE.md)：正式 API、安全边界、算法接入和
+6. [算法开发者指南](docs/ALGORITHM_DEVELOPER_GUIDE.md)：正式 API、安全边界、算法接入和
    评审规范；
-6. [Flight Control API](docs/FLIGHT_CONTROL_API.md)：消息、服务、参数和时序契约；
-7. [Flight Control Architecture](docs/FLIGHT_CONTROL_ARCHITECTURE.md)：控制权、
+7. [Flight Control API](docs/FLIGHT_CONTROL_API.md)：消息、服务、参数和时序契约；
+8. [Flight Control Architecture](docs/FLIGHT_CONTROL_ARCHITECTURE.md)：控制权、
    命令时效租约、generation、失效后安全闭锁与状态机设计；
-8. [硬件参考](docs/HARDWARE_REFERENCE.md)：轴、符号、限位、接线和机械边界。
+9. [硬件参考](docs/HARDWARE_REFERENCE.md)：轴、符号、限位、接线和机械边界。
 
 算法开发从 `develop` 的 `feature/algo-*` 短期分支开始，默认使用 synthetic/fake 路径，不应
 通过启动真实硬件节点来验证纯控制逻辑。
@@ -239,6 +241,11 @@ ros2 service call /fans/reset_e_stop std_srvs/srv/Trigger "{}"
 ALG-001 Candidate A 是 v0.5.0 开发中的非默认纯软件候选，实现 Basic Attitude Feedback
 的抽象比例反馈意图。它尚未定义或验证真实电机/风扇方向，不表示 Balance Recovery 已实现，
 也不授权硬件运行；系统默认控制器保持不变。
+
+ALG-002 Candidate A 是 v0.5.0 开发中的非默认纯软件候选，在 ALG-001 基础上使用
+`relative_pitch_rad` 和 `relative_pitch_rate_rad_s` 实现 Motion Trend / Damping。它直接消费
+Flight API 的统一 pitch-rate，不重新解释 raw gyro XYZ；其抽象 intent 尚未分配到真实执行器，
+不表示真实 actuator direction 已验证或 Balance Recovery 已完成，也不授权硬件运行。
 
 Flight `ImuState` 还提供与 `relative_pitch_rad` 同软件正方向的
 `relative_pitch_rate_rad_s`。该值由同一 IMU 样本的姿态和 body-frame 三轴角速度派生；原始

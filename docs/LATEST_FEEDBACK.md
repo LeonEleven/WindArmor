@@ -9,18 +9,21 @@
 ## 当前状态
 
 - 日期：2026-09-09
-- 当前任务：`v0.5.0-004 — ALG-002 Task Spec + Benchmark Profile v1`
+- 当前任务：`v0.5.0-005 — ALG-002 Candidate A Implementation`
 - task-start baseline：`origin/develop` /
-  `ab367d5497b91dbfb17c7bfc31f56ba72336916f`
-- 当前短期任务分支：`docs/v0.5-alg002-benchmark-contract`
-- 当前阶段：**ALG-002 specification / benchmark definition**
+  `e58e66144e1e9640adb330dc0f2eed1927e95624`
+- 当前短期任务分支：`feature/algo-002-candidate-a`
+- 当前阶段：**implementation + pre-formal-qualification remote review**
 - 当前 stable release：**v0.4.0**
 - previous stable / history：v0.3.2
 - 下一版本研发目标：**v0.5.0 — Balance Recovery；未发布**
 - Task Spec：`ALG-002 v1`
 - Benchmark：`Algorithm Benchmark v1 / ALG-002 Profile v1`
 - Fixture：`ALG002-FIXTURE-v1`
-- ALG-002 implementation：**NOT IMPLEMENTED**
+- Candidate：`Candidate A`
+- ALG-001 Candidate A：**ALG-001 QUALIFIED**
+- ALG-002 Candidate A：**UNDER REMOTE REVIEW**
+- formal Candidate Result：**NOT GENERATED**
 - v0.5.0-004A：**COMPLETE**
 - `relative_pitch_rate_rad_s`：**已进入 develop**
 - hardware access：**NO**
@@ -35,6 +38,7 @@
 - `v0.5.0-002`：**COMPLETE**；
 - `v0.5.0-003`：**COMPLETE**；
 - `v0.5.0-004A`：**COMPLETE**；
+- `v0.5.0-004`：**COMPLETE**；
 - ALG-001 Candidate A：**ALG-001 QUALIFIED**；
 - Candidate A implementation commit：
   `fe575c9589013138d238e567e93dac2925384ab7`；
@@ -53,13 +57,15 @@
 
 ## 当前任务目标与边界
 
-本任务建立 `ALG-002 Task Spec v1`、`ALG-002 Profile v1` 和 `ALG002-FIXTURE-v1`，冻结
-stationary/diverging/recovering、zero-pitch moving、ALG-001 inheritance、pitch-rate
-fail-close、`dt`、reset、repeatability 和软件比较指标。
+本任务实现 ALG-002 Candidate A：在 ALG-001 基础姿态反馈上，只使用统一的
+`relative_pitch_rad` 和 `relative_pitch_rate_rad_s` 增加无历史状态的 Motion Trend / Damping
+软件能力，并按冻结的 ALG-002 Profile v1 验证继承、正常趋势、fail-close、`dt`、reset、
+repeatability、factory 和完整 `FlightCommand` 契约。
 
-本任务只制定规范和 benchmark，不创建 ALG-002 controller、Candidate 或 Result，不选择
-`Kd`，不实现 filtering/deadband/slew-rate、恢复状态机、actuator allocation、roll control
-或动态恢复，也不改变 Flight API、Runtime、ALG-001 历史结果、真实执行器映射或硬件状态。
+本阶段只形成供远端评审的 implementation checkpoint；正式 Candidate Result 尚未生成，
+不得提前写入 `ALG-002 QUALIFIED`。本任务不实现 filtering/deadband/slew-rate、恢复状态机、
+actuator allocation、roll control 或动态恢复，也不改变 Flight API、Runtime、ALG-001 历史
+结果、真实执行器映射或硬件状态。
 
 ## 历史证据保留
 
@@ -74,11 +80,11 @@ blocker、安全结论、证据等级和已知限制继续长期保存在：
 
 ## 下一推荐工作单元
 
-本 Task Spec / Profile 经远端评审并合入 `develop` 后，才可启动：
+Candidate A implementation checkpoint 经远端评审通过并固定 implementation SHA 后，才可启动：
 
 ```text
-ALG-002 Candidate A Implementation
+ALG-002 Candidate A Formal Qualification
 ```
 
-候选控制律、配置和 implementation commit 仍必须在后续独立任务中确定；当前没有 ALG-002
-qualification 结论。
+下一阶段必须在干净的固定 implementation commit 上重跑 Algorithm Benchmark v1 / ALG-002
+Profile v1，再生成独立 Candidate Result；当前没有 ALG-002 qualification 结论。
