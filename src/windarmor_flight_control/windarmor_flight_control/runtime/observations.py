@@ -15,6 +15,7 @@ class RawImuObservation:
     pitch_rad: float
     yaw_rad: float
     angular_velocity_rad_s: Vector3
+    relative_pitch_rate_rad_s: float
     linear_acceleration_m_s2: Vector3
     received_at: float
 

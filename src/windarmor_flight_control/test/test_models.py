@@ -20,6 +20,7 @@ def test_state_and_nested_values_are_immutable() -> None:
     mutations = (
         (state, "sequence", 2),
         (state.imu, "roll_rad", 1.0),
+        (state.imu, "relative_pitch_rate_rad_s", 1.0),
         (state.motors["axis_a"], "position_rad", 1.0),
         (state.fans.left, "applied_command", 1.0),
         (state.fans, "enabled", False),
@@ -79,3 +80,9 @@ def test_authority_is_distinct_from_existing_motor_mode_string() -> None:
 
     assert state.system.command_authority is CommandAuthority.FLIGHT_CONTROL
     assert state.system.motor_control_mode == "AUTO"
+
+
+def test_fake_imu_pitch_rate_is_an_explicit_software_fixture() -> None:
+    state = make_fake_flight_state(MOTOR_NAMES)
+
+    assert state.imu.relative_pitch_rate_rad_s == 0.0

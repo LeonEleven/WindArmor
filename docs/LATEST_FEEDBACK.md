@@ -8,17 +8,19 @@
 
 ## 当前状态
 
-- 日期：2026-09-08
-- 当前任务：`v0.5.0 Process Improvement — Remote Review Checkpoint Workflow`
+- 日期：2026-09-09
+- 当前任务：`v0.5.0-004A — Flight Pitch Rate Coordinate Contract`
 - task-start baseline：`origin/develop` /
-  `7a5975e3b9a9f2a0fc8dff9be6ea0acaa7b8942c`
-- 当前短期任务分支：`docs/remote-review-checkpoint-workflow`
-- 当前阶段：**development governance improvement**
+  `73cd22a002a7f6c9203b1205c084a6bb0482d8b3`
+- 当前短期任务分支：`feature/flight-pitch-rate-contract`
+- 当前阶段：**解除 ALG-002 specification blocker**
 - 当前 stable release：**v0.4.0**
 - previous stable / history：v0.3.2
 - 下一版本研发目标：**v0.5.0 — Balance Recovery；未发布**
 - Task Spec：`ALG-001 v1`
 - Benchmark：`Algorithm Benchmark v1 / ALG-001 Profile v1`
+- ALG-002 specification：**BLOCKED；等待 pitch-rate contract 合入 develop**
+- 当前 API 目标：建立 `relative_pitch_rate_rad_s`
 - hardware access：**NO**
 - hardware authorization：**NONE；无新的硬件授权**
 - 真实 Balance Recovery verification：**NOT EXECUTED / NOT CLAIMED**
@@ -46,14 +48,14 @@
 
 ## 当前任务目标与边界
 
-本任务正式建立 Remote Review Checkpoint Workflow，使后续已明确启动、scope 清晰且已完成
-规定本地验证的短期任务，可以默认创建 task-scoped review commit 并正常 push 当前任务分支
-供远端 review。
+本任务为 `ImuState` 建立可由算法直接消费的 `relative_pitch_rate_rad_s` 坐标契约。它由
+Flight adapter 使用同一原始 IMU 样本的 orientation 和 body-frame angular velocity 按当前
+Z-Y-X 欧拉运动学派生，并应用与 `relative_pitch_rad` 一致的 `pitch_axis_sign`；不使用角度
+有限差分，不改变原始 `angular_velocity_rad_s` 的 IMU/body frame 语义。
 
-checkpoint 不等于 review PASS、PR approval、merge authorization、进入集成主线或 release
-evidence。PR、merge、branch cleanup、tag/release 和硬件访问仍分别遵循明确授权与现有安全
-门槛。本任务只修改开发治理与当前 handoff，不修改 ALG-001 资产、Algorithm Benchmark、
-production code、测试、workflow、Flight API、Runtime、硬件配置或版本，也不开始 ALG-002。
+本任务只解除 ALG-002 的 pitch-rate API / 坐标阻塞，不创建 ALG-002 Task Spec、Benchmark
+Profile 或 Candidate，不实现 damping、filter、deadband、slew-rate、状态机、actuator
+allocation、roll controller 或动态恢复，也不改变真实执行器映射或获得硬件授权。
 
 ## 历史证据保留
 
@@ -68,6 +70,10 @@ blocker、安全结论、证据等级和已知限制继续长期保存在：
 
 ## 下一推荐工作单元
 
-本治理任务合入 `develop` 后，开始 Fast Progression Track 的下一算法工作单元。具体 Task Spec、
-Benchmark 和 implementation scope 应在下一任务中独立确定；本任务不提前决定 ALG-002
-implementation 细节。
+本 pitch-rate contract 经远端评审并合入 `develop` 后，重新启动：
+
+```text
+v0.5.0-004 — ALG-002 Task Spec + Benchmark Profile v1
+```
+
+ALG-002 的控制律、候选与资格结果仍必须在后续独立任务中确定。

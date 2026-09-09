@@ -4,6 +4,10 @@ flight_control_runtime_node:
     control_rate_hz: 50.0
     motor_names: ["left_lift", "left_pitch", "right_pitch", "right_lift"]
 
+    # Must match the publisher of /imu/relative_roll_pitch. The Flight adapter
+    # applies the same sign to its derived relative_pitch_rate_rad_s.
+    pitch_axis_sign: 1.0
+
     # Flight input usability only; these do not modify lower-level watchdogs.
     flight_imu_freshness_sec: 0.2
     flight_motor_freshness_sec: 0.5

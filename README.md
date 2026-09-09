@@ -240,6 +240,11 @@ ALG-001 Candidate A 是 v0.5.0 开发中的非默认纯软件候选，实现 Bas
 的抽象比例反馈意图。它尚未定义或验证真实电机/风扇方向，不表示 Balance Recovery 已实现，
 也不授权硬件运行；系统默认控制器保持不变。
 
+Flight `ImuState` 还提供与 `relative_pitch_rad` 同软件正方向的
+`relative_pitch_rate_rad_s`。该值由同一 IMU 样本的姿态和 body-frame 三轴角速度派生；原始
+`angular_velocity_rad_s` 的 IMU/body frame 语义保持不变，详见
+[Flight Control API](docs/FLIGHT_CONTROL_API.md)。
+
 ## 测试
 
 仓库完整纯软件 CI 入口为：

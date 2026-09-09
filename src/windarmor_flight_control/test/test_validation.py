@@ -111,6 +111,32 @@ def test_state_rejects_valid_imu_with_missing_measurement() -> None:
             MOTOR_NAMES,
         )
 
+    with pytest.raises(FlightValidationError, match="complete measurement"):
+        validate_flight_state(
+            replace(
+                state,
+                imu=replace(state.imu, relative_pitch_rate_rad_s=None),
+            ),
+            MOTOR_NAMES,
+        )
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_state_rejects_nonfinite_relative_pitch_rate(value: float) -> None:
+    state = make_fake_flight_state(MOTOR_NAMES)
+
+    with pytest.raises(
+        FlightValidationError,
+        match="relative_pitch_rate_rad_s must be finite",
+    ):
+        validate_flight_state(
+            replace(
+                state,
+                imu=replace(state.imu, relative_pitch_rate_rad_s=value),
+            ),
+            MOTOR_NAMES,
+        )
+
 
 def test_state_rejects_healthy_motor_with_fault_flags() -> None:
     state = make_fake_flight_state(MOTOR_NAMES)

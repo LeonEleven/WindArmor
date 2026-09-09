@@ -110,7 +110,8 @@ def create_controller(
 | `yaw_rad` | `float \| None` | rad；原始姿态的欧拉偏航角 | 未知时为 `None` |
 | `relative_roll_rad` | `float \| None` | rad；轴向修正后的滚转角减去当前零点，并完成归一化 | 有效配对状态必须存在 |
 | `relative_pitch_rad` | `float \| None` | rad；轴向修正后的俯仰角减去当前零点，并完成归一化 | 有效配对状态必须存在 |
-| `angular_velocity_rad_s` | `Vector3 \| None` | IMU 坐标系中的 rad/s | 有效状态必须存在 |
+| `relative_pitch_rate_rad_s` | `float \| None` | rad/s；与 `relative_pitch_rad` 相同的软件 pitch 正方向 | 有效配对状态必须存在且有限 |
+| `angular_velocity_rad_s` | `Vector3 \| None` | IMU/body frame 中的原始三轴角速度 `(p,q,r)`，rad/s | 有效状态必须存在 |
 | `linear_acceleration_m_s2` | `Vector3 \| None` | IMU 坐标系中的 m/s² | 有效状态必须存在 |
 | `sample_age_sec` | `float \| None` | 非负的本地样本年龄，单位秒 | `valid/fresh` 时必须存在 |
 | `valid` | `bool` | 结构、有限数值、连接和零点代次均有效 | 否 |
@@ -124,6 +125,26 @@ def create_controller(
 
 示例：`relative_pitch_rad=0.10` 表示修正后的当前俯仰角相对最新零点为 `+0.10 rad`，
 不是 `+0.10°`，也不自动表示某个电机应正转。
+
+`relative_pitch_rate_rad_s` 是 Flight adapter 从同一条原始 IMU 消息的 orientation 和
+body-frame angular velocity 派生的瞬时 Euler pitch 变化率。当前 quaternion/Euler 约定为
+Z-Y-X；令原始 Euler roll 为 `phi`，body angular velocity 为 `(p,q,r)`，则：
+
+```text
+raw_euler_pitch_rate = cos(phi) * q - sin(phi) * r
+relative_pitch_rate_rad_s = pitch_axis_sign * raw_euler_pitch_rate
+```
+
+因此除 `roll=0` 等特殊姿态外，不能把 `angular_velocity_rad_s.y` 直接当成 Euler pitch
+rate。Runtime 的 `pitch_axis_sign` 必须与 `/imu/relative_roll_pitch` 发布者使用的值一致；
+`+1.0/-1.0` 会同时保持 angle/rate 的软件 pitch 正方向一致。IMU zero offset 是常数，只改变
+相对角，不改变瞬时 rate；rate 也不通过归一化角度有限差分得到，因此角度表示 wrap 不会制造
+虚假速率尖峰。Euler pitch 在 `±pi/2` 的 gimbal-lock 表示不可微，adapter 会拒绝该奇异姿态，
+而不是发布含糊的 pitch rate。
+
+该派生 rate 的正值表示 `relative_pitch_rad` 正在沿正方向增加，负值表示沿负方向变化，零值
+表示瞬时 pitch rate 为零。它仍然只是软件姿态坐标语义，不表示电机、风扇、力矩或推力方向。
+原始 `angular_velocity_rad_s` 保持不变，供诊断和未来其它坐标变换使用。
 
 ### MotorState
 
@@ -286,6 +307,7 @@ validate_flight_command(command, required)
 也不修正非法值。主要拒绝：
 
 - NaN/Inf、负年龄、非法的布尔值/存在性组合；
+- 缺失或非有限的有效 IMU `relative_pitch_rate_rad_s`；
 - `invalid/fresh/healthy` 互相矛盾；
 - 未知状态被伪装成已知；
 - 电机键缺失或多余；

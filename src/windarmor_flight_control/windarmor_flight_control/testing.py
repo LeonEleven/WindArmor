@@ -23,8 +23,8 @@ def make_fake_flight_state(
 ) -> FlightState:
     """创建观测完整的内存状态，且不访问 ROS 或硬件。
 
-    所有数值都是显式测试 fixture，不是真实安全默认值。把 ``with_feedback``
-    设为 false 会使执行许可不可用。
+    所有数值（包括默认的零 relative pitch rate）都是显式测试 fixture，不表示真实
+    静止或安全默认值。把 ``with_feedback`` 设为 false 会使执行许可不可用。
     """
 
     names = tuple(motor_names)
@@ -75,6 +75,7 @@ def make_fake_flight_state(
             yaw_rad=0.0,
             relative_roll_rad=0.0,
             relative_pitch_rad=0.0,
+            relative_pitch_rate_rad_s=0.0,
             angular_velocity_rad_s=Vector3(x=0.0, y=0.0, z=0.0),
             linear_acceleration_m_s2=Vector3(x=0.0, y=0.0, z=9.80665),
             sample_age_sec=0.0,
@@ -118,6 +119,7 @@ def make_unobserved_flight_state(motor_names: Iterable[str]) -> FlightState:
             yaw_rad=None,
             relative_roll_rad=None,
             relative_pitch_rad=None,
+            relative_pitch_rate_rad_s=None,
             angular_velocity_rad_s=None,
             linear_acceleration_m_s2=None,
             sample_age_sec=None,
