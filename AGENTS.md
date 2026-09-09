@@ -89,14 +89,16 @@ stable release。
 2. 先阅读相关代码、配置、测试和文档，再提出实施计划。大型或跨组件修改
    必须先等待用户确认。
 3. 修改保持最小范围，不改无关文件，不覆盖用户改动。
-4. 不自动创建 commit、push 或 tag。执行其中任何操作前，先汇报修改和
-   验证结果并等待用户明确确认。
+4. 除下述已授权短期任务的 Remote Review Checkpoint 外，不自动创建 commit、push 或
+   tag。执行其它提交、推送或 tag 操作前，先汇报修改和验证结果并等待用户明确确认。
 5. 控制代码改变后，同步更新相关测试和 `README.md`。
 
 ### 分支与协作治理
 
-v0.4.0 发布后的正式分支模型为 `master`、`develop` 和短期任务分支。定义该模型不代表
-`develop` 已经存在，也不授权 agent 创建或切换任何分支。
+v0.4.0 发布后的正式分支模型为 `master`、`develop` 和短期任务分支；`develop` 已建立并作为
+下一版本集成主线。分支模型的存在本身不构成 agent 创建、切换、合并、rebase、删除分支或
+其它 Git 状态变更的授权；具体 Git 权限仍以当前任务授权和下述 Remote Review Checkpoint
+规则为准。
 
 - `master` 是稳定、已验证、可发布并对应正式 release/tag 的主线；不作为日常开发入口，
   推荐只通过经过 CI 和 review 的 PR 接收变更。
@@ -114,10 +116,59 @@ integration review、文档和 release-readiness review 通过，release blocker
 真实执行器行为的变更还必须完成该版本所需的硬件验证。正式 tag 只能在 `master` 合入完成
 后创建。
 
-任何 AI agent / Codex 均不得仅因上述分支模型存在就自行创建或切换分支。每次创建、切换、
-合并、rebase、push、删除分支或执行其它 Git 状态变更，都必须以用户针对当前任务的明确授权
-和分支范围为准。获得某个任务分支授权后，agent 只能在该范围内工作，不得擅自切换
-`master`、合并、rebase、force push 或删除分支。
+任何 AI agent / Codex 均不得仅因上述分支模型存在就自行创建或切换分支。创建、切换、合并、
+rebase、删除分支或执行其它 Git 状态变更，都必须以用户针对当前任务的明确授权和分支范围
+为准。获得某个任务分支授权后，agent 只能在该范围内工作，不得擅自切换 `master`、合并、
+rebase、force push 或删除分支。普通 commit/push 只有在满足下述 Remote Review Checkpoint
+规则时才获得默认授权。
+
+### Remote Review Checkpoint
+
+Remote Review Checkpoint 是当前短期任务分支上供远端 review 使用的可追溯代码或文档快照，
+典型顺序为“任务实现 -> 必要本地验证 -> 正常 commit -> push 当前任务分支 -> remote
+review”。它让 reviewer 能从远端仓库读取 exact diff、commit、files 和 tests/evidence；它
+不等于 review PASS、PR approval、允许 merge 或 release evidence，不改变 `develop` / `master`，
+也不表示功能已进入集成主线。
+
+用户明确启动 `feature/*`、`fix/*`、`docs/*` 或 `experiment/*` 短期任务后，如果
+`docs/NEXT_COMMAND.md` 或 Task Spec 已明确 scope，修改严格位于该 scope，且已完成任务要求的
+本地验证，则默认允许 agent：
+
+1. `git add` 任务范围内文件并创建一个有工程意义的普通 review commit；
+2. 正常 push 当前短期任务分支到 `origin`；
+3. 汇报远端 checkpoint 后停止，等待 remote review。
+
+同一任务、同一分支的 changes requested 可以在修改和重新验证后形成新的普通 commit 并正常
+push，不需逐轮重新申请普通 checkpoint commit/push；不得 amend 已 review 的 checkpoint，
+不得 force push。commit message 必须描述长期工程意义，不使用 `checkpoint`、`temporary`、
+`AI generated` 或工具/模型身份等临时说明。
+
+checkpoint 前至少执行 `git diff --check` 及任务规定的 targeted tests、Software CI、Markdown
+link scan、safety checker、build/test 等适用验证。无法执行的要求必须在汇报中标明
+“未执行”及原因。以下任一情况出现时，不得自动 checkpoint，必须停止并询问用户：
+
+- 修改超出 `NEXT_COMMAND` / Task Spec，或需要修改原本禁止的文件；
+- 发现 API / architecture conflict 或 hardware / safety 边界问题；
+- 测试 FAIL 且无法在当前 scope 内安全解释；
+- 工作区出现来源不明的修改；
+- 需要 reset、clean、rebase、force push、删除分支、改变 `develop` / `master`、创建 tag/release
+  或取得硬件授权。
+
+默认 checkpoint 授权不包含创建 PR、merge、分支删除、tag、release、push 到 `develop` /
+`master` 或任何 history rewrite。PR、merge 和分支清理仍须用户分别针对当前任务明确授权；
+release 相关操作仍须独立 release task 和明确授权，branch protection 不得绕过。
+
+checkpoint 汇报至少包含 task branch、task-start baseline、checkpoint commit SHA、changed files、
+diff summary、验证命令与结果、未执行测试及原因、hardware access、剩余风险，以及 remote branch
+pushed、PR created、merge 的明确状态。这些实时状态写入当前任务汇报即可，不要求复制到
+`docs/LATEST_FEEDBACK.md`。
+
+Git / GitHub 当前状态是 branch 存在性、branch HEAD、push、PR number/state、required check、
+Actions run、mergeability/conflict 和 branch deletion 等实时生命周期状态的 source of truth。
+`docs/LATEST_FEEDBACK.md` 只保留对下一工作单元有价值的稳定工程状态；不得仅因 commit、push、
+PR、CI、merge 或 branch deletion 的生命周期变化创建 handoff 修正 commit。task-start baseline、
+固定 implementation commit、Candidate Result 对应 SHA、release/verified evidence commit 等作为
+工程证据对象的稳定 SHA 可以保留；易随下一提交失效的 transient current `HEAD` 不应长期复制。
 
 面向人类开发成员的分支命名、PR、算法协作、release/hotfix 和推荐保护规则见
 `docs/DEVELOPMENT_WORKFLOW.md`。
