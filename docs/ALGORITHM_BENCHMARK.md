@@ -314,31 +314,33 @@ Level A 观察 Task Spec 定义的 task-local `pitch_feedback_intent`。Level B 
 | pitch-rate 输入零判定 | `1e-12 rad/s` | `0` |
 | neutral intent | `1e-9` intent unit | `0` |
 | direction 非零判定 | 必须严格超过 `1e-9` intent unit | 不适用 |
-| magnitude 关系、镜像与重复性 | `1e-9` intent unit | `1e-6` |
+| 有符号关系、镜像与重复性 | `1e-9` intent unit | `1e-6` |
 | damping effect present | 差异必须严格超过对应 `tol(a,b)` | 见下方定义 |
 
-令 `tol(a,b) = 1e-9 + 1e-6 * max(abs(a), abs(b))`。`>=` 关系按
-`a >= b - tol(a,b)` 判定，`<=` 关系按 `a <= b + tol(a,b)` 判定。候选不得通过选择极小参数
-使应为非零的 direction 落入零容差。趋势分类先按上述 input tolerance 判断 pitch/rate 是否
-为零；两者均为非零时再使用 `pitch * rate` 的正负，不依赖浮点完全相等。
+令 `tol(a,b) = 1e-9 + 1e-6 * max(abs(a), abs(b))`。本 Profile 要求的有符号 damping
+separation 必须严格大于对应 `tol(a,b)`，不能以容差内相等通过。候选不得通过选择极小参数
+使应为非零的 direction 或 damping separation 落入零容差。趋势分类先按上述 input tolerance
+判断 pitch/rate 是否为零；两者均为非零时再使用 `pitch * rate` 的正负，不依赖浮点完全相等。
 
 ### 9.3 正常场景集
 
 表中的 intent 均为抽象软件反馈意图：
 
-| Scenario | pitch (rad) | rate (rad/s) | 趋势 | sign 与 magnitude 关系 |
+| Scenario | pitch (rad) | rate (rad/s) | 趋势 | 有符号关系 |
 | --- | ---: | ---: | --- | --- |
 | `ALG002-P00` | `+0.05` | `0.0` | zero-rate | intent 为负且非零；positive-pitch 基础值 |
-| `ALG002-P01` | `+0.05` | `+0.20` | diverging | intent 为负且非零；`abs(P01) >= abs(P00)` |
-| `ALG002-P02` | `+0.05` | `-0.20` | recovering | intent 不得为正向失衡；`abs(P02) <= abs(P00)` |
+| `ALG002-P01` | `+0.05` | `+0.20` | diverging | `P01 < P00`；`P00 - P01 > tol(P00,P01)` |
+| `ALG002-P02` | `+0.05` | `-0.20` | recovering | `P02 > P00`；`P02 - P00 > tol(P02,P00)` |
 | `ALG002-N00` | `-0.05` | `0.0` | zero-rate | intent 为正且非零；negative-pitch 基础值 |
-| `ALG002-N01` | `-0.05` | `-0.20` | diverging | intent 为正且非零；`abs(N01) >= abs(N00)` |
-| `ALG002-N02` | `-0.05` | `+0.20` | recovering | intent 不得为负向失衡；`abs(N02) <= abs(N00)` |
+| `ALG002-N01` | `-0.05` | `-0.20` | diverging | `N01 > N00`；`N01 - N00 > tol(N01,N00)` |
+| `ALG002-N02` | `-0.05` | `+0.20` | recovering | `N02 < N00`；`N00 - N02 > tol(N00,N02)` |
 | `ALG002-Z01` | `0.0` | `+0.20` | pass-through-zero | intent 为负且严格超过零容差 |
 | `ALG002-Z02` | `0.0` | `-0.20` | pass-through-zero | intent 为正且严格超过零容差 |
 
-`P02` 在零容差内为零不算方向反转，但正值超过零容差即 FAIL；`N02` 使用镜像规则。所有输出
-必须有限。`P00/N00` 还必须与 ALG-001 inheritance gate 的相同 pitch、zero-rate 结果一致。
+`P02/N02` 不附加 total intent sign 限制：它们可以仍保持 zero-rate feedback 的符号、在零容差
+内为零或穿过零点反号。反号本身不是 FAIL；资格判定只要求相对于 `P00/N00` 的变化方向明确
+反对 rate 且严格超过关系容差。所有输出必须有限。`P00/N00` 还必须与 ALG-001 inheritance
+gate 的相同 pitch、zero-rate 结果一致。
 
 ### 9.4 ALG-001 inheritance gate
 
@@ -355,27 +357,26 @@ Hard Qualification 必须用未修改的 `ALG001-FIXTURE-v1`、ALG-001 Profile v
 
 ### 9.5 Damping 关系与 effect gate
 
-对正常场景定义 magnitude：
+对正常场景定义有符号 damping separation：
 
 ```text
-P_div = abs(intent_P01) - abs(intent_P00)
-P_rec = abs(intent_P00) - abs(intent_P02)
-N_div = abs(intent_N01) - abs(intent_N00)
-N_rec = abs(intent_N00) - abs(intent_N02)
+P_div = intent_P00 - intent_P01
+P_rec = intent_P02 - intent_P00
+N_div = intent_N01 - intent_N00
+N_rec = intent_N00 - intent_N02
 ```
 
-四个值在 9.2 的关系容差下都必须为非负。除此之外，**damping effect present** 要求：
+**Damping effect present** 要求四个值分别严格超过对应的 9.2 关系容差：
 
 ```text
-P_div > tol(abs(intent_P01), abs(intent_P00))
-or P_rec > tol(abs(intent_P02), abs(intent_P00))
-
-N_div > tol(abs(intent_N01), abs(intent_N00))
-or N_rec > tol(abs(intent_N02), abs(intent_N00))
+P_div > tol(intent_P00, intent_P01)
+P_rec > tol(intent_P02, intent_P00)
+N_div > tol(intent_N01, intent_N00)
+N_rec > tol(intent_N00, intent_N02)
 ```
 
-并且正负场景必须通过 9.6 的镜像一致性。这样允许某一个边界作用为零，但不能让整个
-diverging/recovering 组与 zero-rate 完全相同，也不能只在一个 pitch 符号上实现趋势响应。
+并且正负场景必须通过 9.6 的镜像一致性。四个冻结的正常非零 rate 场景都必须真实体现
+rate 对 feedback 的正确方向影响；不能以某一个场景或某一个 pitch 符号上的趋势响应代替。
 
 ### 9.6 Mirror、repeatability 与 finite
 
@@ -428,14 +429,15 @@ Qualification**：
 
 | Scenario | 预定义输入顺序 | 推荐检查 |
 | --- | --- | --- |
-| `ALG002-S01` | 固定 `+0.05` pitch：`+0.20 -> 0.0 -> -0.20` rate | diverging/zero/recovering 关系不受调用顺序影响 |
-| `ALG002-S02` | 固定 `-0.05` pitch：`-0.20 -> 0.0 -> +0.20` rate | S01 的负向镜像，不携带意外历史 |
-| `ALG002-S03` | `+0.05/-0.20 -> 0.0/-0.20` | 经过零点时转为反对负 rate 的 intent；当前状态结果与独立场景一致 |
+| `ALG002-S01` | 固定 `+0.05` pitch：`+0.20 -> 0.0 -> -0.20` rate | `P01 < P00 < P02` 且两个 separation 均超容差；各结果与独立场景一致 |
+| `ALG002-S02` | 固定 `-0.05` pitch：`-0.20 -> 0.0 -> +0.20` rate | `N01 > N00 > N02` 且两个 separation 均超容差；S01 的镜像且无意外历史 |
+| `ALG002-S03` | `+0.05/-0.20 -> 0.0/-0.20` | 两个状态的 rate 作用均反对负 rate；zero-pitch intent 为正；各结果与独立场景一致 |
 
-每个 sequence 前调用 reset，并可反序重放以检查顺序一致性。S03 应记录零点附近的符号/幅值
-过渡，确认没有历史携带造成的额外跳变；若候选存在数学不连续点必须明确解释。它们只是预定义
-`FlightState -> controller -> output` 序列，不是 dynamic/closed-loop simulation，不能产生
-recovery time、overshoot、最大扰动、机器人动力学或 Balance Recovery 结论。
+每个 sequence 前调用 reset，并可反序重放以检查顺序一致性。S03 不要求 recovering total
+intent 在正 pitch 时保持负值，也不把穿过零点前反号视为 FAIL；它检查当前状态的 rate 作用
+方向、zero-pitch moving 语义和无意外历史依赖。若候选存在数学不连续点必须明确解释。它们只是
+预定义 `FlightState -> controller -> output` 序列，不是 dynamic/closed-loop simulation，不能
+产生 recovery time、overshoot、最大扰动、机器人动力学或 Balance Recovery 结论。
 
 ### 9.10 Hard Qualification checklist
 
@@ -443,8 +445,10 @@ recovery time、overshoot、最大扰动、机器人动力学或 Balance Recover
 - [ ] ALG-001 inheritance gate：PASS；
 - [ ] 控制输入只使用正式 `relative_pitch_rad + relative_pitch_rate_rad_s`；
 - [ ] `ALG002-P00/N00` zero-rate behavior：PASS；
-- [ ] `ALG002-P01/N01` diverging behavior：PASS；
-- [ ] `ALG002-P02/N02` recovering behavior：PASS，且无方向反转；
+- [ ] `ALG002-P01/N01` diverging behavior：相对同 pitch zero-rate baseline 沿反对 rate
+  的方向变化并严格超过关系容差；
+- [ ] `ALG002-P02/N02` recovering behavior：相对同 pitch zero-rate baseline 沿反对 rate
+  的方向变化并严格超过关系容差，不限制 total intent sign；
 - [ ] `ALG002-Z01/Z02` zero-pitch moving damping：PASS；
 - [ ] damping effect present：PASS；
 - [ ] sign/mirror、finite 和 repeatability：PASS；
@@ -464,6 +468,8 @@ metrics 不能抵消 Hard Qualification 失败。
 只有 Hard Qualification 全部 PASS 后才独立记录：
 
 - **Damping separation**：分别报告 9.5 的 `P_div/P_rec/N_div/N_rec`，单位 intent unit；
+- **Damping separation mirror error**：分别报告 `abs(P_div-N_div)` 与
+  `abs(P_rec-N_rec)`；
 - **Mirror symmetry error**：报告 `P00+N00`、`P01+N01`、`P02+N02` 绝对值的最大值；
 - **Zero-pitch damping symmetry**：`abs(intent_Z01 + intent_Z02)`；
 - **Repeatability delta**：所有正常场景三次结果的最大两两绝对差；
