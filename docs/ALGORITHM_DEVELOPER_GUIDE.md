@@ -167,6 +167,7 @@ Runtime 会在控制器创建后调用 `reset()`；新的原子控制权会话�
 ```python
 state.imu.relative_roll_rad
 state.imu.relative_pitch_rad
+state.imu.relative_pitch_rate_rad_s
 state.imu.valid
 state.imu.fresh
 state.motors["left_pitch"].position_rad
@@ -185,10 +186,19 @@ state.system.e_stop_active
 - `roll_rad/pitch_rad/yaw_rad`：由原始四元数转换出的欧拉角，单位 rad；
 - `relative_roll_rad/relative_pitch_rad`：统一轴向修正后相对最近成功 IMU zero reference 的
   角度，单位 rad；计算采用归一化角差；
+- `relative_pitch_rate_rad_s`：Flight adapter 从同一 IMU 样本的 orientation 和 body-frame
+  angular velocity 派生的 Euler pitch 变化率，单位 rad/s；其正负方向与
+  `relative_pitch_rad` 一致，不是原始 `gyro.y` 的别名；
+- `angular_velocity_rad_s`：未经上述派生变换的 IMU/body frame 三轴角速度，单位 rad/s；
 - 原始观测与相对观测必须具有相同来源时间戳，才能组成有效状态快照；
 - `valid=True` 表示结构、有限值、连接和零点代次都成立；
 - `fresh=True` 还表示样本年龄没有超过 Runtime 新鲜度阈值；
 - 当前没有稳定公开的 `relative_yaw_rad`，不要自行编造。
+
+当前 Euler 约定为 Z-Y-X。若原始 roll 为 `phi`、body rate 为 `(p,q,r)`，pitch rate 为
+`cos(phi)*q - sin(phi)*r`，随后再应用 `pitch_axis_sign`；非零 roll 时不能简单使用 `q`。
+IMU zero offset 不改变 rate，rate 也不通过归一化角度差分得到。Euler pitch 的
+`±pi/2` gimbal-lock 奇异姿态不能形成有效派生 rate。
 
 IMU 物理安装为 X+ 向机器人正面、Y+ 向左、Z+ 向上。具体安装和参考定义见
 [硬件参考](HARDWARE_REFERENCE.md)。算法示例中的正负只表示已发布 API 值的符号；

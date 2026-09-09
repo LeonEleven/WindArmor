@@ -83,6 +83,7 @@ def _validate_imu(imu: ImuState, issues: list[str]) -> None:
         "yaw_rad",
         "relative_roll_rad",
         "relative_pitch_rad",
+        "relative_pitch_rate_rad_s",
         "sample_age_sec",
     ):
         _optional_finite(getattr(imu, field), f"imu.{field}", issues)
@@ -118,6 +119,7 @@ def _validate_imu(imu: ImuState, issues: list[str]) -> None:
         imu.yaw_rad,
         imu.relative_roll_rad,
         imu.relative_pitch_rad,
+        imu.relative_pitch_rate_rad_s,
         imu.angular_velocity_rad_s,
         imu.linear_acceleration_m_s2,
     )

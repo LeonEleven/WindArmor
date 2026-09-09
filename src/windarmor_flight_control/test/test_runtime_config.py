@@ -1,4 +1,5 @@
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
@@ -18,6 +19,7 @@ def test_default_runtime_config_is_explicitly_dry_run_observability() -> None:
         "right_pitch",
         "right_lift",
     )
+    assert config.pitch_axis_sign == 1.0
     assert config.runtime_status_topic == "/flight_control/dry_run/status"
     assert config.command_preview_topic.endswith("/command_preview")
     assert config.flight_takeover_enabled is False
@@ -46,6 +48,11 @@ def test_default_runtime_config_is_explicitly_dry_run_observability() -> None:
         ("flight_handoff_timeout_sec", float("inf")),
         ("flight_revoke_timeout_sec", 0.0),
         ("flight_revoke_timeout_sec", float("nan")),
+        ("pitch_axis_sign", 0.0),
+        ("pitch_axis_sign", 2.0),
+        ("pitch_axis_sign", -2.0),
+        ("pitch_axis_sign", float("nan")),
+        ("pitch_axis_sign", True),
         ("fan_observer_min_pwm_us", float("nan")),
         ("controller_factory", ""),
         ("imu_raw_topic", "bad topic"),
@@ -67,6 +74,24 @@ def test_invalid_runtime_config_fails_before_ros_resources(name, value) -> None:
     values[name] = value
     with pytest.raises(ValueError):
         build_runtime_config(values)
+
+
+def test_repository_pitch_axis_sign_defaults_are_aligned() -> None:
+    repository_root = Path(__file__).resolve().parents[3]
+    flight_source = (
+        repository_root
+        / "src/windarmor_flight_control/config/flight_control.yaml"
+    ).read_text(encoding="utf-8")
+    imu_source = (
+        repository_root
+        / "src/imu_cybergear_ros2/config/imu_cybergear_params.yaml"
+    ).read_text(encoding="utf-8")
+    observer_source = imu_source.split("imu_relative_observer_node:", 1)[1].split(
+        "motor_feedback_observer_node:", 1
+    )[0]
+
+    assert "pitch_axis_sign: 1.0" in flight_source
+    assert "pitch_axis_sign: 1.0" in observer_source
 
 
 def test_motor_names_and_observer_range_are_strict() -> None:

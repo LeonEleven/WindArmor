@@ -42,6 +42,7 @@ class ImuState:
     yaw_rad: float | None
     relative_roll_rad: float | None
     relative_pitch_rad: float | None
+    relative_pitch_rate_rad_s: float | None
     angular_velocity_rad_s: Vector3 | None
     linear_acceleration_m_s2: Vector3 | None
     sample_age_sec: float | None

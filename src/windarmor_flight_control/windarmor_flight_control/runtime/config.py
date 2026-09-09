@@ -17,6 +17,7 @@ BOUNDED_VERIFICATION_FACTORY = (
 PARAMETER_DEFAULTS = {
     "control_rate_hz": 50.0,
     "motor_names": ["left_lift", "left_pitch", "right_pitch", "right_lift"],
+    "pitch_axis_sign": 1.0,
     "flight_imu_freshness_sec": 0.2,
     "flight_motor_freshness_sec": 0.5,
     "flight_fan_output_freshness_sec": 1.0,
@@ -73,6 +74,7 @@ PARAMETER_DEFAULTS = {
 class RuntimeConfig:
     control_rate_hz: float
     motor_names: tuple[str, ...]
+    pitch_axis_sign: float
     flight_imu_freshness_sec: float
     flight_motor_freshness_sec: float
     flight_fan_output_freshness_sec: float
@@ -200,6 +202,15 @@ def build_runtime_config(values: Mapping[str, object]) -> RuntimeConfig:
         if value <= 0.0:
             raise ValueError(f"{name} must be positive")
         converted[name] = value
+
+    pitch_axis_sign = converted["pitch_axis_sign"]
+    if (
+        isinstance(pitch_axis_sign, bool)
+        or not isinstance(pitch_axis_sign, (int, float))
+        or float(pitch_axis_sign) not in (-1.0, 1.0)
+    ):
+        raise ValueError("pitch_axis_sign must be exactly +1.0 or -1.0")
+    converted["pitch_axis_sign"] = float(pitch_axis_sign)
 
     minimum = _finite("fan_observer_min_pwm_us", converted["fan_observer_min_pwm_us"])
     maximum = _finite("fan_observer_max_pwm_us", converted["fan_observer_max_pwm_us"])

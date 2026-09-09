@@ -79,6 +79,13 @@ CyberGear 驱动或其他硬件包。ROS ↔ 纯模型转换只属于 Runtime �
 使用 Runtime 内部单调时钟；不使用墙上时钟推断新鲜度。零点代次变化会丢弃旧配对，避免
 跨参考零点复用。
 
+Flight IMU adapter 还从同一条原始 IMU 消息的 orientation 和 body-frame angular velocity
+派生 `relative_pitch_rate_rad_s`。当前 Z-Y-X 欧拉约定下先计算
+`pitch_dot = cos(roll) * gyro_y - sin(roll) * gyro_z`，再应用与相对 pitch 发布者一致的
+`pitch_axis_sign`。这不是 `gyro_y` 的直接别名，也不使用前后帧角度差分；IMU zero offset
+只改变相对角，角度 wrap 不影响该瞬时 rate。Euler pitch gimbal-lock 奇异姿态不能形成有效
+派生 rate。原始 `angular_velocity_rad_s` 仍按 IMU/body frame 三轴值保留。
+
 ### 电机观测
 
 `/motors/feedback` 是全部配置逻辑电机的完整状态快照。发布者只复制当前反馈缓存和本地

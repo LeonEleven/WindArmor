@@ -38,7 +38,7 @@ class StateAggregator:
     def __init__(self, config: RuntimeConfig) -> None:
         self._config = config
         self._lock = threading.RLock()
-        self._imu = ImuAdapter()
+        self._imu = ImuAdapter(pitch_axis_sign=config.pitch_axis_sign)
         self._motors = MotorAdapter(config.motor_names)
         self._fans = FanAdapter(
             config.fan_observer_min_pwm_us,

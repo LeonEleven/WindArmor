@@ -13,6 +13,9 @@ from .observations import (
 )
 
 
+EULER_GIMBAL_LOCK_COS_TOLERANCE = 1.0e-9
+
+
 def _finite(value: object, name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{name} must be a finite number")
@@ -41,9 +44,11 @@ def source_stamp_ns(message: Any) -> int:
     return result
 
 
-def _normalize_quaternion(message: Any) -> Quaternion:
+def normalize_quaternion(quaternion: Quaternion) -> Quaternion:
+    """Return a finite unit quaternion without changing its rotation."""
+
     values = tuple(
-        _finite(getattr(message.orientation, field), f"orientation.{field}")
+        _finite(getattr(quaternion, field), f"orientation.{field}")
         for field in ("x", "y", "z", "w")
     )
     norm = math.sqrt(sum(value * value for value in values))
@@ -51,6 +56,17 @@ def _normalize_quaternion(message: Any) -> Quaternion:
         raise ValueError("orientation quaternion cannot be normalized")
     x, y, z, w = (value / norm for value in values)
     return Quaternion(x=x, y=y, z=z, w=w)
+
+
+def _normalize_quaternion(message: Any) -> Quaternion:
+    return normalize_quaternion(
+        Quaternion(
+            x=getattr(message.orientation, "x"),
+            y=getattr(message.orientation, "y"),
+            z=getattr(message.orientation, "z"),
+            w=getattr(message.orientation, "w"),
+        )
+    )
 
 
 def quaternion_to_euler(quaternion: Quaternion) -> tuple[float, float, float]:
@@ -63,6 +79,49 @@ def quaternion_to_euler(quaternion: Quaternion) -> tuple[float, float, float]:
     cosy_cosp = 1.0 - 2.0 * (quaternion.y**2 + quaternion.z**2)
     yaw = math.atan2(siny_cosp, cosy_cosp)
     return roll, pitch, yaw
+
+
+def euler_pitch_rate_from_body_angular_velocity(
+    orientation: Quaternion,
+    angular_velocity_rad_s: Vector3,
+) -> float:
+    """Derive Z-Y-X Euler pitch rate from body-frame angular velocity.
+
+    For body rates ``(p, q, r)`` and Euler roll ``phi``, the current convention
+    gives ``pitch_dot = cos(phi) * q - sin(phi) * r``.  The Euler representation
+    is not differentiable at pitch gimbal lock, so those orientations are
+    rejected instead of assigning an ambiguous rate.
+    """
+
+    quaternion = normalize_quaternion(orientation)
+    body_rates = Vector3(
+        x=_finite(angular_velocity_rad_s.x, "angular_velocity.x"),
+        y=_finite(angular_velocity_rad_s.y, "angular_velocity.y"),
+        z=_finite(angular_velocity_rad_s.z, "angular_velocity.z"),
+    )
+    roll, pitch, _yaw = quaternion_to_euler(quaternion)
+    if abs(math.cos(pitch)) <= EULER_GIMBAL_LOCK_COS_TOLERANCE:
+        raise ValueError("Euler pitch rate is undefined at pitch gimbal lock")
+    result = math.cos(roll) * body_rates.y - math.sin(roll) * body_rates.z
+    if not math.isfinite(result):
+        raise ValueError("Euler pitch rate must be finite")
+    return result
+
+
+def corrected_relative_pitch_rate_rad_s(
+    orientation: Quaternion,
+    angular_velocity_rad_s: Vector3,
+    *,
+    pitch_axis_sign: float,
+) -> float:
+    """Return pitch rate in the corrected ``relative_pitch_rad`` direction."""
+
+    if isinstance(pitch_axis_sign, bool) or pitch_axis_sign not in (-1.0, 1.0):
+        raise ValueError("pitch_axis_sign must be exactly +1.0 or -1.0")
+    return float(pitch_axis_sign) * euler_pitch_rate_from_body_angular_velocity(
+        orientation,
+        angular_velocity_rad_s,
+    )
 
 
 def _vector(message: Any, field: str, unit_name: str) -> Vector3:
@@ -79,7 +138,10 @@ class ImuAdapter:
 
     _PENDING_LIMIT = 8
 
-    def __init__(self) -> None:
+    def __init__(self, *, pitch_axis_sign: float) -> None:
+        if isinstance(pitch_axis_sign, bool) or pitch_axis_sign not in (-1.0, 1.0):
+            raise ValueError("pitch_axis_sign must be exactly +1.0 or -1.0")
+        self._pitch_axis_sign = float(pitch_axis_sign)
         self._raw: dict[int, RawImuObservation] = {}
         self._relative: dict[int, RelativeAttitudeObservation] = {}
         self._paired: PairedImuObservation | None = None
@@ -91,6 +153,14 @@ class ImuAdapter:
         received = _received_at(received_at)
         orientation = _normalize_quaternion(message)
         roll, pitch, yaw = quaternion_to_euler(orientation)
+        angular_velocity = _vector(
+            message, "angular_velocity", "angular_velocity"
+        )
+        relative_pitch_rate = corrected_relative_pitch_rate_rad_s(
+            orientation,
+            angular_velocity,
+            pitch_axis_sign=self._pitch_axis_sign,
+        )
         stamp = source_stamp_ns(message)
         if stamp <= self._last_paired_stamp_ns or stamp in self._raw:
             raise ValueError("raw IMU source stamp is duplicate or out of order")
@@ -100,9 +170,8 @@ class ImuAdapter:
             roll_rad=roll,
             pitch_rad=pitch,
             yaw_rad=yaw,
-            angular_velocity_rad_s=_vector(
-                message, "angular_velocity", "angular_velocity"
-            ),
+            angular_velocity_rad_s=angular_velocity,
+            relative_pitch_rate_rad_s=relative_pitch_rate,
             linear_acceleration_m_s2=_vector(
                 message, "linear_acceleration", "linear_acceleration"
             ),
@@ -160,6 +229,7 @@ class ImuAdapter:
                 yaw_rad=None,
                 relative_roll_rad=None,
                 relative_pitch_rad=None,
+                relative_pitch_rate_rad_s=None,
                 angular_velocity_rad_s=None,
                 linear_acceleration_m_s2=None,
                 sample_age_sec=None,
@@ -180,6 +250,7 @@ class ImuAdapter:
             yaw_rad=paired.raw.yaw_rad,
             relative_roll_rad=paired.relative.roll_rad,
             relative_pitch_rad=paired.relative.pitch_rad,
+            relative_pitch_rate_rad_s=paired.raw.relative_pitch_rate_rad_s,
             angular_velocity_rad_s=paired.raw.angular_velocity_rad_s,
             linear_acceleration_m_s2=paired.raw.linear_acceleration_m_s2,
             sample_age_sec=age,
