@@ -57,7 +57,7 @@ result；Task Profile 的存在不表示对应 candidate 已 PASS。
 | A | Pure algorithm / pure-function qualification | 直接评分 task-local 抽象控制量 | FlightCommand 集成或真实执行器效果 |
 | B | Controller / FlightCommand contract qualification | factory、state/command validation、完整帧、safe-stop | 机器人动力学或已验证分配 |
 | C | synthetic DRY_RUN integration preview | 纯软件 `FlightState -> controller -> FlightCommand` 预览 | recovery time、overshoot、物理效果 |
-| D | Replay / sequence benchmark（未来） | 时序、趋势、噪声和历史回归 | replay 外真实动力学 |
+| D | Replay / sequence benchmark | 时序、趋势、噪声和历史回归 | replay 外真实动力学 |
 | E | Dynamic benchmark / trusted simulation（未来） | 模型内闭环动态指标 | 未验证的 sim-to-real 等价性 |
 | F | Bounded hardware verification（未来） | 单独授权包线内真实行为 | 未测试包线或通用性能保证 |
 
@@ -540,9 +540,18 @@ state.imu.relative_pitch_rad
 state.imu.relative_pitch_rate_rad_s
 ```
 
-必要 motor keys 仍为 `left_lift/left_pitch/right_pitch/right_lift`。Level A 观察 task-local
-`pitch_feedback_intent` sequence；Level B 观察 `FlightCommand` 与 validation。Profile 不从
-motor/fan payload 反推 intent，不评分真实执行器方向。
+必要 motor keys 仍为 `left_lift/left_pitch/right_pitch/right_lift`。
+
+Level A 通过无 ROS、无硬件的 task-local 软件 seam 观察 Candidate 的抽象控制量，验证算法计算
+本身。Level D 使用 `ALG003-FIXTURE-v1` 冻结的 Q/S 输入序列，按顺序驱动同一个 Level A
+seam，并组织和评分 history、noise suppression、response delay、trend preservation、reset/replay
+与 repeatability。Level D 是 deterministic software replay / benchmark orchestration 层级，不要求
+Candidate 增加第二套 production API；同一个 benchmark runner 按冻结 sequence 调用 Level A seam
+并计算 Level D 指标是允许且推荐的。Level D 不是 closed-loop simulation、Runtime integration、
+actuator simulation 或 hardware replay。
+
+Level B 保持独立：它观察 `FlightCommand` 与 validation，负责 factory、`FlightState`、safe-stop 和
+完整 command frame；Profile 不从 motor/fan payload 反推 intent，也不评分真实执行器方向。
 
 fixture 中所有序列均为显式列值，不调用 runtime random generator。每个独立 run 使用同一
 固定 candidate configuration，先创建全新 controller 或调用 `reset()`，再输入该场景的未计分
