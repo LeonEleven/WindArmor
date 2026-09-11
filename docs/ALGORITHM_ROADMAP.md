@@ -89,8 +89,10 @@ multi-axis recovery 属于后续任务，不应顺手加入。
 独立规范见 [ALG-002 Task Spec v1](algorithm_tasks/ALG-002.md)，固定资格场景见
 [Algorithm Benchmark v1 / ALG-002 Profile v1](ALGORITHM_BENCHMARK.md#9-alg-002-profile-v1)。
 此前的 pitch-rate 坐标阻塞已由 v0.5.0-004A 解除；ALG-002 只消费统一后的
-`relative_pitch_rad` 和 `relative_pitch_rate_rad_s`，不自行解释 raw gyro 轴或符号。当前阶段
-为 Task Spec / Benchmark Profile 建立，controller 尚未实现。
+`relative_pitch_rad` 和 `relative_pitch_rate_rad_s`，不自行解释 raw gyro 轴或符号。ALG-002
+Candidate A 已针对固定 implementation commit 完成 Level A/B 纯软件资格验证，结论为
+[`ALG-002 QUALIFIED`](algorithm_results/ALG-002_CANDIDATE_A.md)，并已进入 `develop`。该结论不
+代表动态仿真、真实 actuator direction、硬件验证或真实 Balance Recovery。
 
 资格验证重点：
 
@@ -104,7 +106,10 @@ multi-axis recovery 属于后续任务，不应顺手加入。
 
 ### ALG-003 — Noise Robustness
 
-主要能力：降低真实 IMU 小幅波动、量化噪声或微小扰动造成的持续无效动作。
+主要能力：降低小幅 IMU 波动、量化噪声或微小扰动造成的持续无效动作。独立规范见
+[ALG-003 Task Spec v1](algorithm_tasks/ALG-003.md)，固定资格场景见
+[Algorithm Benchmark v1 / ALG-003 Profile v1](ALGORITHM_BENCHMARK.md#10-alg-003-profile-v1)。
+当前 Profile 使用 synthetic software noise fixture，不代表真实 IMU 噪声已完成表征。
 
 资格验证重点：
 
@@ -306,14 +311,14 @@ release 前必须完成该版本所需的真实硬件验证；否则发布说明
 
 ## 11. 下一推荐任务
 
-ALG-001 Candidate A 已 QUALIFIED，pitch-rate API blocker 已由 v0.5.0-004A 解除。当前独立
-工作单元是建立：
+ALG-001 Candidate A 与 ALG-002 Candidate A 均已完成固定 implementation commit 的 Level A/B
+纯软件资格验证，结论分别为 `ALG-001 QUALIFIED` 与 `ALG-002 QUALIFIED`。当前 Fast
+Progression Track 进入：
 
 ```text
-ALG-002 Task Spec v1 + ALG-002 Benchmark Profile v1
+ALG-003 specification / implementation progression
 ```
 
-本规范经评审并合入 `develop` 后，下一工作单元才可基于冻结的
-[ALG-002 Task Spec v1](algorithm_tasks/ALG-002.md) 和
-[Algorithm Benchmark v1 / ALG-002 Profile v1](ALGORITHM_BENCHMARK.md#9-alg-002-profile-v1)
-实现 ALG-002 Candidate A。当前任务不实现 candidate，也不自动进入任何真实硬件测试。
+当前规范入口为 [ALG-003 Task Spec v1](algorithm_tasks/ALG-003.md) 和
+[Algorithm Benchmark v1 / ALG-003 Profile v1](ALGORITHM_BENCHMARK.md#10-alg-003-profile-v1)。
+ALG-003 candidate 尚未实现；本阶段不自动进入动态仿真或任何真实硬件测试。
