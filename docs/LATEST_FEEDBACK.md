@@ -9,11 +9,11 @@
 ## 当前状态
 
 - 日期：2026-09-11
-- 当前任务：`v0.5.0-006 — ALG-003 Task Spec + Benchmark Profile v1`
+- 当前任务：`v0.5.0-007 — ALG-003 Candidate A Implementation`
 - task-start baseline：`origin/develop` /
-  `77f3457bc8df977d2c5fde95ff8af53583db213f`
-- 当前短期任务分支：`docs/v0.5-alg003-benchmark-contract`
-- 当前阶段：**ALG-003 specification / benchmark definition**
+  `f71404e1fa302f2e097442d707a6688aac6e65a2`
+- 当前短期任务分支：`feature/algo-003-candidate-a`
+- 当前阶段：**implementation + pre-formal-qualification remote review**
 - 当前 stable release：**v0.4.0**
 - previous stable / history：v0.3.2
 - 下一版本研发目标：**v0.5.0 — Balance Recovery；未发布**
@@ -22,7 +22,10 @@
 - Fixture：`ALG003-FIXTURE-v1`
 - Inherited qualification：`ALG-001 Candidate A / ALG-001 QUALIFIED`；
   `ALG-002 Candidate A / ALG-002 QUALIFIED`
-- ALG-003 implementation：**NOT IMPLEMENTED**
+- Candidate：`ALG-003 Candidate A`
+- Candidate algorithm：**two-sample input moving average**
+- ALG-003 Candidate A：**UNDER REMOTE REVIEW**
+- formal Candidate Result：**NOT GENERATED**
 - hardware access：**NO**
 - hardware authorization：**NONE**
 - hardware validation：**NOT AUTHORIZED / NOT EXECUTED**
@@ -61,19 +64,18 @@ Candidate A 的普通命令仍只是复制当前合法、完整 motor feedback �
 
 ## 当前任务目标与边界
 
-本任务建立 [ALG-003 Task Spec v1](algorithm_tasks/ALG-003.md) 与
-[Algorithm Benchmark v1 / ALG-003 Profile v1](ALGORITHM_BENCHMARK.md#10-alg-003-profile-v1)。
-`ALG003-FIXTURE-v1` 冻结平衡附近、非零姿态附近、rate-only noise、meaningful step、
-diverging/recovering trend、可变 `dt`、reset/history 和 fail-close 序列。
+本任务基于冻结的 [ALG-003 Task Spec v1](algorithm_tasks/ALG-003.md) 与
+[Algorithm Benchmark v1 / ALG-003 Profile v1](ALGORITHM_BENCHMARK.md#10-alg-003-profile-v1)
+实现 Independent ALG-003 Candidate A。Candidate 在输入估计层保存上一条合法原始 pitch/rate，
+对当前与上一样本作固定两样本 boxcar moving average，再使用继承的 `Kp=1.0`、`Kd=0.1`
+关系计算 abstract intent。cold start 直接使用当前合法样本；reset、controller-layer
+fail-close 和非法 `dt` 都清除本地历史。
 
-Noise Suppression 与 Signal Preservation 是不能互相抵消的独立 Hard Gate。Profile 使用明确
-公式衡量 output total variation、sign reversal、peak/mean activity、response delay、steady
-signal attenuation、trend preservation、symmetry 和 repeatability；恒零 candidate 不能通过。
-
-fixture 只是人为冻结的 synthetic software input，不是 Hiwonder IMU 实测噪声、机器人振动谱
-或真实量化误差模型。本任务不实现 ALG-003，不改变 production code、Flight API、Runtime、
-adapter、default controller、硬件配置或 ALG-001/ALG-002 历史 Result，不提前实现 ALG-004+
-能力，也不授权任何硬件操作。
+本阶段只形成 implementation、pre-formal qualification 和 remote review checkpoint，不生成
+`docs/algorithm_results/ALG-003_CANDIDATE_A.md`，也不提前写 `ALG-003 QUALIFIED`。普通
+`FlightCommand` 仍复制当前合法完整 motor feedback hold preview，并输出 fan-zero；payload
+不编码 intent。Flight API、Runtime、adapter、default/teaching controller、硬件配置和
+ALG-001/ALG-002 历史 Result 保持不变，ALG-004+ 能力不在本任务内，也不授权硬件操作。
 
 ## 历史证据保留
 
@@ -84,13 +86,13 @@ blocker、安全结论、证据等级和已知限制继续长期保存在：
 - [v0.4.0 硬件验证历史执行计划](V0.4.0_HARDWARE_VERIFICATION_PLAN.md)；
 - [v0.4.0 发布说明](RELEASE_NOTES_v0.4.0.md)。
 
-本次文档任务没有删除或改变这些历史证据，也不授权新的硬件操作。
+本次实现任务没有删除或改变这些历史证据，也不授权新的硬件操作。
 
 ## 下一推荐工作单元
 
-ALG-003 Task Spec v1 与 ALG-003 Profile v1 经评审并进入 `develop` 后，下一独立工作单元是基于
-冻结规范实现 ALG-003 Candidate。Candidate 必须先形成固定 implementation commit，再执行
-正式 benchmark 并生成独立 Candidate Result；不得把实现与资格证据合并为不可追溯的结果。
+当前 remote review 通过后，下一独立工作单元应针对固定的 ALG-003 Candidate A
+implementation commit 重跑正式 benchmark，并生成独立 Candidate Result；不得把本阶段
+pre-formal qualification 直接改写为正式资格证据。
 
-ALG-003 implementation 当前仍为 `NOT IMPLEMENTED`。真实 IMU characterization、真实动态
-验证、执行器映射和硬件测试均不在当前范围，且未获得授权。
+正式 ALG-003 Candidate Result 当前为 **NOT GENERATED**。真实 IMU characterization、真实
+动态验证、执行器映射和硬件测试均不在当前范围，且未获得授权。
