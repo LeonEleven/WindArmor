@@ -13,8 +13,8 @@
 3. **Candidate Result**：一次候选实现针对固定 Contract/Profile 的实际命令、环境和结果。
 
 本文件同时承载 `Algorithm Benchmark v1` 的全局 Contract，以及任务级
-`ALG-001 Profile v1` 和 `ALG-002 Profile v1`。它不包含任何 candidate result；Task Profile
-的存在不表示对应 candidate 已 PASS。
+`ALG-001 Profile v1`、`ALG-002 Profile v1` 和 `ALG-003 Profile v1`。它不包含任何 candidate
+result；Task Profile 的存在不表示对应 candidate 已 PASS。
 
 ## 2. 版本规则
 
@@ -23,6 +23,7 @@
 | Benchmark Contract | `Algorithm Benchmark v1` |
 | ALG-001 Task Benchmark Profile | `ALG-001 Profile v1` |
 | ALG-002 Task Benchmark Profile | `ALG-002 Profile v1` |
+| ALG-003 Task Benchmark Profile | `ALG-003 Profile v1` |
 
 在两个 candidate 已开始正式历史比较后，不得静默修改 fixture、scenario、阈值、容差或
 评分规则。实质变化必须升级对应版本：任务局部变化升级 Profile（例如 v1 → v2）；跨任务
@@ -521,3 +522,305 @@ implementation commit 前不得创建 Result 或填写虚构 PASS。
 ALG-002 v1 明确禁止 integral、filter/deadband/hysteresis、slew-rate/output shaping、恢复
 状态机、control allocation、roll/multi-axis control 和完整动态恢复。Level A/B PASS 仅表示
 固定 synthetic fixture 中的软件运动趋势/阻尼资格，不是动态仿真或硬件验证。
+
+## 10. ALG-003 Profile v1
+
+对应 Task Spec：[`algorithm_tasks/ALG-003.md`](algorithm_tasks/ALG-003.md)，版本 `v1`。
+ALG-003 继承 ALG-001/ALG-002，只新增对小幅 synthetic pitch/pitch-rate 波动的鲁棒性。全局
+Benchmark Contract 仍为 `Algorithm Benchmark v1`；本节不修改第 7、9 节 Profile 的场景、
+阈值、容差或 PASS/FAIL 语义。
+
+### 10.1 Fixture、观测量与执行约定
+
+`ALG003-FIXTURE-v1` 基于 `make_fake_flight_state()` 的纯内存合法状态，以
+`dataclasses.replace()` 设置每帧的：
+
+```text
+state.imu.relative_pitch_rad
+state.imu.relative_pitch_rate_rad_s
+```
+
+必要 motor keys 仍为 `left_lift/left_pitch/right_pitch/right_lift`。Level A 观察 task-local
+`pitch_feedback_intent` sequence；Level B 观察 `FlightCommand` 与 validation。Profile 不从
+motor/fan payload 反推 intent，不评分真实执行器方向。
+
+fixture 中所有序列均为显式列值，不调用 runtime random generator。每个独立 run 使用同一
+固定 candidate configuration，先创建全新 controller 或调用 `reset()`，再输入该场景的未计分
+priming sample（若有）和计分序列。除 `dt` 场景外，基准 `dt=0.020 s`。
+
+`ALG003-FIXTURE-v1` 只是 synthetic software noise fixture。`±0.004 rad` pitch noise、
+`±0.04 rad/s` pitch-rate noise、`±0.05 rad` meaningful pitch 和 `±0.20 rad/s` meaningful rate
+不是 Hiwonder IMU 实测统计、机器人振动谱、量化误差模型、安全 envelope、动态模型或硬件
+性能阈值。
+
+### 10.2 Raw inherited baseline
+
+同一 sequence 的 raw inherited baseline 独立按下式计算：
+
+```text
+b_i = -1.0 * pitch_i - 0.1 * rate_i
+```
+
+其中 `1.0 intent/rad` 和 `0.1 intent/(rad/s)` 冻结自已资格化的 ALG-001/ALG-002 软件继承
+参考配置。benchmark runner 必须直接实现该公式；不得导入当前 ALG-002 Candidate A production
+module，不得让 ALG-003 candidate 修改 baseline，也不得按场景重新调参。该 baseline 是公平的
+软件比较参考，不把 PD 写成 ALG-003 必选实现；candidate 可以使用任意可解释的输入抑噪方法，
+但都与相同 `b_i` 比较。
+
+### 10.3 指标、单位与容差
+
+令计分 intent sequence 为 `y_0 ... y_(n-1)`，均使用 intent unit。定义：
+
+```text
+TV(y)   = sum(abs(y_i - y_(i-1))), i=1..n-1
+PEAK(y) = max(abs(y_i))
+MAA(y)  = sum(abs(y_i)) / n
+P2P(y)  = max(y_i) - min(y_i)
+```
+
+有效符号零容差固定为 `eps_sign = 2e-3 intent unit`。计算 sign reversal 时先删除所有
+`abs(y_i) <= eps_sign` 的样本，再统计剩余相邻样本符号改变的次数；插入零不能隐藏一次反转。
+若剩余样本少于两个，计数为零。
+该零带只用于区分“有效符号反转”和已被压低的残余活动，不替代继承 direction 容差、meaningful
+response 阈值或其它数值 gate。
+
+通用 finite/repeatability/mirror 比较继续使用：
+
+```text
+abs_tol = 1e-9 intent unit
+rel_tol = 1e-6
+tol(a,b) = 1e-9 + 1e-6 * max(abs(a), abs(b))
+```
+
+镜像序列的对齐输出要求 `abs(y_positive_i + y_negative_i) <= tol(...)`。每个完整 run 重复三次，
+相同索引的最大两两差必须在 `tol` 内。所有 candidate intent、baseline 与 Level B payload 必须
+finite。“更平滑”“活动较小”等没有上述公式和阈值的描述不能作为 PASS。
+
+### 10.4 冻结 noise sequence
+
+下表中一个方括号元素表示 `(pitch rad, rate rad/s)`；`*2` 是文档简写，runner 必须展开为
+列出的六帧按原顺序重复一次，共 12 个计分样本。
+
+| Scenario | 未计分 priming | 12 帧计分序列 | 目的 |
+| --- | --- | --- | --- |
+| `ALG003-Q01` | `(0,0)` | `[(+.003,+.03),(-.003,-.03),(+.004,+.04),(-.004,-.04),(+.002,+.02),(-.002,-.02)] * 2` | 平衡附近 angle+rate 小噪声 |
+| `ALG003-Q02` | `(+.05,0)` | `[(+.053,+.03),(+.047,-.03),(+.054,+.04),(+.046,-.04),(+.052,+.02),(+.048,-.02)] * 2` | 正非零稳定姿态附近噪声 |
+| `ALG003-Q03` | `(-.05,0)` | Q02 每帧 pitch/rate 同时取反 | Q02 的精确负镜像 |
+| `ALG003-Q04` | `(0,0)` | `[(0,+.04),(0,-.04),(0,+.03),(0,-.03),(0,+.02),(0,-.02)] * 2` | 平衡姿态附近 rate-only 噪声 |
+
+raw baseline 的冻结校核值为：
+
+| Scenario | `TV(b)` | reversal | `PEAK(b)` | `MAA(b)` | `P2P(b)` |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `Q01` | `0.134` | `11` | `0.008` | `0.006` | `0.016` |
+| `Q02` | `0.134` | `0` | `0.058` | `0.050` | `0.016` |
+| `Q03` | `0.134` | `0` | `0.058` | `0.050` | `0.016` |
+| `Q04` | `0.066` | `7` | `0.004` | `0.003` | `0.008` |
+
+Q03 的 baseline 与 Q02 逐帧奇对称。数值比较使用未舍入的公式结果；表中三位小数只用于人工
+审核。
+
+### 10.5 Noise Suppression Hard Gate
+
+下列要求在 10.10 的每个合法 `dt` variant 上分别成立：
+
+| Scenario | `TV(candidate)` | reversal | activity/peak | 其它 |
+| --- | ---: | ---: | --- | --- |
+| `Q01` | `<= 0.40 * TV(raw) = 0.0536` | `<= 2` 且不超过 raw | `PEAK <= 0.0040`; `MAA <= 0.0024` | finite |
+| `Q02` | `<= 0.60 * TV(raw) = 0.0804` | 不高于 raw（即 `0`） | `P2P <= 0.0120` | finite |
+| `Q03` | `<= 0.60 * TV(raw) = 0.0804` | 不高于 raw（即 `0`） | `P2P <= 0.0120` | finite；与 Q02 镜像 |
+| `Q04` | `<= 0.40 * TV(raw) = 0.0264` | `<= 2` 且不超过 raw | `PEAK <= 0.0020`; `MAA <= 0.0012` | finite |
+
+所有不等式包含端点；浮点实现可以在阈值比较中加入第 10.3 节 `abs_tol`，不得加入未版本化的
+宽松裕量。Q01/Q04 同时形成 equilibrium noise activity 与 sign-reversal suppression gate；
+Q02/Q03 防止只在绝对零附近工作的机制绕过非零姿态噪声。四项全部 PASS 才能记
+`Noise Suppression Gate: PASS`。
+
+Profile 不要求完全零输出，也不限定 deadband、low-pass、moving average、median、hysteresis
+或其它实现。最终 intent 的 slew-rate limiter 或 output shaping 属于 ALG-004，不能作为本 gate
+的 ALG-003 实现依据。
+
+### 10.6 冻结 meaningful signal sequence
+
+`Q01[0:8]` 表示 Q01 展开后前 8 个计分样本。
+
+| Scenario | 明确输入顺序 | raw 参考 |
+| --- | --- | --- |
+| `ALG003-S01` | reset；`Q01[0:8]`；随后 `(+.05,+.20)` 保持 6 帧 | meaningful tail `-0.070` |
+| `ALG003-S02` | S01 每帧 pitch/rate 同时取反 | meaningful tail `+0.070` |
+| `ALG003-S03P` | reset；`(+.05,0)` 6 帧；随后 `(+.05,+.20)` 6 帧 | `-0.050 -> -0.070` diverging |
+| `ALG003-S03N` | S03P 的精确负镜像 | `+0.050 -> +0.070` diverging |
+| `ALG003-S04P` | reset；`(+.05,0)` 6 帧；随后 `(+.05,-.20)` 6 帧 | `-0.050 -> -0.030` recovering |
+| `ALG003-S04N` | S04P 的精确负镜像 | `+0.050 -> +0.030` recovering |
+
+这些是预定义 open-loop software input replay，不是机器人状态由输出推进的 closed-loop dynamic
+simulation。
+
+### 10.7 Signal Preservation Hard Gate
+
+该 gate 与 10.5 独立判定，不能由 noise 指标抵消。
+
+**Meaningful positive/negative response：** S01/S02 从 meaningful tail 第一帧起计数。前三帧内
+至少一帧必须达到与 raw baseline 同方向且绝对值不小于 `0.035 intent unit` 的有效响应。
+`frames_to_response` 是首个满足该条件的 1-based 帧号，必须 `<=3`；同时记录从变化前边界到
+该帧结束的累计 synthetic elapsed time。
+
+**Steady nonzero preservation：** 分别取 S01/S02 最后 3 帧的有符号均值。S01 必须位于
+`[-0.084,-0.056]`，S02 必须位于 `[+0.056,+0.084]`，即保留 raw steady magnitude 的
+`80%..120%` 并保持正确方向。恒零或长期衰减到零明确 FAIL。
+
+**Diverging trend：** 分别取 S03P/N 转换前最后 3 帧与转换后最后 3 帧均值，记为
+`before/after`。要求：
+
+```text
+S03P: before - after >= 0.010 intent unit
+S03N: after - before >= 0.010 intent unit
+```
+
+**Recovering trend：** 同样计算 S04P/N 的窗口均值，要求：
+
+```text
+S04P: after - before >= 0.010 intent unit
+S04N: before - after >= 0.010 intent unit
+```
+
+四个 `0.010` 阈值是 raw damping separation `0.020` 的 50%。它们保留 ALG-002 的 signed damping
+方向，不限制 recovering total intent 必须保持 pitch-error 符号。S01/S02、S03P/N、S04P/N
+还必须逐帧通过 10.3 的镜像 gate。上述项目全部 PASS 才能记
+`Signal Preservation Gate: PASS`。
+
+因此 trivial zero-output candidate 会同时在 meaningful direction、response delay、steady
+nonzero、diverging 和 recovering gate 失败；即使它的 Q01/Q04 活动为零，也必须判
+`ALG-003 NOT QUALIFIED`。
+
+### 10.8 ALG-001 / ALG-002 inheritance gate
+
+使用未修改的 `ALG001-FIXTURE-v1`、`ALG002-FIXTURE-v1` 数值、关系、fail-close 场景和容差，
+重新验证当前 ALG-003 candidate，而不是引用历史 Candidate A 的 PASS。考虑到 ALG-003 允许
+显式时间历史，每个原有正常 state 在 reset 后保持 6 帧；首帧仍须 finite 且方向正确（neutral
+仍在零容差内），最后 3 帧均值必须满足原 Profile 的全部 neutral、direction、magnitude、
+proportional-style、zero-rate、diverging、recovering、zero-pitch moving、signed damping 和
+mirror 关系。不得改变原输入值、容差或关系方向。
+
+同时重新执行原 Profile 的 state-validation/controller fail-close、factory loading、reset、
+repeatability 和 Level B `FlightCommand` gate。继承 gate 只适配有历史 candidate 的观测窗口，
+不修改第 7、9 节，也不重写 ALG-001/ALG-002 历史 Result。ALG-001 inheritance 与 ALG-002
+inheritance 必须分别 PASS。
+
+### 10.9 Invalid/stale/freshness 与 history invalidation
+
+| Scenario | 输入 / layer | PASS 条件 |
+| --- | --- | --- |
+| `ALG003-F01` | valid IMU 的 pitch 或 rate 为 `None` / state validation | 两个 variant 均拒绝，不调用 controller |
+| `ALG003-F02` | pitch 或 rate 为 `NaN/+Inf/-Inf` / state validation | 所有 variant 均拒绝，不调用 controller |
+| `ALG003-F03` | 合法 unobserved/invalid IMU / controller | 合法无载荷 safe-stop；本地历史失效 |
+| `ALG003-F04` | `imu.fresh=false` / controller | 合法无载荷 safe-stop；本地历史失效 |
+| `ALG003-F05` | `required_inputs_fresh=false` / controller | 合法无载荷 safe-stop；本地历史失效 |
+| `ALG003-F06` | 必要 motor unobserved/invalid/stale/unhealthy 或 E-STOP 非明确 false / controller | 每个合法 variant 均 safe-stop；本地历史失效 |
+
+每个 controller-layer 场景先用 Q02 或 Q03 建立非零 history，再注入故障。safe-stop 必须精确
+等于 `FlightCommand.safe_stop()` 并通过 validation，不复用旧 command。故障后的第一条合法
+输入结果必须与 `reset()` 后同一输入的 cold-start 结果在 10.3 容差内相同。validation-layer
+拒绝后，由 harness 调用 `reset()` 再作同样的 cold-start 比较；不得把 controller 未运行记成
+controller-layer PASS。
+
+### 10.10 `dt` contract
+
+全部 Q/S Hard Gate 分别执行以下三种 `dt` variant，sequence 的输入值和计分窗口不变：
+
+| Scenario | 每帧 `dt` |
+| --- | --- |
+| `ALG003-D00A` | 恒定 `0.020 s` |
+| `ALG003-D00B` | 恒定 `0.037 s` |
+| `ALG003-D00C` | `0.020, 0.037` 交替，第一帧为 `0.020 s` |
+
+candidate 必须说明 filter/history 在变 `dt` 时的语义；时间常数配置使用秒。固定帧方案只有在
+三个 variant 全部通过且明确说明 elapsed-time 差异时可接受。response report 同时保存 frame
+count 和到首个有效响应为止的 `sum(dt)`，不得将其声称为真实机器人响应时间。
+
+非法值场景 `ALG003-D01=0`、`D02=-0.01`、`D03=NaN`、`D04=+Inf/-Inf` 均要求合法无载荷
+safe-stop、history invalidation 和下一合法样本 cold-start 等价。非法 `dt` 不得更新、保留或
+继续输出旧 filtered state。
+
+### 10.11 Reset、symmetry 与 repeatability
+
+`ALG003-R01`：运行 Q02 建立 history，调用 `reset()`，再运行 Q01；Q01 每帧必须与全新
+controller 的 Q01 cold run 等价。Level B 不复用 Q02 的 motor baseline 或普通 command。
+
+`ALG003-R02`：按 `Q02 -> reset -> Q03` 与 `Q03 -> reset -> Q02` 两种顺序执行；同一场景结果
+与执行顺序无关，且 Q02/Q03 保持逐帧镜像。reset 清除所有 filter/history/latch/cache，不修改
+Runtime、IMU zero、authority 或 E-STOP，不访问硬件。
+
+所有 Q/S/继承正常场景按 10.3 重复三次；三个 `dt` variants 各自判 repeatability。对所有明确
+的正负 mirror pair 执行逐帧 symmetry gate。任何 history 泄漏、执行顺序依赖或不对称超容差
+均 FAIL。
+
+### 10.12 Level B、factory 与 capability boundary
+
+candidate 必须通过现有 `module.path:factory` loader，固定配置可稳定序列化，非法/unknown 配置
+明确拒绝。所有合法正常帧与 safe-stop 均通过 `validate_flight_command()`；普通命令拥有完整
+motor keys 和 `[0,1]` 的左右 fan payload。算法模块和测试不得导入或访问 ROS/hardware I/O。
+
+review 必须确认：
+
+- 控制输入只使用统一 `relative_pitch_rad + relative_pitch_rate_rad_s + dt`；
+- 没有最终 intent slew-rate、output shaping 或其它 ALG-004 输出限制；
+- 没有 ALG-005 recovery state/timeout/process management；
+- 没有 ALG-006 allocation/actuator direction、ALG-007 roll/multi-axis 或 ALG-008 full recovery；
+- Flight API、Runtime、default controller、hardware mapping 和既有安全机制未改变；
+- hardware access：`NO`。
+
+### 10.13 Hard Qualification checklist
+
+- [ ] metadata、固定 configuration、fixture、raw baseline 与执行命令完整可追溯；
+- [ ] ALG-001 inheritance：PASS；
+- [ ] ALG-002 inheritance：PASS；
+- [ ] deterministic fixture：PASS；
+- [ ] Noise Suppression Gate：PASS；
+- [ ] Q01/Q04 sign-reversal suppression 与 equilibrium activity：PASS；
+- [ ] Q02/Q03 nonzero-pose suppression 与 symmetry：PASS；
+- [ ] Signal Preservation Gate：PASS，且未被 noise gate 抵消；
+- [ ] meaningful positive/negative response、delay 与 steady nonzero：PASS；
+- [ ] diverging/recovering signed trend preservation：PASS；
+- [ ] `D00A/B/C` 合法 `dt` 与 `D01`–`D04` 非法 `dt`：PASS；
+- [ ] `F01`–`F06` validation/fail-close/history invalidation：PASS；
+- [ ] `R01/R02` reset/history isolation：PASS；
+- [ ] finite、mirror symmetry 与三次 repeatability：PASS；
+- [ ] factory loading、固定配置和全部 Level B `FlightCommand` validation：PASS；
+- [ ] ALG-004+ capability leakage：`NO`；
+- [ ] hardware access：`NO`。
+
+任一项 FAIL 时 Overall 必须为 `ALG-003 NOT QUALIFIED`。trivial zero-output、极强 deadband、
+无限期旧 filtered state 或单纯“最平滑”的 candidate 不能通过 Signal Preservation Gate。
+
+### 10.14 Comparative metrics
+
+只有 Hard Qualification 全部 PASS 后才分别记录，不合成总分：
+
+- 每个 Q 场景的 `TV(raw)`、`TV(candidate)` 和 reduction ratio
+  `1 - TV(candidate)/TV(raw)`；
+- sign reversal raw/candidate count 与 reduction；
+- Q01/Q04 `PEAK`、`MAA`，Q02/Q03 `P2P`；
+- S01/S02 `frames_to_response` 与 synthetic elapsed time；
+- steady signal attenuation：最后 3 帧均值绝对值除以 `0.070`；
+- trend preservation error：分别报告四个实际 separation 与 raw `0.020` 的绝对误差；
+- mirror symmetry error：所有 mirror pair 的 `max(abs(y_pos_i+y_neg_i))`；
+- repeatability delta：全部三次 run 对齐样本的最大两两绝对差；
+- implementation complexity：给出可复现 LOC/cyclomatic 口径；未测项明确写明；
+- configuration clarity：参数数量、序列化值、单位、合法范围、非法值拒绝及是否中途调参。
+
+不能仅按“最平滑”排名，不把某个 filter time constant、deadband 或 hysteresis 越大描述为越好。
+不同 Task/Profile/Level 的指标不能包装为公平同级排名。
+
+### 10.15 Candidate Result、Level 与结论边界
+
+正式 Result 除第 3 节 metadata 外，还必须列出 10.13 全部 Hard Gate、每个 scenario/variant、
+两个独立总 gate、raw/candidate metrics、已知限制和未执行测试。candidate 必须先有固定独立
+implementation commit；本 Profile 不创建或预填虚构 Result。
+
+ALG-003 v1 Hard Qualification 包含 Level A、Level B 和本节预定义的 Level D deterministic
+sequence replay。Level D 不是 dynamic simulation。Level C synthetic DRY_RUN 可补充但不替代
+Hard Gate；Level E/F 不属于本 Profile。
+
+PASS 只能表述为固定 synthetic fixture 上的 ALG-003 软件资格，不能声称真实 IMU 噪声已验证、
+机器人不会振荡、电机不会抖动、真实 actuator direction 已确认或 Balance Recovery 已实现。
