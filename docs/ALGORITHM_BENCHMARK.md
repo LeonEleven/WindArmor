@@ -13,7 +13,7 @@
 3. **Candidate Result**：一次候选实现针对固定 Contract/Profile 的实际命令、环境和结果。
 
 本文件同时承载 `Algorithm Benchmark v1` 的全局 Contract，以及任务级
-`ALG-001 Profile v1`、`ALG-002 Profile v1` 和 `ALG-003 Profile v1`。它不包含任何 candidate
+`ALG-001 Profile v1`、`ALG-002 Profile v1`、`ALG-003 Profile v1` 和 `ALG-004 Profile v1`。它不包含任何 candidate
 result；Task Profile 的存在不表示对应 candidate 已 PASS。
 
 ## 2. 版本规则
@@ -24,6 +24,7 @@ result；Task Profile 的存在不表示对应 candidate 已 PASS。
 | ALG-001 Task Benchmark Profile | `ALG-001 Profile v1` |
 | ALG-002 Task Benchmark Profile | `ALG-002 Profile v1` |
 | ALG-003 Task Benchmark Profile | `ALG-003 Profile v1` |
+| ALG-004 Task Benchmark Profile | `ALG-004 Profile v1` |
 
 在两个 candidate 已开始正式历史比较后，不得静默修改 fixture、scenario、阈值、容差或
 评分规则。实质变化必须升级对应版本：任务局部变化升级 Profile（例如 v1 → v2）；跨任务
@@ -833,3 +834,192 @@ Hard Gate；Level E/F 不属于本 Profile。
 
 PASS 只能表述为固定 synthetic fixture 上的 ALG-003 软件资格，不能声称真实 IMU 噪声已验证、
 机器人不会振荡、电机不会抖动、真实 actuator direction 已确认或 Balance Recovery 已实现。
+
+## 11. ALG-004 Profile v1
+
+对应 [ALG-004 Task Spec v1](algorithm_tasks/ALG-004.md)。本 Profile 只约束已生成 abstract recovery intent 的输出侧，不改变全局 `Algorithm Benchmark v1` 或历史 ALG-001/002/003 Profile 的输入、阈值、容差、关系方向和 Result。ALG-003 负责输入侧 pitch/rate 估计与噪声抑制；ALG-004 不重新过滤输入、不重调 `Kp/Kd`，不做 actuator allocation。
+
+### 11.1 观测、fixture 与执行约定
+
+`ALG004-FIXTURE-v1` 的 Level A/D 输入直接是每帧 synthetic `requested_intent` 和 `dt_i`，输出是 task-local `shaped_intent`。此 seam 仅用于资格验证，不是公开 Flight API；不得从 motor/fan payload 反推。每个独立 run 使用同一固定、稳定序列化的 candidate 配置，创建 fresh controller 或先 `reset()`，从精确 `y_(-1)=0.0 intent unit` 开始；无未计分 priming。`× n` 表示连续重复，镜像场景逐帧精确取反。所有序列确定性列值，无 runtime random generator。Level D 只组织确定性软件 replay，不是 dynamic/closed-loop simulation 或硬件 replay。
+
+Level B 独立使用纯内存合法 `FlightState`、现有 factory/loader 与校验函数。普通命令须复制**当前合法完整** `left_lift/left_pitch/right_pitch/right_lift` motor feedback position hold，左右 fan 均为 `0.0`，并通过 `validate_flight_command()`；safe-stop 为现有精确无载荷 `FlightCommand.safe_stop()`。不得把 shaped intent 编码为 motor/fan direction。Factory 固定配置、拒绝非法及 unknown 配置；算法和测试不导入或访问 ROS/hardware I/O。正常、继承、fail-close 与 reset/history 的 Level B 结果分别评分，不能由 Level A 替代。
+
+### 11.2 软件 envelope、容差和逐帧 Hard Gates
+
+```text
+U = max_abs_intent = 0.10 intent unit
+S = max_slew_rate = 2.0 intent unit/s
+r_i = requested_intent
+t_i = clamp(r_i, -U, +U)
+y_i = shaped_intent
+dt_i = 当前正有限秒数
+y_(i-1) = 前一合法 shaped_intent
+```
+
+cold start、`reset()`、controller-layer fail-close 或非法 `dt` 后，上一输出基线均为 `y_(-1)=0.0 intent unit`。包括首帧在内，每个合法 update 必须同时满足：
+
+```text
+finite(y_i)
+abs(y_i) <= U + tol(abs(y_i), U)
+abs(y_i - y_(i-1)) <= S * dt_i + tol(abs(y_i - y_(i-1)), S * dt_i)
+min(y_(i-1), t_i) - tol(y_i, min(y_(i-1), t_i)) <= y_i
+y_i <= max(y_(i-1), t_i) + tol(y_i, max(y_(i-1), t_i))
+```
+
+后两项是 Directed Transition / no-overshoot Gate：输出朝当前 target 移动或保持，不得人为远离或越过 target 制造 shaping 自身的 overshoot；不推断真实机器人闭环单调性。不得以首帧无 previous output 绕过 slew。
+
+沿用 ALG-003 Profile 冻结的通用比较方式：
+
+```text
+eps_sign = 2e-3 intent unit
+abs_tol = 1e-9 intent unit
+rel_tol = 1e-6
+tol(a,b) = 1e-9 + 1e-6 * max(abs(a), abs(b))
+TV(y) = sum(abs(y_i - y_(i-1))), i=1..n-1
+```
+
+有效 sign reversal 先删去 `abs(y_i)<=eps_sign` 的样本，再数剩余相邻样本的符号变化；不足两样本计零，插零不能隐藏真实反向。只允许本 Profile 固定 tolerance，不得添加未版本化裕量。所有合法 requested intent、target、输出和 Level B payload 均须 finite。
+
+`U/S` 仅是 **ALG-004 Profile v1 synthetic software qualification envelope**，不是 CyberGear rad、motor velocity、torque、PWM、fan thrust、机器人实际安全 envelope 或真实执行器 capability；不建立物理语义映射。
+
+### 11.3 `ALG004-FIXTURE-v1`：neutral 与 steady
+
+每行独立 reset；默认 `dt=0.020 s`，还须按 11.7 的其它合法 variant 完整重跑。
+
+| Scenario | requested-intent sequence | clamped target |
+| --- | --- | ---: |
+| `ALG004-N00` | `0.00 × 6` | `0.00` |
+| `ALG004-P01` / `ALG004-N01` | `+0.03 × 6` / P01 精确取反 | `±0.03` |
+| `ALG004-P02` / `ALG004-N02` | `+0.07 × 6` / P02 精确取反 | `±0.07` |
+| `ALG004-P03` / `ALG004-N03` | `+0.10 × 6` / P03 精确取反 | `±0.10` |
+| `ALG004-P04` / `ALG004-N04` | `+0.20 × 6` / P04 精确取反 | `±0.10` |
+
+N00 每帧在 `abs_tol` 内为零；P/N pair 逐帧镜像。P04/N04 必须以 `±0.10` 为 clamp target，不能把 `±0.20` 当作允许输出或物理限值。
+
+### 11.4 Step、full reversal 与高频反向
+
+| Scenario | reset 后完整 requested-intent sequence | clamped target / 目的 |
+| --- | --- | --- |
+| `ALG004-S01P` | `0.00 × 3; +0.07 × 6` | 第二段 `+0.07` |
+| `ALG004-S01N` | S01P 完整 sequence 精确取反 | 第二段 `-0.07` |
+| `ALG004-S02P` | `0.00 × 3; +0.20 × 6` | 第二段 `+0.10` |
+| `ALG004-S02N` | S02P 完整 sequence 精确取反 | 第二段 `-0.10` |
+| `ALG004-S03P` | `+0.20 × 6; -0.20 × 12` | `+0.10 -> -0.10` |
+| `ALG004-S03N` | S03P 完整 sequence 精确取反 | `-0.10 -> +0.10` |
+| `ALG004-S04P` | `[+0.20, -0.20] × 6`，共 12 帧 | `[+0.10, -0.10] × 6` |
+| `ALG004-S04N` | S04P 完整 sequence 精确取反，即 `[-0.20, +0.20] × 6` | S04P 镜像 |
+
+S04 target 的冻结 reference 为 `TV(target)=2.20 intent unit`、`effective sign reversal(target)=11`。这些是开环软件请求，不是机器人状态由输出推进的 dynamic simulation。
+
+### 11.5 Steady、step、reversal Hard Gates
+
+以下各门槛互不抵消；11.2 的逐帧契约始终同时适用。
+
+**Steady Signal Preservation：** P01–P04/N01–N04，以及 S01/S02 最终常值段，分别取最后三帧有符号平均值 `mean_tail`。须与非零 clamped target 同号，且满足：
+
+```text
+0.80 * abs(target) <= abs(mean_tail) <= abs(target) + tol(abs(mean_tail), abs(target))
+```
+
+下界只可使用固定 `abs_tol` 比较；恒零、长期过度衰减或输出固定很小值 FAIL。S03 第二段最后三帧也须满足同一 80%..100% 门槛。
+
+**Step Response：** P01–P04/N01–N04 从 cold-start 非零 target 首帧计数；S01/S02 从第二段首帧计数。前三帧内至少一帧同号且 `abs(y)>=0.50*abs(target)`。记录首次达标的 1-based `frames_to_50pct` 和从变化边界至该帧结束累计的 `synthetic_elapsed_time_to_50pct=sum(dt_i)`。仅固定 `abs_tol` 用于阈值比较；合成时间不是实机响应 SLA。
+
+**Full Reversal：** S03 第一段先建立非零 history。第二段前六帧至少一帧与新 opposite target 同号且达到其幅值的 50%；`±0.10` target 时须达到相反方向 `0.05`。第二段末三帧通过 steady gate；全程通过 finite、amplitude、slew、directed transition 和 mirror。永久零附近、长期旧方向、极慢规避反向或瞬时跳变均 FAIL。
+
+**High-frequency Reversal：** S04P/N 的 12 帧分别满足：
+
+```text
+TV(candidate) <= 0.60 * TV(target) = 1.32 intent unit
+effective sign reversal(candidate) <= 4
+```
+
+TV 比较只可用固定 `abs_tol`，反向整数计数不得放宽；逐帧仍通过全部输出契约。本 gate 与 steady gate 独立：恒零在 steady gate FAIL；单纯逐帧 clamp `±0.20 -> ±0.10` 在 slew/TV FAIL；持续小幅正负 ping-pong 即使 TV 低也因有效反向次数 FAIL。
+
+### 11.6 ALG-001 / ALG-002 / ALG-003 inheritance
+
+未来 ALG-004 candidate 的**最终 post-shaped abstract intent** 是评分对象；必须重新运行未修改的 `ALG001-FIXTURE-v1`、`ALG002-FIXTURE-v1`、`ALG003-FIXTURE-v1`，不能引用历史 Candidate A PASS 代替。原输入、阈值、关系方向与历史 Result 不变。ALG-001/002 正常 state 沿用 ALG-003 Profile 10.8 的六帧保持、首帧方向/finite 与末三帧均值观测窗口。ALG-001 neutral/direction/proportional-style、ALG-002 signed damping/trend、ALG-003 noise suppression **和** signal/trend preservation、各自 fail-close、reset、factory、Level B、mirror 与 repeatability 均须重新通过。`output *= 0.1` 等破坏继承语义的实现 FAIL。
+
+历史 ALG-003 Profile 10.12 中仅因“ALG-004 属未来任务”而禁止最终 intent output shaping 的一项，在当前 ALG-004 inheritance gate 自然 supersede，不作为失败条件；不修改历史 Profile。其余可观察能力与 ALG-005+ future-task prohibition 继续有效。
+
+### 11.7 合法 `dt`、mirror 与 repeatability
+
+全部正常 N/P/S、steady/step/reversal Hard Gate 与 ALG-001/002/003 inheritance 正常场景须在每个 variant 下分别完整运行、评分和重复三次：
+
+| Variant | 每帧真实 `dt_i` |
+| --- | --- |
+| `ALG004-D00A` | 恒定 `0.020 s` |
+| `ALG004-D00B` | 恒定 `0.037 s` |
+| `ALG004-D00C` | `0.020, 0.037 s` 交替，第一帧 `0.020 s` |
+
+D00C 沿完整 run 连续推进索引，跨 S01/S02/S03 segment 边界不重启。slew 用每帧真实 `dt_i`，不能假设固定 period。相同索引输出的三次最大两两差须在 `tol()` 内。P01–P04/N01–N04、S01–S04 P/N 及继承中的明确 mirror pair 均逐帧检查 `abs(y_positive_i+y_negative_i)<=tol(y_positive_i,-y_negative_i)`。任何 history 泄漏、执行顺序依赖、不重复或不对称超 tolerance 均 FAIL。每次重复使用相同 dt schedule 和固定配置。
+
+### 11.8 Fail-close 与非法 `dt`
+
+| Scenario | 输入 / layer | PASS 条件 |
+| --- | --- | --- |
+| `ALG004-F01` | valid IMU 的必要 pitch 或 rate 为 `None` / state validation | 两种缺失分别拒绝，不调用 controller；harness reset 后 cold-start 等价 |
+| `ALG004-F02` | pitch/rate 为 NaN、`+Inf/-Inf` / state validation | 全部 variant 拒绝，不调用 controller；harness reset 后 cold-start 等价 |
+| `ALG004-F03` | 合法 unobserved/invalid IMU / controller | 精确无载荷 safe-stop、双层历史清除、cold-start 等价 |
+| `ALG004-F04` | IMU stale / controller | 同上 |
+| `ALG004-F05` | `required_inputs_fresh=false` / controller | 同上 |
+| `ALG004-F06` | 必要 motor unavailable/invalid/stale/unhealthy 或 E-STOP unknown/active / controller | 各合法 variant 分别执行，同上 |
+| `ALG004-D01` | `dt=0` / controller | 同上 |
+| `ALG004-D02` | `dt=-0.01` / controller | 同上 |
+| `ALG004-D03` | `dt=NaN` / controller | 同上 |
+| `ALG004-D04` | `dt=+Inf/-Inf` / controller | 两种分别执行，同上 |
+
+每个 controller-layer case 先用合法前置 sequence 建立**非零 ALG-003 输入/filter history 和 ALG-004 shaped-output history**，再注入故障。返回须精确等于合法 `FlightCommand.safe_stop()`，无旧 shaped intent/ordinary command/cache/latch。下一合法输入在 `tol()` 内等价于 `reset()` 加同一输入的 fresh cold start。非法 dt 同样清除双层历史。state-validation layer 由 `validate_flight_state()` 先拒绝、不调用 controller；之后 harness `reset()` 再检查恢复，不把前置拒绝记为 controller PASS。F/D controller 场景在每个合法 dt variant 的前置 history 下执行。
+
+### 11.9 Reset / history isolation
+
+`ALG004-R01`：运行 P04 建立接近 `+0.10` 的非零 shaping history，调用 `reset()`，再运行 N02；N02 与全新 controller 的 N02 cold run 逐帧在 `tol()` 内一致。
+
+`ALG004-R02`：分别执行 `P02 -> reset -> N02` 和 `N02 -> reset -> P02`；同场景结果与顺序无关，P02/N02 逐帧镜像。reset 清除 ALG-003 输入/filter history、ALG-004 shaped output、旧 ordinary command/cache/latch；Level B 不复用旧 motor baseline。reset 不改变 Runtime、authority、IMU zero、E-STOP 或外部硬件状态。R01/R02 在三个合法 dt variant 下执行。
+
+### 11.10 Level 与 Hard Qualification checklist
+
+| Level | ALG-004 v1 要求 | 结论边界 |
+| --- | --- | --- |
+| A | **HARD GATE** | task-local seam 的数值、历史与继承 |
+| B | **HARD GATE** | factory、state/command validation、当前完整 hold frame、fan-zero、safe-stop |
+| C | optional preview | 不能代替 A/B/D |
+| D | **HARD GATE** | deterministic software replay，非 dynamic simulation |
+| E | **NOT REQUIRED** | dynamic benchmark / trusted simulation 从 ALG-005 开始 |
+| F | **NOT AUTHORIZED / NOT EXECUTED** | 真实硬件另需独立授权 |
+
+正式 Candidate Result 必须逐项报告 PASS/FAIL；Candidate 未实现时不预填资格：
+
+- [ ] metadata、baseline/implementation commit、配置、Profile、fixture、环境、命令与全部 scenario/variant 完整；
+- [ ] finite output：PASS；
+- [ ] Output Envelope Gate：PASS；
+- [ ] Slew Rate Gate（包括首帧与当前 `dt_i`）：PASS；
+- [ ] Directed Transition / no-overshoot Gate：PASS；
+- [ ] Neutral Gate：PASS；
+- [ ] Steady Signal Preservation Gate：PASS；
+- [ ] Step Response Gate：PASS；
+- [ ] Saturation Gate：PASS；
+- [ ] Full Reversal Gate：PASS；
+- [ ] High-frequency Reversal Gate：PASS；
+- [ ] D00A/B/C 三种合法 dt variants：PASS；
+- [ ] D01–D04 invalid dt fail-close：PASS；
+- [ ] F01–F06 validation/fail-close 与双层 history invalidation：PASS；
+- [ ] R01/R02 reset/history isolation：PASS；
+- [ ] mirror symmetry：PASS；
+- [ ] 三次 repeatability：PASS；
+- [ ] ALG-001 inheritance：PASS；
+- [ ] ALG-002 inheritance：PASS；
+- [ ] ALG-003 inheritance：PASS；
+- [ ] factory/configuration：PASS；
+- [ ] Level B `FlightCommand` validation：PASS；
+- [ ] Future-task boundary：PASS；
+- [ ] hardware access：`NO`；hardware validation：`NOT AUTHORIZED / NOT EXECUTED`。
+
+任一全局或本节 Hard Gate FAIL，`Overall = ALG-004 NOT QUALIFIED`；比较指标不得抵消。禁止新 pitch/rate filter、`Kp/Kd` 重调、integral/anti-windup、ALG-005 process/state machine、ALG-006 motor/fan allocation、ALG-007 multi-axis、ALG-008 full recovery；不改 Flight API、Runtime、adapters、default/teaching controller、hardware manager/mapping、E-STOP、watchdog 或 soft limits。
+
+### 11.11 Comparative metrics 与结论
+
+仅全部 Hard Qualification PASS 后，按场景和 dt variant 分别报告：`max_abs_output`；`max_observed_slew_rate=max(abs(y_i-y_(i-1))/dt_i)`（包含首帧）；steady attenuation ratio `abs(mean_tail)/abs(target)`；首次达到 target 50%/80% 的帧数和累计 synthetic elapsed time；S03 首次有效越零/相反符号时间与达到 opposite 50% 的时间；S04 TV、相对 `TV(target)` 的 reduction ratio `1-TV(candidate)/TV(target)`、有效 sign reversal count；最大 mirror symmetry error；三次 repeatability delta；implementation physical LOC（注明口径）；configuration clarity（参数、单位、范围、非法值拒绝、稳定序列化和是否中途调参）。未测项明确注明，不合成为未经依据的 100 分总分。
+
+`Actuator-safe Output` 只是 roadmap 标签。即使未来 `ALG-004 QUALIFIED`，也只证明固定 synthetic fixture 中 abstract intent 满足幅值、变化率、信号保留、符号切换与历史重置约束，较适合后续 actuator integration；不证明 `REAL ACTUATOR SAFE`、CyberGear/fan/PWM 安全、allocation/方向正确、真实执行器动态安全、机器人可恢复平衡或真实 Balance Recovery。当前 Candidate `NOT IMPLEMENTED`，无 Result，无硬件验证。
