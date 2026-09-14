@@ -167,7 +167,7 @@ def run_noise_scenario(
     seam.reset()
     seam.update(*scenario.priming, dt_at(dt_variant, 0))
     return tuple(
-        seam.update(pitch, rate, dt_at(dt_variant, index))
+        seam.update(pitch, rate, dt_at(dt_variant, index + 1))
         for index, (pitch, rate) in enumerate(scenario.samples)
     )
 

@@ -189,6 +189,50 @@ class _Alg002SixFrameAdapter:
         return sum(values[-3:]) / 3.0
 
 
+class _DtSpy:
+    def __init__(self):
+        self.received_dt = []
+
+    def reset(self):
+        self.received_dt.clear()
+
+    def update(self, pitch, rate, dt):
+        self.received_dt.append(dt)
+        return 0.0
+
+
+@pytest.mark.parametrize(
+    ("dt_variant", "expected"),
+    [
+        ("ALG003-D00A", (0.020,) * 13),
+        ("ALG003-D00B", (0.037,) * 13),
+        ("ALG003-D00C", (0.020, 0.037) * 6 + (0.020,)),
+    ],
+)
+def test_noise_runner_dt_schedule_includes_priming(dt_variant, expected) -> None:
+    spy = _DtSpy()
+
+    run_noise_scenario(spy, NOISE_BY_ID["ALG003-Q01"], dt_variant)
+
+    assert tuple(spy.received_dt) == expected
+
+
+@pytest.mark.parametrize(
+    ("dt_variant", "expected"),
+    [
+        ("ALG003-D00A", (0.020,) * 14),
+        ("ALG003-D00B", (0.037,) * 14),
+        ("ALG003-D00C", (0.020, 0.037) * 7),
+    ],
+)
+def test_signal_runner_dt_schedule_starts_at_first_frame(dt_variant, expected) -> None:
+    spy = _DtSpy()
+
+    run_signal_scenario(spy, SIGNAL_BY_ID["ALG003-S01"], dt_variant)
+
+    assert tuple(spy.received_dt) == expected
+
+
 def test_level_a_cold_start_uses_current_valid_sample() -> None:
     core = _core()
 
@@ -454,7 +498,7 @@ def test_level_b_all_q_and_s_frames_are_valid(dt_variant) -> None:
         for index, sample in enumerate(scenario.samples):
             command = controller.update(
                 _state_with_motion(*sample, baseline=index * 0.01),
-                0.02 if dt_variant != "ALG003-D00B" else 0.037,
+                dt_at(dt_variant, index + 1),
             )
             validate_flight_command(command, MOTOR_NAMES)
             assert command.request_safe_stop is False
@@ -463,8 +507,10 @@ def test_level_b_all_q_and_s_frames_are_valid(dt_variant) -> None:
     for scenario in SIGNAL_SCENARIOS:
         controller = _controller()
         controller.reset()
-        for sample in scenario.samples:
-            command = controller.update(_state_with_motion(*sample), 0.02)
+        for index, sample in enumerate(scenario.samples):
+            command = controller.update(
+                _state_with_motion(*sample), dt_at(dt_variant, index)
+            )
             validate_flight_command(command, MOTOR_NAMES)
             assert set(command.motor_positions_rad) == set(MOTOR_NAMES)
 
