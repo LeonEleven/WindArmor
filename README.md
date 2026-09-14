@@ -247,6 +247,12 @@ ALG-002 Candidate A 是 v0.5.0 开发中的非默认纯软件候选，在 ALG-00
 Flight API 的统一 pitch-rate，不重新解释 raw gyro XYZ；其抽象 intent 尚未分配到真实执行器，
 不表示真实 actuator direction 已验证或 Balance Recovery 已完成，也不授权硬件运行。
 
+ALG-003 Candidate A 是 v0.5.0 开发中的非默认纯软件候选，在 pitch 与 pitch-rate 输入层使用
+固定两样本移动平均，并继续只产生 abstract software feedback intent。该候选尚未把 intent
+映射到任何真实 actuator；当前 deterministic sequence benchmark 不是动态仿真，也不代表已用
+真实 Hiwonder IMU 噪声完成验证、Balance Recovery 已实现或机器人不会振荡。系统默认控制器
+保持不变，本候选不授权访问串口、CAN、GPIO/PWM、电机或风扇。
+
 Flight `ImuState` 还提供与 `relative_pitch_rad` 同软件正方向的
 `relative_pitch_rate_rad_s`。该值由同一 IMU 样本的姿态和 body-frame 三轴角速度派生；原始
 `angular_velocity_rad_s` 的 IMU/body frame 语义保持不变，详见
