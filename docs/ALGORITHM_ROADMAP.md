@@ -109,7 +109,7 @@ Candidate A 已针对固定 implementation commit 完成 Level A/B 纯软件资�
 主要能力：降低小幅 IMU 波动、量化噪声或微小扰动造成的持续无效动作。独立规范见
 [ALG-003 Task Spec v1](algorithm_tasks/ALG-003.md)，固定资格场景见
 [Algorithm Benchmark v1 / ALG-003 Profile v1](ALGORITHM_BENCHMARK.md#10-alg-003-profile-v1)。
-当前 Profile 使用 synthetic software noise fixture，不代表真实 IMU 噪声已完成表征。
+当前 Profile 使用 synthetic software noise fixture，不代表真实 IMU 噪声已完成表征。ALG-003 Candidate A 已针对固定 implementation commit 完成 Level A/B/D 纯软件资格验证，结论为 [`ALG-003 QUALIFIED`](algorithm_results/ALG-003_CANDIDATE_A.md)；该结论不是动态闭环、硬件或真实 Balance Recovery 验证。
 
 资格验证重点：
 
@@ -122,8 +122,12 @@ deadband、filtering 或其他小扰动抑制方法都是候选，不在 roadmap
 
 ### ALG-004 — Actuator-safe Output
 
-主要能力：让算法输出在自身层面连续、有限且更适合后续执行器集成，同时保留底层全部安全
-限制和最终否决权。
+主要能力：在不改变 ALG-001/002/003 反馈语义的前提下，对继承的 abstract recovery intent
+增加软件输出幅值、slew、符号切换和历史重置约束，同时保留底层全部安全限制与最终否决权。
+独立规范见 [ALG-004 Task Spec v1](algorithm_tasks/ALG-004.md)，固定资格场景见
+[Algorithm Benchmark v1 / ALG-004 Profile v1](ALGORITHM_BENCHMARK.md#11-alg-004-profile-v1)。
+`ALG004-FIXTURE-v1` 只使用 synthetic requested intent；Candidate A 尚未实现。这里的
+`Actuator-safe Output` 是能力标签，软件 envelope 不等于真实 actuator safety。
 
 资格验证重点：
 
@@ -311,14 +315,12 @@ release 前必须完成该版本所需的真实硬件验证；否则发布说明
 
 ## 11. 下一推荐任务
 
-ALG-001 Candidate A 与 ALG-002 Candidate A 均已完成固定 implementation commit 的 Level A/B
-纯软件资格验证，结论分别为 `ALG-001 QUALIFIED` 与 `ALG-002 QUALIFIED`。当前 Fast
-Progression Track 进入：
+ALG-001、ALG-002、ALG-003 Candidate A 均已完成各自固定 implementation commit 上的纯软件资格验证，结论分别为 `ALG-001 QUALIFIED`、`ALG-002 QUALIFIED`、`ALG-003 QUALIFIED`。当前工作单元只冻结 [ALG-004 Task Spec v1](algorithm_tasks/ALG-004.md) 和 [Algorithm Benchmark v1 / ALG-004 Profile v1](ALGORITHM_BENCHMARK.md#11-alg-004-profile-v1)；`ALG004-FIXTURE-v1` 已定义，ALG-004 Candidate 尚未实现。
+
+本 Spec/Profile 完成 remote review 并通过用户授权的 PR 合入 `develop` 后，下一推荐工作单元为：
 
 ```text
-ALG-003 specification / implementation progression
+v0.5.0-009 — ALG-004 Candidate A Implementation
 ```
 
-当前规范入口为 [ALG-003 Task Spec v1](algorithm_tasks/ALG-003.md) 和
-[Algorithm Benchmark v1 / ALG-003 Profile v1](ALGORITHM_BENCHMARK.md#10-alg-003-profile-v1)。
-ALG-003 candidate 尚未实现；本阶段不自动进入动态仿真或任何真实硬件测试。
+在本 Spec/Profile 的 remote review 和集成完成前不得启动 Candidate A。该后续任务仍是独立的软件实现与资格工作，不自动进入 dynamic simulation、actuator allocation 或任何真实硬件测试。
