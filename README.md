@@ -258,10 +258,12 @@ ALG-003 Candidate A 是 v0.5.0 开发中的非默认纯软件候选，在 pitch 
 保持不变，本候选不授权访问串口、CAN、GPIO/PWM、电机或风扇。
 
 ALG-004 Candidate A 是 v0.5.0 开发中的非默认纯软件候选，在 ALG-003 abstract intent 后增加
-`0.10 intent unit` software clamp 和 `2.0 intent unit/s` software slew constraint。当前实现
-尚未完成正式 Candidate qualification，不是 default controller，也不把 shaped intent 映射到
-电机或风扇。该软件 envelope 不代表真实 actuator safety，不证明 Balance Recovery 已验证，
-也不授权任何硬件运行。
+`0.10 intent unit` software clamp 和 `2.0 intent unit/s` software slew constraint。该候选已在
+固定 implementation SHA `5e78f7986ae6450596abd511b3d8c6d10b8881e8` 上完成 Algorithm
+Benchmark v1 / ALG-004 Profile v1 的 Level A/B/D 纯软件 qualification，结论为
+[`ALG-004 QUALIFIED`](docs/algorithm_results/ALG-004_CANDIDATE_A.md)。它仍不是 default
+controller，也不把 shaped intent 映射到电机或风扇；software envelope 不等于 real actuator
+safety，Balance Recovery 仍为 NOT VERIFIED，且没有任何硬件授权。
 
 Flight `ImuState` 还提供与 `relative_pitch_rad` 同软件正方向的
 `relative_pitch_rate_rad_s`。该值由同一 IMU 样本的姿态和 body-frame 三轴角速度派生；原始

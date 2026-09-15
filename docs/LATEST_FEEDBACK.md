@@ -5,20 +5,23 @@
 ## 当前状态
 
 - 日期：2026-09-15
-- 当前任务：`v0.5.0-009 — ALG-004 Candidate A Implementation`
+- 当前任务：`v0.5.0-009 — ALG-004 Candidate A`
 - task-start baseline：`origin/develop` / `1cfab2f22d82d1468ac3ad5fd37ad7b6380c9065`
+- fixed implementation SHA：`5e78f7986ae6450596abd511b3d8c6d10b8881e8`
 - 当前短期任务分支：`feature/algo-004-candidate-a`
-- 当前阶段：**ALG-004 Candidate A implementation / Remote Review Checkpoint**
+- 当前阶段：**ALG-004 Candidate A formal qualification / Remote Review Checkpoint**
 - 当前 stable release：**v0.4.0**；previous stable：v0.3.2
 - 下一版本研发目标：**v0.5.0 — Balance Recovery；未发布**
 - 继承软件资格：**ALG-001 QUALIFIED**；**ALG-002 QUALIFIED**；**ALG-003 QUALIFIED**
 - ALG-004 Task Spec：[`v1 / FROZEN`](algorithm_tasks/ALG-004.md)
 - ALG-004 Profile：[`v1 / FROZEN`](ALGORITHM_BENCHMARK.md#11-alg-004-profile-v1)
 - Fixture：`ALG004-FIXTURE-v1`
-- Candidate A：**IMPLEMENTED FOR REVIEW**
-- Implementation-stage software verification：**PASS**
-- Formal qualification：**NOT EXECUTED**
-- Candidate Result：**NOT CREATED**
+- Candidate A：**QUALIFIED**
+- Candidate Result：[`docs/algorithm_results/ALG-004_CANDIDATE_A.md`](algorithm_results/ALG-004_CANDIDATE_A.md)
+- Formal qualification：**PASS**
+- Level A：**PASS**；Level B：**PASS**；Level D：**PASS**
+- Level E：**NOT REQUIRED**
+- Level F：**NOT AUTHORIZED / NOT EXECUTED**
 - hardware access：**NO**
 - hardware authorization：**NONE**
 - hardware validation：**NOT AUTHORIZED / NOT EXECUTED**
@@ -37,17 +40,18 @@ history。
 `0.0`；shaped intent 未映射到电机或风扇。Flight API、Runtime、default controller、教学
 controller、硬件映射和现有安全机制未改变；未实现 actuator allocation 或 ALG-005+ 能力。
 
-本阶段测试是 fixed synthetic fixture、pure/fake/mock 路径的 implementation-stage 软件验证，
-不是正式 ALG-004 qualification、动态闭环仿真、真实执行器安全验证或 Balance Recovery
-验证。`0.10 intent unit` 与 `2.0 intent unit/s` 不是 CyberGear、PWM、fan thrust 或机器人
-实际安全 envelope。
+正式资格在固定 implementation SHA 上使用 `ALG004-FIXTURE-v1`、三个合法 dt variant、
+fail-close/reset/inheritance/Level B 测试、完整 Flight 回归和完整 Software CI 执行，全部 Hard
+Gate PASS；正式结果见 [ALG-004 Candidate A Result](algorithm_results/ALG-004_CANDIDATE_A.md)。
+这些仍是 pure/fake/mock/in-memory deterministic software evidence，不是动态闭环仿真、真实执行器
+安全验证或 Balance Recovery 验证；software clamp/slew 不是 CyberGear、PWM 或 fan thrust envelope。
 
 ## 下一步
 
-先完成当前 implementation checkpoint 的 Remote Review。Remote Review PASS 后，固定 exact
-implementation SHA，再作为独立工作阶段执行 Algorithm Benchmark v1 / ALG-004 Profile v1
-正式 qualification；只有该阶段完成后才允许生成
-`docs/algorithm_results/ALG-004_CANDIDATE_A.md`。当前不得宣布 `ALG-004 QUALIFIED`。
+先对当前 implementation、qualification evidence 与 Candidate Result 做 Remote Review。
+Remote Review PASS 后，才能由用户单独授权创建 PR；本任务不创建 PR、不 merge。下一推荐方向是
+另行设计 `v0.5.0-010 — ALG-005 Task Spec + Dynamic Benchmark Design`，不得在本任务直接实现
+ALG-005 Candidate，且下一工作单元必须另行设计和授权。
 
 ## 历史证据保留
 
