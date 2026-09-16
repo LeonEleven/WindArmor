@@ -1042,7 +1042,7 @@ final abstract process intent u
 phase = STABLE | DISTURBED | RECOVERING | SETTLING | TIMED_OUT
 episode_elapsed_sec
 stable_dwell_sec
-settling_elapsed_sec (或等价的 phase-entry elapsed observation)
+首次 SETTLING entry 与各次 phase-entry elapsed observation (或等价的 timer seam)
 timeout_latched
 ```
 
@@ -1109,12 +1109,15 @@ envelope、actuator capability 或 hardware safety envelope。
 7. 无 active episode 且未触发 disturbance 时保持 `STABLE`。guard band 输入不虚构 episode。
 
 observable timer 是接受当前 `dt` 后的累计值；phase event elapsed 使用该累计值，不使用
-推进前的 `t_k` 或 wall clock。settling elapsed 从每次 SETTLING entry 累计当前合法 `dt`，
-离开该 phase 时终止该 interval；final settling metric 使用最终 interval，不影响 episode timer。
+推进前的 `t_k` 或 wall clock。每次 SETTLING entry 的局部 interval 累计当前合法 `dt`，
+离开该 phase 时终止；最终局部 interval 只用于诊断。用于 `settling_completion_time` 的起点
+固定为 scoring recovery episode 的首次 SETTLING entry；此后直到最终 STABLE confirmation
+持续累计合法 `dt`，包括 setback 和中间 phase 的 update，不随再次进入 SETTLING 重置。
 
 stable dwell 离开更严格的 stable confirmation envelope 即清零；若仍在 settling envelope，
 phase 保持 SETTLING。离开 settling envelope 返回 RECOVERING。两种 setback 均不重置整个
-episode timer。单帧过零不能结束 episode。
+episode timer、首次 DISTURBED 的 recovery scoring origin 或首次 SETTLING 的 completion
+scoring origin。单帧过零不能结束 episode。
 
 ### 12.3 `ALG005-FIXTURE-v1` scripted process
 
@@ -1222,19 +1225,32 @@ recoverable 场景的 scoring interval 从 DISTURBED entry 到 run 结束；E04 
 
 ```text
 recovery_time = 从本场景首次 DISTURBED entry 到最终重新确认 STABLE 的累计合法 dt
-final_settling_time = 从最终一次进入 SETTLING 到该次 STABLE confirmation 的累计合法 dt
+settling_completion_time = 从 scoring recovery episode 首次 SETTLING entry 到最终重新确认 STABLE 的累计合法 dt
+final_settling_interval = 从最终一次 SETTLING entry 到最终 STABLE confirmation 的累计合法 dt
+settling_setback_count = scoring recovery episode 中实际 SETTLING -> RECOVERING phase transition 次数
 peak_abs_pitch = max(abs(theta_k))
 peak_abs_pitch_rate = max(abs(omega_k))
 final_steady_state_error = abs(mean(theta_k over final 0.500 s))
 abstract_control_effort = sum(abs(u_k) * dt)
 phase_timeline = 每次 phase 变化的 (synthetic elapsed time, phase)
+overshoot = 按下述首次零交叉后的镜像规则计算
+overshoot_ratio = overshoot / abs(theta_at_episode_start) (E01/E02/E03)
+effective_pitch_sign_reversal_count = 按下述 epsilon 去零带规则统计的有效 pitch 符号反转次数
 ```
 recovery_time 的求和包含首次 DISTURBED update 和确认 STABLE 的 update；
-final_settling_time 的求和包含最终 SETTLING entry update 和确认 STABLE 的 update。
-两者均按 interval 的 `sum(dt)` 记账，不用两个 after-update event timestamp 相减少计首帧。
+settling_completion_time 包含首次 SETTLING entry update、此后全部合法 update 和最终确认
+STABLE 的 update；final_settling_interval 包含最终 SETTLING entry update 和最终确认 STABLE
+的 update。三项时间均按 interval 的 `sum(dt)` 记账，只累计已接受正有限 `dt`，不使用
+wall clock，也不用两个 after-update event timestamp 相减少计首帧。
 本场景只有一次外部扰动；后续若再次触发 episode，scoring origin 仍固定为首次 DISTURBED，
-不得重启 recovery_time 来缩短评分。最终 confirmation 必须对应 run 末尾连续稳定窗口，
+settling completion origin 仍固定为首次 SETTLING，不得因 phase setback、新 SETTLING entry
+或新 episode 重启任一评分计时来缩短结果。若从未进入 SETTLING，两个 settling 时间记为
+未定义且 Settling Gate FAIL，不能填零冒充完成。settling_setback_count 只统计从首次 DISTURBED
+到最终 STABLE confirmation 的实际 phase transition；只重置 dwell 而保持 SETTLING 不增加计数。
+最终 confirmation 必须对应 run 末尾连续稳定窗口，
 不能挑选较早的 transient STABLE；final tail 的 phase 必须为 STABLE。
+final_settling_interval 与 settling_setback_count 仅为 comparative/diagnostic，不设独立数值
+Hard Gate 或任意回退次数上限，也不得仅凭局部 interval 更短将额外 setback 判为更优。
 
 E01/E02/E03 的 overshoot 从 episode start 后第一次 theta 零交叉计算。正初态：
 
@@ -1267,9 +1283,16 @@ oscillation 使用 `theta_sign_epsilon=0.005 rad`：先删除 scoring interval �
 
 **Settling Gate — 全部 recoverable scenario：**
 
-- 回到 STABLE 前必须有 SETTLING；完整 `0.300 s` dwell 前不得报告 STABLE；
-- transient SETTLING/setback 必须按 12.2 返回相应 phase，且不重置 episode timer；
-- `final_settling_time <= 0.800 s + abs_tol`，最终 SETTLING 必须连续进入 STABLE。
+- 这是过程语义 Hard Gate，不是局部 interval 的数值上限：最终 STABLE 前必须观察到 SETTLING；
+- SETTLING 判定须同时满足 `abs(theta)<=0.020 rad` 和 `abs(omega)<=0.100 rad/s`，边界 inclusive；
+- stable confirmation 须同时满足 `abs(theta)<=0.010 rad` 和 `abs(omega)<=0.050 rad/s`，边界 inclusive；
+- 完整连续 `0.300 s` 已接受正有限 `dt` 的 stable dwell 前不得报告 STABLE；
+- 离开 stable confirmation envelope 但仍在 settling envelope 时，dwell 清零、phase 保持 SETTLING；
+- 离开 settling envelope 时返回 RECOVERING、dwell 清零，不重置 episode timer、首次 DISTURBED
+  recovery origin 或首次 SETTLING completion origin；
+- 最终一次 SETTLING 必须连续进入最终 STABLE，且最终 `0.500 s` stable tail 仍须满足 Recovery Gate；
+- `settling_completion_time` 如实记录完整完成耗时，`final_settling_interval` 和
+  `settling_setback_count` 仅用于 comparative/diagnostic；不另设 settling 时间或回退次数数值上限。
 
 **Timeout Gate — E90P/N：**
 
@@ -1291,7 +1314,8 @@ effective_pitch_sign_reversal_count <= 2
 ```
 
 **Mirror / repeatability / finite Gate：** 每个 P/N pair 的初态、输入、逐帧 theta/omega/u、phase
-transition sample、recovery/settling/timeout time 和全部镜像不变量须在 `tol()` 内对应，phase
+transition sample、recovery_time、settling_completion_time、final_settling_interval、timeout time
+和全部镜像不变量须在 `tol()` 内对应，settling_setback_count、phase
 枚举和整数计数精确相同；每个完整 run 三次输出逐帧在 `tol()` 内相同；E00～E90 全部数值
 finite。任一单项 FAIL 即 `ALG-005 NOT QUALIFIED`。
 
@@ -1372,12 +1396,18 @@ synthetic plant 内的软件 recovery process 资格，不证明 real actuator s
 ### 12.11 Comparative metrics 与版本边界
 
 只有全部 Hard Qualification PASS 后，才按场景独立报告 `peak_abs_pitch`、
-`peak_abs_pitch_rate`、`recovery_time`、`final_settling_time`、overshoot/ratio、oscillation count、
-`final_steady_state_error`、`abstract_control_effort`、完整 phase timeline、最大镜像误差、三次
+`peak_abs_pitch_rate`、`recovery_time`、`settling_completion_time`、`final_settling_interval`、
+`settling_setback_count`、`overshoot`、`overshoot_ratio`、`effective_pitch_sign_reversal_count`、
+`final_steady_state_error`、`abstract_control_effort`、完整 `phase_timeline`、最大镜像误差、三次
 repeatability delta、implementation physical LOC（注明口径）与 configuration clarity。除 12.7
 明确指定的项目外，其余只用于同 Task/同 Profile candidate 的比较，不合成无依据总分。
+完整 settling 完成耗时须与 recovery_time、phase_timeline 和 setback count 一起解释；最终局部
+interval 可能因额外 setback 后重新进入 SETTLING 而缩短，不能作为独立“越小越好”的资格或排名依据。
 
 fixture、plant 常量、更新顺序、scenario、阈值、metric 公式或 Hard Gate 的实质修改必须升级
 `ALG-005 Profile` 版本；跨任务证据契约变化才升级整体 Benchmark Contract。Profile v1 冻结前
 的纯内存 sanity analysis 只验证数值有限、镜像和定义可实现，不是 Candidate Result，不得为
 使某个 Candidate 通过而反复调 benchmark。
+本轮 Profile v1 Remote Review 修复发生在 Candidate `NOT IMPLEMENTED`、正式结果与历史比较
+均未开始时：移除奖励晚进入 SETTLING 的局部时间 Hard Gate，明确固定 completion origin 与
+过程语义 gate；没有按 Candidate 输出调整 fixture、plant、继承参数或其它 Hard Gates。
