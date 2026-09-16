@@ -149,17 +149,41 @@ M2 包含 ALG-005 和 ALG-006。目标是从逐帧基础纠偏扩展为可描述
 M2 需要比静态输入—输出测试更强的时序场景、replay 或 dynamic benchmark。进入真实执行器
 验证仍须另行评审和授权。
 
+当前 M1 software qualification chain 已完成并集成；M2 已进入 ALG-005 规范阶段。
+[`ALG-005 Task Spec v1`](algorithm_tasks/ALG-005.md) 与
+[Algorithm Benchmark v1 / ALG-005 Profile v1](ALGORITHM_BENCHMARK.md#12-alg-005-profile-v1)
+已冻结设计，Candidate 尚未实现。
+
 ### ALG-005 — Recovery Process
 
-主要能力：表达和处理从稳定、受扰、恢复到重新稳定的完整过程，例如：
+主要能力：表达和处理从稳定、受扰、恢复到重新稳定或 timeout 的完整过程。Task-local
+observable phase 固定为 `STABLE`、`DISTURBED`、`RECOVERING`、`SETTLING`、`TIMED_OUT`；
+独立规范见 [ALG-005 Task Spec v1](algorithm_tasks/ALG-005.md)，固定资格设计见
+[Algorithm Benchmark v1 / ALG-005 Profile v1](ALGORITHM_BENCHMARK.md#12-alg-005-profile-v1)。
+`ALG005-FIXTURE-v1` 冻结 scripted process replay；`ALG005-SYNTHETIC-PLANT-v1` 冻结单轴
+normalized dynamic benchmark。
 
 ```text
 STABLE -> DISTURBED -> RECOVERING -> SETTLING -> STABLE
+                                      `-------> RECOVERING
+active episode ------------------------------> TIMED_OUT
 ```
 
-这是一组能力和可观察阶段，不要求第一版必须采用有限状态机。资格验证应覆盖扰动进入、
-恢复进展、settling、重新稳定、超时/无法恢复、reset 和输入失效等过程，并评估 overshoot、
-持续振荡与误判。ALG-005 不负责锁定多执行器分配方法或扩展到完整多轴控制。
+这是一组资格所需的过程语义，不强制 production Candidate 采用特定 FSM 代码结构。Profile
+冻结 inclusive disturbance/settling/stable thresholds、`0.300 s` stable dwell、`3.000 s`
+timeout，以及 recovery、settling、overshoot、oscillation Hard Gates；Level D 与 Level E 独立
+评分且互不抵消。Level E 是 deterministic normalized synthetic model，不是可信真实机器人模型、
+sim-to-real 或硬件证据。
+
+资格验证重点：
+
+- 扰动入口、恢复、settling setback、重新稳定和 timeout-latch 均可观察且计时确定；
+- reset、外部 fail-close、非法 `dt` 和 ALG-001～004 history 隔离语义明确；
+- recoverable dynamic scenario 在冻结时间、overshoot 和 oscillation gate 内完成；
+- unrecoverable fixture 在冻结窗口 timeout 并 fail-close。
+
+本任务不锁定多执行器分配、不实现 motor/fan mapping，也不扩展到完整多轴控制。当前仅冻结
+Task Spec/Profile/fixture/plant；ALG-005 Candidate A 为 `NOT IMPLEMENTED`。
 
 ### ALG-006 — Actuator Coordination / Control Allocation
 
@@ -319,15 +343,18 @@ release 前必须完成该版本所需的真实硬件验证；否则发布说明
 ## 11. 下一推荐任务
 
 ALG-001、ALG-002、ALG-003、ALG-004 Candidate A 均已完成各自固定 implementation commit 上的
-纯软件资格验证，当前快速研发轨的 M1 软件资格能力均已完成。该状态不表示 M1 已通过真实硬件
-验证，也不表示 Balance Recovery 已完成。
+纯软件资格验证，M1 software qualification chain 为 **COMPLETE / INTEGRATED**。ALG-005 Task
+Spec v1、Profile v1、`ALG005-FIXTURE-v1` 和 `ALG005-SYNTHETIC-PLANT-v1` 已在当前工作单元
+冻结设计；这不表示 ALG-005 Candidate、真实 actuator safety 或 Balance Recovery 已完成。
 
-当前 ALG-004 implementation、qualification evidence 与 Candidate Result 应先完成 Remote Review；
-review PASS 后仍需用户单独授权创建 PR。后续推荐方向是先设计 ALG-005 Recovery Process 的
-Task Spec 与 dynamic benchmark：
+当前规范资产必须先完成 Remote Review；review PASS 后仍需用户单独授权创建 PR，并在用户
+授权合入 `develop` 后，才可启动下一工作单元：
 
 ```text
-v0.5.0-010 — ALG-005 Task Spec + Dynamic Benchmark Design
+v0.5.0-011 — ALG-005 Candidate A Implementation
 ```
 
-本任务不启动 ALG-005 Candidate；下一工作单元必须另行设计、评审和授权，也不自动进入真实硬件测试。
+下一任务只实现 Candidate 和必要软件测试，不得把 implementation 与针对 fixed implementation
+SHA 的正式 qualification Result 混为同一步，也不自动进入 ALG-006、PR/merge 或真实硬件测试。
+未来 Candidate 仍须重新通过 ALG-001～004 inheritance、Level A/B/D/E Hard Gates，并在独立
+Result 中记录 exact SHA 的正式资格证据。
