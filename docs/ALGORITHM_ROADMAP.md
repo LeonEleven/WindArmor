@@ -126,8 +126,11 @@ deadband、filtering 或其他小扰动抑制方法都是候选，不在 roadmap
 增加软件输出幅值、slew、符号切换和历史重置约束，同时保留底层全部安全限制与最终否决权。
 独立规范见 [ALG-004 Task Spec v1](algorithm_tasks/ALG-004.md)，固定资格场景见
 [Algorithm Benchmark v1 / ALG-004 Profile v1](ALGORITHM_BENCHMARK.md#11-alg-004-profile-v1)。
-`ALG004-FIXTURE-v1` 只使用 synthetic requested intent；Candidate A 尚未实现。这里的
-`Actuator-safe Output` 是能力标签，软件 envelope 不等于真实 actuator safety。
+`ALG004-FIXTURE-v1` 只使用 synthetic requested intent。ALG-004 Candidate A 已针对固定
+implementation commit 完成 Level A/B/D 纯软件资格验证，结论为
+[`ALG-004 QUALIFIED`](algorithm_results/ALG-004_CANDIDATE_A.md)。这里的 `Actuator-safe Output`
+是能力标签；该结论不是 real actuator safety、dynamic recovery、hardware validation 或 real
+Balance Recovery。
 
 资格验证重点：
 
@@ -206,7 +209,7 @@ Fast Progression Track:
   ALG-001 PASS
   ALG-002 PASS
   ALG-003 PASS
-  ALG-004 IN PROGRESS
+  ALG-004 PASS
 
 Independent Learning / Validation Track:
   ALG-001 IN PROGRESS
@@ -315,12 +318,16 @@ release 前必须完成该版本所需的真实硬件验证；否则发布说明
 
 ## 11. 下一推荐任务
 
-ALG-001、ALG-002、ALG-003 Candidate A 均已完成各自固定 implementation commit 上的纯软件资格验证，结论分别为 `ALG-001 QUALIFIED`、`ALG-002 QUALIFIED`、`ALG-003 QUALIFIED`。当前工作单元只冻结 [ALG-004 Task Spec v1](algorithm_tasks/ALG-004.md) 和 [Algorithm Benchmark v1 / ALG-004 Profile v1](ALGORITHM_BENCHMARK.md#11-alg-004-profile-v1)；`ALG004-FIXTURE-v1` 已定义，ALG-004 Candidate 尚未实现。
+ALG-001、ALG-002、ALG-003、ALG-004 Candidate A 均已完成各自固定 implementation commit 上的
+纯软件资格验证，当前快速研发轨的 M1 软件资格能力均已完成。该状态不表示 M1 已通过真实硬件
+验证，也不表示 Balance Recovery 已完成。
 
-本 Spec/Profile 完成 remote review 并通过用户授权的 PR 合入 `develop` 后，下一推荐工作单元为：
+当前 ALG-004 implementation、qualification evidence 与 Candidate Result 应先完成 Remote Review；
+review PASS 后仍需用户单独授权创建 PR。后续推荐方向是先设计 ALG-005 Recovery Process 的
+Task Spec 与 dynamic benchmark：
 
 ```text
-v0.5.0-009 — ALG-004 Candidate A Implementation
+v0.5.0-010 — ALG-005 Task Spec + Dynamic Benchmark Design
 ```
 
-在本 Spec/Profile 的 remote review 和集成完成前不得启动 Candidate A。该后续任务仍是独立的软件实现与资格工作，不自动进入 dynamic simulation、actuator allocation 或任何真实硬件测试。
+本任务不启动 ALG-005 Candidate；下一工作单元必须另行设计、评审和授权，也不自动进入真实硬件测试。

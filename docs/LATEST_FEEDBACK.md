@@ -4,37 +4,63 @@
 
 ## 当前状态
 
-- 日期：2026-09-14
-- 当前任务：`v0.5.0-008 — ALG-004 Task Spec + Benchmark Profile v1`
-- task-start baseline：`origin/develop` / `fb8d8e916cd1cc82d782e2ed298e43d28af7e66b`
-- 当前短期任务分支：`docs/algo-004-spec-benchmark-v1`
-- 当前阶段：**ALG-004 Task Spec / Benchmark Profile freeze / remote review**
+- 日期：2026-09-15
+- 当前任务：`v0.5.0-009 — ALG-004 Candidate A`
+- task-start baseline：`origin/develop` / `1cfab2f22d82d1468ac3ad5fd37ad7b6380c9065`
+- fixed implementation SHA：`5e78f7986ae6450596abd511b3d8c6d10b8881e8`
+- 当前短期任务分支：`feature/algo-004-candidate-a`
+- 当前阶段：**ALG-004 Candidate A formal qualification / Remote Review Checkpoint**
 - 当前 stable release：**v0.4.0**；previous stable：v0.3.2
 - 下一版本研发目标：**v0.5.0 — Balance Recovery；未发布**
-- 继承软件资格：**ALG-001 Candidate A / ALG-001 QUALIFIED**；**ALG-002 Candidate A / ALG-002 QUALIFIED**；**ALG-003 Candidate A / ALG-003 QUALIFIED**
-- ALG-004 Task Spec：[`v1`](algorithm_tasks/ALG-004.md)
-- Benchmark：[`Algorithm Benchmark v1 / ALG-004 Profile v1`](ALGORITHM_BENCHMARK.md#11-alg-004-profile-v1)
+- 继承软件资格：**ALG-001 QUALIFIED**；**ALG-002 QUALIFIED**；**ALG-003 QUALIFIED**
+- ALG-004 Task Spec：[`v1 / FROZEN`](algorithm_tasks/ALG-004.md)
+- ALG-004 Profile：[`v1 / FROZEN`](ALGORITHM_BENCHMARK.md#11-alg-004-profile-v1)
 - Fixture：`ALG004-FIXTURE-v1`
-- ALG-004 Candidate：**NOT IMPLEMENTED**；无 Candidate Result 或 implementation commit
+- Candidate A：**QUALIFIED**
+- Candidate Result：[`docs/algorithm_results/ALG-004_CANDIDATE_A.md`](algorithm_results/ALG-004_CANDIDATE_A.md)
+- Formal qualification：**PASS**
+- Level A：**PASS**；Level B：**PASS**；Level D：**PASS**
+- Level E：**NOT REQUIRED**
+- Level F：**NOT AUTHORIZED / NOT EXECUTED**
 - hardware access：**NO**
 - hardware authorization：**NONE**
 - hardware validation：**NOT AUTHORIZED / NOT EXECUTED**
+- real actuator safety：**NOT VERIFIED / NOT CLAIMED**
 - real Balance Recovery：**NOT VERIFIED / NOT CLAIMED**
 
-## 已完成的稳定事实与边界
+## 已实现的稳定范围与边界
 
-- ALG-001 Candidate A 固定 implementation commit `fe575c9589013138d238e567e93dac2925384ab7`；[正式 Result](algorithm_results/ALG-001_CANDIDATE_A.md) 为 `ALG-001 QUALIFIED`。
-- ALG-002 Candidate A 固定 implementation commit `77e7b4f98e60602d3b224618225e11e9fecc8fe8`；[正式 Result](algorithm_results/ALG-002_CANDIDATE_A.md) 为 `ALG-002 QUALIFIED`。
-- ALG-003 Candidate A 固定 implementation commit `240cda9f1c2b73dad7ae70bf0c2c9205a76f0364`；[正式 Result](algorithm_results/ALG-003_CANDIDATE_A.md) 为 `ALG-003 QUALIFIED`。
-- Flight API 在 `develop` 提供与 `relative_pitch_rad` 同软件正方向的 `relative_pitch_rate_rad_s`；default controller、教学控制器、synthetic DRY_RUN 默认行为未改变。
-- 上述资格只是固定 synthetic fixture 的软件结论。Candidate A 的普通 `FlightCommand` 是当前完整 motor feedback position hold 与 fan-zero preview，不编码 abstract intent 或真实执行器方向；v0.5.0 尚未发布。
+ALG-004 Candidate A 复用 ALG-003 Candidate A 的固定两样本输入移动平均与 `Kp=1.0`、
+`Kd=0.1` 软件反馈语义，只在 inherited abstract intent 后增加 `0.10 intent unit` 幅值限制和
+`2.0 intent unit/s` 对称、按实际 `dt` 归一化的 slew limiter。reset、非法输入和
+controller-layer fail-close 会同时清除 ALG-003 输入/filter history 与 ALG-004 shaped-output
+history。
 
-## 当前任务目标与下一步
+普通 `FlightCommand` 仍只复制当前合法完整 motor feedback position hold，左右 fan 为
+`0.0`；shaped intent 未映射到电机或风扇。Flight API、Runtime、default controller、教学
+controller、硬件映射和现有安全机制未改变；未实现 actuator allocation 或 ALG-005+ 能力。
 
-本工作单元仅建立 [ALG-004 Task Spec v1](algorithm_tasks/ALG-004.md)、[ALG-004 Profile v1 / ALG004-FIXTURE-v1](ALGORITHM_BENCHMARK.md#11-alg-004-profile-v1)，冻结 synthetic abstract intent 的幅值、slew、directed transition、信号保留、符号切换、reset/fail-close 和 ALG-001/002/003 继承资格。`0.10 intent unit`、`2.0 intent unit/s` 不是机器人或执行器硬件安全 envelope。没有实现 ALG-004 Candidate，没有修改 Flight API/Runtime/default controller，没有 actuator allocation，也没有硬件访问。
+正式资格在固定 implementation SHA 上使用 `ALG004-FIXTURE-v1`、三个合法 dt variant、
+fail-close/reset/inheritance/Level B 测试、完整 Flight 回归和完整 Software CI 执行，全部 Hard
+Gate PASS；正式结果见 [ALG-004 Candidate A Result](algorithm_results/ALG-004_CANDIDATE_A.md)。
+这些仍是 pure/fake/mock/in-memory deterministic software evidence，不是动态闭环仿真、真实执行器
+安全验证或 Balance Recovery 验证；software clamp/slew 不是 CyberGear、PWM 或 fan thrust envelope。
 
-下一推荐工作单元是 `v0.5.0-009 — ALG-004 Candidate A Implementation`，但**必须等待本 Task Spec / Benchmark Profile 的 remote review 完成，并经用户单独授权 PR、PR 合入 `develop` 后才能启动**。真实 IMU characterization、可信动态验证、执行器映射和硬件测试均为独立工作单元，当前未获授权。
+## 下一步
+
+先对当前 implementation、qualification evidence 与 Candidate Result 做 Remote Review。
+Remote Review PASS 后，才能由用户单独授权创建 PR；本任务不创建 PR、不 merge。下一推荐方向是
+另行设计 `v0.5.0-010 — ALG-005 Task Spec + Dynamic Benchmark Design`，不得在本任务直接实现
+ALG-005 Candidate，且下一工作单元必须另行设计和授权。
 
 ## 历史证据保留
 
-v0.4.0 的 Gate B/C/D、PASS/FAIL/NOT VERIFIED、有效与无效 session、接线映射、release blocker、安全结论、证据等级及已知限制长期保存在 [硬件与功能验证记录](verification/v0.4.0/HARDWARE_VERIFICATION_RECORD.md)、[硬件验证历史执行计划](V0.4.0_HARDWARE_VERIFICATION_PLAN.md) 和 [发布说明](RELEASE_NOTES_v0.4.0.md)。本次文档任务不改变这些历史证据，也不授权新硬件操作。
+ALG-001 Candidate A 固定 implementation commit
+`fe575c9589013138d238e567e93dac2925384ab7`；ALG-002 Candidate A 固定 implementation commit
+`77e7b4f98e60602d3b224618225e11e9fecc8fe8`；ALG-003 Candidate A 固定 implementation commit
+`240cda9f1c2b73dad7ae70bf0c2c9205a76f0364`。相应正式 Result 保持不变。
+
+v0.4.0 的 Gate B/C/D、PASS/FAIL/NOT VERIFIED、接线映射、release blocker、安全结论和证据等级
+长期保存在 [硬件与功能验证记录](verification/v0.4.0/HARDWARE_VERIFICATION_RECORD.md)、
+[硬件验证历史执行计划](V0.4.0_HARDWARE_VERIFICATION_PLAN.md) 和
+[发布说明](RELEASE_NOTES_v0.4.0.md)。本任务不改变这些历史证据，也不授权新硬件操作。
