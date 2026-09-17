@@ -13,8 +13,9 @@
 3. **Candidate Result**：一次候选实现针对固定 Contract/Profile 的实际命令、环境和结果。
 
 本文件同时承载 `Algorithm Benchmark v1` 的全局 Contract，以及任务级
-`ALG-001 Profile v1`、`ALG-002 Profile v1`、`ALG-003 Profile v1` 和 `ALG-004 Profile v1`。它不包含任何 candidate
-result；Task Profile 的存在不表示对应 candidate 已 PASS。
+`ALG-001 Profile v1`、`ALG-002 Profile v1`、`ALG-003 Profile v1`、`ALG-004 Profile v1` 和
+`ALG-005 Profile v1`。它不包含任何 candidate result；Task Profile 的存在不表示对应 candidate
+已实现或已 PASS。
 
 ## 2. 版本规则
 
@@ -25,6 +26,7 @@ result；Task Profile 的存在不表示对应 candidate 已 PASS。
 | ALG-002 Task Benchmark Profile | `ALG-002 Profile v1` |
 | ALG-003 Task Benchmark Profile | `ALG-003 Profile v1` |
 | ALG-004 Task Benchmark Profile | `ALG-004 Profile v1` |
+| ALG-005 Task Benchmark Profile | `ALG-005 Profile v1` |
 
 在两个 candidate 已开始正式历史比较后，不得静默修改 fixture、scenario、阈值、容差或
 评分规则。实质变化必须升级对应版本：任务局部变化升级 Profile（例如 v1 → v2）；跨任务
@@ -1023,3 +1025,389 @@ D00C 沿完整 run 连续推进索引，跨 S01/S02/S03 segment 边界不重启�
 仅全部 Hard Qualification PASS 后，按场景和 dt variant 分别报告：`max_abs_output`；`max_observed_slew_rate=max(abs(y_i-y_(i-1))/dt_i)`（包含首帧）；steady attenuation ratio `abs(mean_tail)/abs(target)`；首次达到 target 50%/80% 的帧数和累计 synthetic elapsed time；S03 首次有效越零/相反符号时间与达到 opposite 50% 的时间；S04 TV、相对 `TV(target)` 的 reduction ratio `1-TV(candidate)/TV(target)`、有效 sign reversal count；最大 mirror symmetry error；三次 repeatability delta；implementation physical LOC（注明口径）；configuration clarity（参数、单位、范围、非法值拒绝、稳定序列化和是否中途调参）。未测项明确注明，不合成为未经依据的 100 分总分。
 
 `Actuator-safe Output` 只是 roadmap 标签。即使未来 `ALG-004 QUALIFIED`，也只证明固定 synthetic fixture 中 abstract intent 满足幅值、变化率、信号保留、符号切换与历史重置约束，较适合后续 actuator integration；不证明 `REAL ACTUATOR SAFE`、CyberGear/fan/PWM 安全、allocation/方向正确、真实执行器动态安全、机器人可恢复平衡或真实 Balance Recovery。当前 Candidate `NOT IMPLEMENTED`，无 Result，无硬件验证。
+
+## 12. ALG-005 Profile v1
+
+对应 [ALG-005 Task Spec v1](algorithm_tasks/ALG-005.md)。本 Profile 只新增 recovery process
+管理与 normalized single-axis synthetic closed-loop qualification，不修改全局
+`Algorithm Benchmark v1` 或历史 ALG-001～004 Profile/Result 的输入、阈值、容差和结论。
+ALG-005 Candidate 尚未实现；本节冻结设计，不预填 Candidate PASS。
+
+### 12.1 观测 seam、层级与执行约定
+
+Level A/D/E 通过无 ROS、无硬件的 task-local seam 观察：
+
+```text
+final abstract process intent u
+phase = STABLE | DISTURBED | RECOVERING | SETTLING | TIMED_OUT
+episode_elapsed_sec
+stable_dwell_sec
+首次 SETTLING entry 与各次 phase-entry elapsed observation (或等价的 timer seam)
+timeout_latched
+```
+
+名称和代码结构不是公开 Flight API；observable 值及本文关系是资格契约。Level A 评分单帧
+process 语义和最终 intent；Level D 用 `ALG005-FIXTURE-v1` 评分 deterministic scripted
+process replay；Level E 用 `ALG005-SYNTHETIC-PLANT-v1` 评分 deterministic normalized
+closed-loop trajectory。Level D 不是 dynamic simulation；Level E 不是 trusted physical robot
+model、actuator simulation、hardware replay、sim-to-real evidence 或硬件验证。
+
+Level B 独立观察现有 factory、`FlightState`、`FlightCommand` 和 validation。普通命令继续复制
+当前合法完整 motor feedback position hold，左右 fan 为 `0.0`；外部 fail-close 或内部
+TIMED_OUT 返回精确 `FlightCommand.safe_stop()`。不得从 motor/fan payload 反推 `u`。
+
+除 inheritance 指定的合法 variable `dt` 外，ALG005-FIXTURE-v1 和 Level E 使用固定
+`dt=0.020 s`。所有时间来自已接受正有限 `dt` 的累计，不读取 wall clock、ROS clock 或测试
+机器执行时间。fixture 不调用 runtime random generator。每个独立 run 使用相同固定配置，
+创建 fresh controller 或先显式 `reset()`；全部明确镜像 pair 和完整 run 分别重复三次。
+candidate 必须稳定序列化 inherited 与 process configuration；本 Profile 的 process thresholds、
+dwell、timeout、plant 和 U/S 不得按场景、dt 或运行结果调参。ALG-001/002 的 Kp/Kd 与
+ALG-003 输入鲁棒性不能作为 ALG-005 新能力重调或替代。
+
+### 12.2 阈值、容差与 phase 判定
+
+Profile v1 冻结以下 inclusive 比较：
+
+```text
+disturbance = abs(theta) >= 0.040 rad
+              OR abs(omega) >= 0.200 rad/s
+settling = abs(theta) <= 0.020 rad
+           AND abs(omega) <= 0.100 rad/s
+stable_confirmation = abs(theta) <= 0.010 rad
+                      AND abs(omega) <= 0.050 rad/s
+stable_dwell = 0.300 s continuous valid time
+T_timeout = 3.000 s valid episode time
+```
+
+这里 `theta` 对应 `relative_pitch_rad`，`omega` 对应
+`relative_pitch_rate_rad_s`。`>=`/`<=` 包含端点；测试值按二进制浮点计算，并只使用：
+
+```text
+abs_tol = 1e-9
+rel_tol = 1e-6
+tol(a,b) = 1e-9 + 1e-6 * max(abs(a), abs(b))
+```
+
+容差只处理软件浮点比较，不放宽 phase threshold 或整数计数。上述数字仅是 ALG-005 Profile
+v1 synthetic qualification envelope，不是安全倾角、最大可恢复角度/角速度、IMU noise
+envelope、actuator capability 或 hardware safety envelope。
+
+判定与 timer 记账按每次合法 update 冻结：
+
+1. state-validation 始终保持前置；已有 timeout latch 的 controller 路径保持
+   `TIMED_OUT`、`u=0.0`，后续输入不解除 latch、不累计 episode/dwell；
+2. 外部 validation/controller fault 按 12.8 fail-close，不进入普通 phase 计算；
+3. 无 active episode 且 disturbance 为真时创建 episode，该 update 可观察 `DISTURBED`；
+4. active episode 的每个合法 update（包括 DISTURBED update）把当前 `dt` 加入
+   `episode_elapsed_sec`；处于 stable confirmation envelope 时把当前 `dt` 加入连续
+   `stable_dwell_sec`，否则 dwell 精确清零；
+5. 若此前尚未确认 STABLE 且累计 episode time 达到 `T_timeout`，当前 update 进入并锁存
+   `TIMED_OUT`；只有在 `episode_elapsed_sec < T_timeout` 时完成 dwell 才可先回到 STABLE；
+6. 未 timeout 时，完整 dwell 进入 `STABLE` 并关闭 episode；否则当前在 settling envelope
+   则为 `SETTLING`，离开则为 `RECOVERING`；首次触发 update 保留可观察 DISTURBED，后续
+   update 才按 SETTLING/RECOVERING 显示；
+7. 无 active episode 且未触发 disturbance 时保持 `STABLE`。guard band 输入不虚构 episode。
+
+observable timer 是接受当前 `dt` 后的累计值；phase event elapsed 使用该累计值，不使用
+推进前的 `t_k` 或 wall clock。每次 SETTLING entry 的局部 interval 累计当前合法 `dt`，
+离开该 phase 时终止；最终局部 interval 只用于诊断。用于 `settling_completion_time` 的起点
+固定为 scoring recovery episode 的首次 SETTLING entry；此后直到最终 STABLE confirmation
+持续累计合法 `dt`，包括 setback 和中间 phase 的 update，不随再次进入 SETTLING 重置。
+
+stable dwell 离开更严格的 stable confirmation envelope 即清零；若仍在 settling envelope，
+phase 保持 SETTLING。离开 settling envelope 返回 RECOVERING。两种 setback 均不重置整个
+episode timer、首次 DISTURBED 的 recovery scoring origin 或首次 SETTLING 的 completion
+scoring origin。单帧过零不能结束 episode。
+
+### 12.3 `ALG005-FIXTURE-v1` scripted process
+
+Level D 每个 `× n` 段把同一 `(theta rad, omega rad/s)` 输入连续 `n` 个 update；P/N pair
+同时取反。fixture state 的其它字段使用当前纯内存合法完整值。Level D 直接评分 phase、timer、
+latch、输出和 history，不用 Level E 轨迹抵消失败。
+
+| Scenario | 冻结 scripted sequence / 注入 | 必须观察 |
+| --- | --- | --- |
+| `ALG005-D00` | `(0,0) × 30` | 全程 STABLE；无 episode/timeout；finite |
+| `ALG005-D01P/N` | `(0,0) × 15`; `(±0.040,0) × 1`; `(±0.050,±0.150) × 2` | 边界触发；STABLE → DISTURBED → RECOVERING |
+| `ALG005-D02P/N` | `(0,0) × 15`; `(±0.050,±0.200) × 1`; `(±0.050,±0.150) × 4`; `(±0.018,±0.080) × 4`; `(±0.009,±0.040) × 15` | DISTURBED → RECOVERING → SETTLING → STABLE；完整 0.300 s dwell |
+| `ALG005-D03P/N` | D02 前三段；`(±0.018,±0.080) × 5`; `(±0.009,±0.040) × 5`; `(±0.025,±0.120) × 5`; `(±0.018,±0.080) × 5`; `(±0.009,±0.040) × 15` | transient SETTLING；setback 回 RECOVERING；dwell 清零；episode timer 不重置；最终 STABLE |
+| `ALG005-D04P/N` | fresh `(±0.039,±0.199) × 1`；reset；`(0,±0.200) × 1`; `(±0.020,±0.100) × 1`; `(±0.010,±0.050) × 15` | guard band 不触发；rate 边界触发；settling/stable 边界均 inclusive |
+| `ALG005-D90P/N` | `(0,0) × 15`; `(±0.050,±0.200)` 持续至 150 个 active updates；再输入 `(0,0) × 5` | 正好累计 3.000 s 时 TIMED_OUT；`u=0.0`；稳定输入仍 latch |
+| `ALG005-R01` | 运行 D02 至 RECOVERING 且建立 ALG-001～005 history；`reset()`；`(0,0) × 3` | 所有 history/timer/latch 清除；与 fresh cold run 等价 |
+| `ALG005-R02` | 建立 D90 timeout latch；`reset()`；`(0,0) × 3` | latch 清除；与 fresh cold run 等价 |
+| `ALG005-F01` | 运行 D02 至 RECOVERING；注入 `required_inputs_fresh=false`；再恢复相同合法输入 | 精确 safe-stop；全 history 清除；下一合法输入 cold-start 等价 |
+| `ALG005-I01`–`I04` | active episode 中分别输入 `dt=0,-0.01,NaN,+Inf/-Inf` | 不错误累计 timer；精确 safe-stop；全 history 清除；layer 分类保持 |
+| `ALG005-O01` | D01/D02/D03/D04/D90 的 P/N pair 各三次；reset 后正序与反序执行 | phase/event sample 镜像；三次重复；无跨场景 history 污染 |
+
+D90 的“150 个 active updates”包含首次 DISTURBED update：`150*0.020=3.000 s`。第 149 个
+update 的 elapsed 为 `2.980 s`，不得提前 timeout；第 150 个 update 必须 TIMED_OUT。D02 的
+最后 15 帧连续 stable-confirmation 输入恰为 `0.300 s`；第 14 帧不得报告 STABLE，第 15 帧
+必须报告 STABLE。D03 首次 stable-confirmation 段只有 `0.100 s`，不能结束 episode。
+
+F01 是 task-local 代表场景；ALG-001～004 inheritance 和 12.8 仍须覆盖现有全部
+invalid/stale/unhealthy/motor/E-STOP variants。validation-layer reject 不调用 controller；harness
+reset 后检查 cold-start 等价，不能冒充 controller safe-stop。
+
+### 12.4 `ALG005-SYNTHETIC-PLANT-v1`
+
+Level E 只建模 normalized single-axis pitch surrogate，直接消费最终 abstract process intent：
+
+```text
+state:
+  theta [rad]
+  omega [rad/s]
+input:
+  u [intent unit]
+external disturbance:
+  a_ext [rad/s^2]
+dt = 0.020 s
+
+unstable_pitch_coefficient = 1.0 s^-2
+control_effectiveness = 6.0 rad/s^2 per intent unit
+linear_damping = 2.4 s^-1
+
+alpha_k = 1.0 * theta_k + 6.0 * u_k - 2.4 * omega_k + a_ext_k
+omega_(k+1) = omega_k + dt * alpha_k
+theta_(k+1) = theta_k + dt * omega_(k+1)
+```
+
+更新使用 semi-implicit Euler，顺序固定为：以当前 `theta_k/omega_k` 构造纯内存合法
+`FlightState`；调用 candidate/task-local seam 得到 `u_k` 和 observables；按场景确定
+`a_ext_k`；计算 `alpha_k`；先推进 omega、再用新 omega 推进 theta；最后把 synthetic time
+增加 `dt`。sample time `t_k=k*dt` 对应推进前状态；事件 elapsed 使用已完成 interval 的
+累计值。不得从 `FlightCommand` payload 反推 `u`。
+
+所有 ordinary output 继承 ALG-004 的 `abs(u)<=0.10 intent unit`、
+`abs(u_k-u_(k-1))<=2.0*dt` 和 directed
+transition gates；plant 不新增 actuator saturation、allocation 或 motor/fan/PWM model。所有
+状态、`alpha`、`u`、timer 和指标必须 finite。模型常量固定，不得按 Candidate 输出调参。
+
+ordinary directed-transition 的 reference 不得被 process manager 偷换：令当前 ALG-003
+inherited requested intent 为 `r_k`，`target_k=clamp(r_k,-0.10,+0.10)`，上一 ordinary final
+intent 为 `u_(k-1)`（cold/reset/fail-close 后为精确 0.0），最终 `u_k` 必须满足：
+
+```text
+min(u_(k-1), target_k) - tol(u_k, min(u_(k-1), target_k)) <= u_k
+u_k <= max(u_(k-1), target_k) + tol(u_k, max(u_(k-1), target_k))
+```
+
+process-dependent intent management 只能在此 inherited envelope 内工作，不能用新 process
+target 掩盖反向、远离或越过 inherited target。
+
+TIMED_OUT 是继承 fail-close 的非 ordinary-output 边界：task-local `u=0.0` 是明确的 stop
+sentinel，Level B 是无载荷 safe-stop，不把 stop sentinel 与前一 ordinary intent 的差值计作
+ordinary slew/directed-transition。timeout 前所有 ordinary output 和 reset 后首个 ordinary
+output 均完整受 ALG-004 gate 约束；不得借此为普通 process shaping 增加豁免。
+
+### 12.5 Level E scenario set
+
+P/N 场景对 `theta_0`、`omega_0`、冲量和 `a_ext` 同时取反；candidate reset 后独立运行。
+“运行 4.000 s”表示 200 个 plant steps；E04 的 0.500 s 预段为 25 steps，扰动后的 4.000 s
+另计。每个场景完整运行，不得达到某个 gate 后提前停止。
+
+| Scenario | 初态 / disturbance | 时长与目的 |
+| --- | --- | --- |
+| `ALG005-E00` | `theta_0=0`, `omega_0=0`, `a_ext=0` | `4.000 s` neutral hold；全程 STABLE、无 episode/timeout |
+| `ALG005-E01P/N` | `theta_0=±0.080`, `omega_0=0`, `a_ext=0` | `4.000 s` initial tilt |
+| `ALG005-E02P/N` | `theta_0=±0.050`, `omega_0=±0.200` 同号，`a_ext=0` | `4.000 s` diverging disturbance |
+| `ALG005-E03P/N` | `theta_0=±0.050`, `omega_0=∓0.200` 反号，`a_ext=0` | `4.000 s` initially recovering motion |
+| `ALG005-E04P/N` | 从 `(0,0)` 运行 `0.500 s`；第 25 step 后、下一 controller update 前施加 `Delta omega=±0.250`；之后 `a_ext=0` | 建立 STABLE 后再扰动；扰动后运行 `4.000 s` |
+| `ALG005-E90P/N` | `theta_0=±0.050`, `omega_0=0`；持续同号 `a_ext=±0.700` | `3.500 s` intentionally unrecoverable timeout fixture |
+
+E03 用于防止把正在自然朝零运动误判为新的发散趋势。E04 的 episode 和指标窗口从冲量后
+第一个 controller update 的 DISTURBED entry 开始，不能把预段已有的 STABLE 样本当成恢复。
+E90 不是最大真实扰动，只是 synthetic timeout fixture；不得误报 recovered。
+
+### 12.6 Level E metric definitions
+
+recoverable 场景的 scoring interval 从 DISTURBED entry 到 run 结束；E04 只使用冲量后的区间。
+定义：
+
+```text
+recovery_time = 从本场景首次 DISTURBED entry 到最终重新确认 STABLE 的累计合法 dt
+settling_completion_time = 从 scoring recovery episode 首次 SETTLING entry 到最终重新确认 STABLE 的累计合法 dt
+final_settling_interval = 从最终一次 SETTLING entry 到最终 STABLE confirmation 的累计合法 dt
+settling_setback_count = scoring recovery episode 中实际 SETTLING -> RECOVERING phase transition 次数
+peak_abs_pitch = max(abs(theta_k))
+peak_abs_pitch_rate = max(abs(omega_k))
+final_steady_state_error = abs(mean(theta_k over final 0.500 s))
+abstract_control_effort = sum(abs(u_k) * dt)
+phase_timeline = 每次 phase 变化的 (synthetic elapsed time, phase)
+overshoot = 按下述首次零交叉后的镜像规则计算
+overshoot_ratio = overshoot / abs(theta_at_episode_start) (E01/E02/E03)
+effective_pitch_sign_reversal_count = 按下述 epsilon 去零带规则统计的有效 pitch 符号反转次数
+```
+recovery_time 的求和包含首次 DISTURBED update 和确认 STABLE 的 update；
+settling_completion_time 包含首次 SETTLING entry update、此后全部合法 update 和最终确认
+STABLE 的 update；final_settling_interval 包含最终 SETTLING entry update 和最终确认 STABLE
+的 update。三项时间均按 interval 的 `sum(dt)` 记账，只累计已接受正有限 `dt`，不使用
+wall clock，也不用两个 after-update event timestamp 相减少计首帧。
+本场景只有一次外部扰动；后续若再次触发 episode，scoring origin 仍固定为首次 DISTURBED，
+settling completion origin 仍固定为首次 SETTLING，不得因 phase setback、新 SETTLING entry
+或新 episode 重启任一评分计时来缩短结果。若从未进入 SETTLING，两个 settling 时间记为
+未定义且 Settling Gate FAIL，不能填零冒充完成。settling_setback_count 只统计从首次 DISTURBED
+到最终 STABLE confirmation 的实际 phase transition；只重置 dwell 而保持 SETTLING 不增加计数。
+最终 confirmation 必须对应 run 末尾连续稳定窗口，
+不能挑选较早的 transient STABLE；final tail 的 phase 必须为 STABLE。
+final_settling_interval 与 settling_setback_count 仅为 comparative/diagnostic，不设独立数值
+Hard Gate 或任意回退次数上限，也不得仅凭局部 interval 更短将额外 setback 判为更优。
+
+E01/E02/E03 的 overshoot 从 episode start 后第一次 theta 零交叉计算。正初态：
+
+```text
+overshoot = max(0, -min(theta after first zero crossing))
+overshoot_ratio = overshoot / abs(theta_at_episode_start)
+```
+
+负初态镜像定义。若未零交叉但 Recovery Gate 通过，overshoot 和 ratio 均记 `0`。E04 由 rate
+impulse 建立扰动，不评分 ratio，但记录 peak tilt。
+
+oscillation 使用 `theta_sign_epsilon=0.005 rad`：先删除 scoring interval 内所有
+`abs(theta)<=epsilon` 的样本，再统计剩余相邻样本的符号变化；不足两样本为零，插入零附近
+样本不能隐藏反转。计数窗口延伸到完整 run 结束，以捕获重新报告 STABLE 后的再次振荡。
+
+重新确认 STABLE 后，run 的最终 `0.500 s` 必须连续保持 stable confirmation envelope；
+最终窗口内任何离开都使 Recovery Gate FAIL，不能选取较早的短暂稳定段。final tail 恰为最后 25 个
+`dt=0.020 s` samples。所有 metric 使用未舍入值，显示值可舍入但不能改变 gate 比较。
+
+### 12.7 Level E Hard Gates
+
+各 gate 互不抵消，并与 finite、mirror、repeatability、inheritance 独立成立。
+
+**Recovery Gate — E01/E02/E03/E04 全部 P/N：**
+
+- 必须创建 episode，并包含可观察 DISTURBED、RECOVERING、SETTLING；
+- 必须最终重新确认 STABLE，`recovery_time <= 2.500 s + abs_tol`；
+- 最终至少连续 `0.500 s` 保持 stable confirmation envelope；
+- 不得以 TIMED_OUT 或 reset 结束并计为 recovered。
+
+**Settling Gate — 全部 recoverable scenario：**
+
+- 这是过程语义 Hard Gate，不是局部 interval 的数值上限：最终 STABLE 前必须观察到 SETTLING；
+- SETTLING 判定须同时满足 `abs(theta)<=0.020 rad` 和 `abs(omega)<=0.100 rad/s`，边界 inclusive；
+- stable confirmation 须同时满足 `abs(theta)<=0.010 rad` 和 `abs(omega)<=0.050 rad/s`，边界 inclusive；
+- 完整连续 `0.300 s` 已接受正有限 `dt` 的 stable dwell 前不得报告 STABLE；
+- 离开 stable confirmation envelope 但仍在 settling envelope 时，dwell 清零、phase 保持 SETTLING；
+- 离开 settling envelope 时返回 RECOVERING、dwell 清零，不重置 episode timer、首次 DISTURBED
+  recovery origin 或首次 SETTLING completion origin；
+- 最终一次 SETTLING 必须连续进入最终 STABLE，且最终 `0.500 s` stable tail 仍须满足 Recovery Gate；
+- `settling_completion_time` 如实记录完整完成耗时，`final_settling_interval` 和
+  `settling_setback_count` 仅用于 comparative/diagnostic；不另设 settling 时间或回退次数数值上限。
+
+**Timeout Gate — E90P/N：**
+
+- 不得报告 recovered；首次 TIMED_OUT 的 episode elapsed 满足
+  `3.000 <= observed_timeout_time < 3.000 + 0.020 s`；
+- 进入 TIMED_OUT 后 `u` 精确为 `0.0`，Level B 精确 safe-stop；
+- phase/output latch 保持到显式 reset，普通合法输入不能恢复 ordinary control。
+
+**Overshoot Gate — E01/E02/E03 全部 P/N：**
+
+```text
+overshoot_ratio <= 0.50 + abs_tol
+```
+
+**Oscillation Gate — E01/E02/E03/E04 全部 P/N：**
+
+```text
+effective_pitch_sign_reversal_count <= 2
+```
+
+**Mirror / repeatability / finite Gate：** 每个 P/N pair 的初态、输入、逐帧 theta/omega/u、phase
+transition sample、recovery_time、settling_completion_time、final_settling_interval、timeout time
+和全部镜像不变量须在 `tol()` 内对应，settling_setback_count、phase
+枚举和整数计数精确相同；每个完整 run 三次输出逐帧在 `tol()` 内相同；E00～E90 全部数值
+finite。任一单项 FAIL 即 `ALG-005 NOT QUALIFIED`。
+
+### 12.8 Reset、外部 fail-close 与 timeout latch
+
+显式 `reset()` 必须原子清除 ALG-001～003 输入/filter history、ALG-004 shaped-output history、
+ALG-005 phase/history、episode/settling timer、stable dwell、timeout latch 和 task-local cache/counter；
+reset 后同一合法输入逐帧等价于 fresh controller cold start。reset 不修改 Runtime、authority、
+ownership、IMU zero、E-STOP、ERROR 或硬件状态。
+
+现有 state-validation reject 与 controller-layer fault 分类保持。controller-layer
+invalid/stale/unhealthy/`required_inputs_fresh=false`/非法 `dt` 必须精确 safe-stop，清除全部
+ALG-001～005 history，不输出旧 ordinary command/recovery intent；下一合法输入 cold-start
+等价。非法 update 不累计 timeout 或 dwell。validation-layer reject 后由 harness 显式 reset。
+
+内部 TIMED_OUT 不按上述 transient fault 自动清除；它保持 task-local latch，Level A/D/E
+`u=0.0`、Level B safe-stop，直到显式 reset。timeout 不修改 Runtime authority、E-STOP 或硬件。
+外部 fail-close 的全 history 清除适用于尚未锁存 TIMED_OUT 的路径；已有 timeout latch 后，
+外部 transient fault 仍返回 safe-stop、不能累计 timer 或复用 ordinary history，但不得顺便
+清除 timeout latch。validation reject 仍由前置 layer 拒绝；只有 harness 显式 reset 才清 latch。
+因此“下一合法输入 cold-start 等价”不能用来自动复活已 timeout 的 controller。
+
+### 12.9 ALG-001～004 inheritance 与 capability boundary
+
+未来 ALG-005 Candidate 必须在最终 process intent 上重新运行未修改的 ALG-001～004 fixtures、
+normal/fault/reset 场景、阈值、容差和关系；覆盖 attitude feedback、damping/motion trend、noise
+robustness、history、ALG-004 envelope/slew/directed transition、合法 variable `dt`、factory、
+Level B、symmetry、repeatability 和全部现有 fail-close。历史 PASS 不代替本轮 inheritance。
+ALG-004 requested-intent fixtures 必须通过同一最终 ordinary-output qualification path，使用
+无 active episode 的 process context 评分最终 `u`，而不是只评分 ALG-004 中间组件；不得用
+stub process manager 绕过最终输出。完整 FlightState/process sequence 还须独立检查 12.4 的
+current inherited target、最终输出 envelope、slew 和 directed-transition。qualification seam
+可以适配这些 task-local 输入，不增加公开 Flight API。
+
+历史 Profile 中仅因“ALG-005 属未来任务”而存在的 prohibition 在当前 inheritance 自然
+supersede，不回写历史 Task Spec/Profile/Result。仍禁止新 input filter、以 Kp/Kd 重调冒充
+process management、integral/anti-windup、绕过 ALG-004、ALG-006 actuator allocation、ALG-007 multi-axis 和 ALG-008
+full recovery；Flight API、Runtime、adapters、default/teaching controller、hardware manager、
+mapping、E-STOP、watchdog、lease 和 soft limits 均不得改变。
+
+### 12.10 Hard Qualification checklist 与结论
+
+| Level | ALG-005 v1 要求 | 结论边界 |
+| --- | --- | --- |
+| A | **HARD GATE** | final abstract intent、phase/timer/latch、reset 与 inheritance |
+| B | **HARD GATE** | factory、validation、完整 hold frame、fan-zero、safe-stop |
+| C | optional preview | 不能代替 A/B/D/E |
+| D | **HARD GATE** | `ALG005-FIXTURE-v1` scripted replay，非 dynamic simulation |
+| E | **HARD GATE** | `ALG005-SYNTHETIC-PLANT-v1` normalized dynamic benchmark，非真实机器人模型 |
+| F | **NOT AUTHORIZED / NOT EXECUTED** | 真实硬件另需独立授权 |
+
+正式 Candidate Result 必须逐项报告，Candidate 未实现时不得预填：
+
+- [ ] metadata、固定 configuration、implementation SHA、Profile、fixture、plant、环境和命令完整；
+- [ ] phase/threshold/inclusive-boundary 与 timer accounting：PASS；
+- [ ] Level D D00/D01/D02/D03/D04/D90、R01/R02、F01、I01–I04、O01：PASS；
+- [ ] Level E E00、E01P/N、E02P/N、E03P/N、E04P/N、E90P/N：PASS；
+- [ ] Recovery Gate：PASS；
+- [ ] Settling Gate：PASS；
+- [ ] Timeout Gate 与 latch：PASS；
+- [ ] Overshoot Gate：PASS；
+- [ ] Oscillation Gate：PASS；
+- [ ] finite、mirror symmetry 与三次 repeatability：PASS；
+- [ ] reset、外部 fail-close、history isolation：PASS；
+- [ ] ALG-001 inheritance：PASS；
+- [ ] ALG-002 inheritance：PASS；
+- [ ] ALG-003 inheritance：PASS；
+- [ ] ALG-004 inheritance：PASS；
+- [ ] factory/configuration 与 Level B：PASS；
+- [ ] Future-task boundary：PASS；
+- [ ] hardware access `NO`；hardware validation `NOT AUTHORIZED / NOT EXECUTED`。
+
+任一全局或本节 Hard Gate FAIL，Overall 必须为 `ALG-005 NOT QUALIFIED`；Level D/E 或比较
+指标不得互相抵消。全部 PASS 也只证明固定 implementation、Profile、fixture 和 normalized
+synthetic plant 内的软件 recovery process 资格，不证明 real actuator safety、allocation、真实
+机器人动力学、最大可恢复扰动、sim-to-real 等价或 real Balance Recovery。
+
+### 12.11 Comparative metrics 与版本边界
+
+只有全部 Hard Qualification PASS 后，才按场景独立报告 `peak_abs_pitch`、
+`peak_abs_pitch_rate`、`recovery_time`、`settling_completion_time`、`final_settling_interval`、
+`settling_setback_count`、`overshoot`、`overshoot_ratio`、`effective_pitch_sign_reversal_count`、
+`final_steady_state_error`、`abstract_control_effort`、完整 `phase_timeline`、最大镜像误差、三次
+repeatability delta、implementation physical LOC（注明口径）与 configuration clarity。除 12.7
+明确指定的项目外，其余只用于同 Task/同 Profile candidate 的比较，不合成无依据总分。
+完整 settling 完成耗时须与 recovery_time、phase_timeline 和 setback count 一起解释；最终局部
+interval 可能因额外 setback 后重新进入 SETTLING 而缩短，不能作为独立“越小越好”的资格或排名依据。
+
+fixture、plant 常量、更新顺序、scenario、阈值、metric 公式或 Hard Gate 的实质修改必须升级
+`ALG-005 Profile` 版本；跨任务证据契约变化才升级整体 Benchmark Contract。Profile v1 冻结前
+的纯内存 sanity analysis 只验证数值有限、镜像和定义可实现，不是 Candidate Result，不得为
+使某个 Candidate 通过而反复调 benchmark。
+本轮 Profile v1 Remote Review 修复发生在 Candidate `NOT IMPLEMENTED`、正式结果与历史比较
+均未开始时：移除奖励晚进入 SETTLING 的局部时间 Hard Gate，明确固定 completion origin 与
+过程语义 gate；没有按 Candidate 输出调整 fixture、plant、继承参数或其它 Hard Gates。
