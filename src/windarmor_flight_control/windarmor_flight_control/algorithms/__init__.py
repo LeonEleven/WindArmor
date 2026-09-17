@@ -4,6 +4,7 @@ from .alg001_candidate_a import Alg001CandidateAController
 from .alg002_candidate_a import Alg002CandidateAController
 from .alg003_candidate_a import Alg003CandidateAController
 from .alg004_candidate_a import Alg004CandidateAController
+from .alg005_candidate_a import Alg005CandidateAController
 from .bounded_verification_controller import BoundedVerificationController
 from .example_algorithm_controller import ExampleAlgorithmController
 from .example_controller import NeutralExampleController
@@ -13,6 +14,7 @@ __all__ = [
     "Alg002CandidateAController",
     "Alg003CandidateAController",
     "Alg004CandidateAController",
+    "Alg005CandidateAController",
     "BoundedVerificationController",
     "ExampleAlgorithmController",
     "NeutralExampleController",
