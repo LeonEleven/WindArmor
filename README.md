@@ -230,14 +230,16 @@ ros2 service call /fans/reset_e_stop std_srvs/srv/Trigger "{}"
    deterministic sequence 资格边界；
 6. [ALG-004 Task Spec](docs/algorithm_tasks/ALG-004.md)：abstract intent 输出幅值、slew、
    directed transition 和 fail-close 约束；
-7. [Algorithm Benchmark](docs/ALGORITHM_BENCHMARK.md)：版本化 qualification、场景、容差和
+7. [ALG-005 Task Spec](docs/algorithm_tasks/ALG-005.md)：单轴 recovery episode、phase、
+   stable dwell 与 timeout latch 的冻结 v1 契约；
+8. [Algorithm Benchmark](docs/ALGORITHM_BENCHMARK.md)：版本化 qualification、场景、容差和
    历史同级比较契约；
-8. [算法开发者指南](docs/ALGORITHM_DEVELOPER_GUIDE.md)：正式 API、安全边界、算法接入和
+9. [算法开发者指南](docs/ALGORITHM_DEVELOPER_GUIDE.md)：正式 API、安全边界、算法接入和
    评审规范；
-9. [Flight Control API](docs/FLIGHT_CONTROL_API.md)：消息、服务、参数和时序契约；
-10. [Flight Control Architecture](docs/FLIGHT_CONTROL_ARCHITECTURE.md)：控制权、
+10. [Flight Control API](docs/FLIGHT_CONTROL_API.md)：消息、服务、参数和时序契约；
+11. [Flight Control Architecture](docs/FLIGHT_CONTROL_ARCHITECTURE.md)：控制权、
    命令时效租约、generation、失效后安全闭锁与状态机设计；
-11. [硬件参考](docs/HARDWARE_REFERENCE.md)：轴、符号、限位、接线和机械边界。
+12. [硬件参考](docs/HARDWARE_REFERENCE.md)：轴、符号、限位、接线和机械边界。
 
 算法开发从 `develop` 的 `feature/algo-*` 短期分支开始，默认使用 synthetic/fake 路径，不应
 通过启动真实硬件节点来验证纯控制逻辑。
@@ -264,6 +266,16 @@ Benchmark v1 / ALG-004 Profile v1 的 Level A/B/D 纯软件 qualification，结�
 [`ALG-004 QUALIFIED`](docs/algorithm_results/ALG-004_CANDIDATE_A.md)。它仍不是 default
 controller，也不把 shaped intent 映射到电机或风扇；software envelope 不等于 real actuator
 safety，Balance Recovery 仍为 NOT VERIFIED，且没有任何硬件授权。
+
+ALG-005 Candidate A 已在固定 implementation SHA
+`4f7e86e7526486e107a451d4332ff33565ce1e42` 上完成 Level A/B/D/E 纯软件
+Formal Qualification：**PASS / [ALG-005 QUALIFIED](docs/algorithm_results/ALG-005_CANDIDATE_A.md)**，
+awaiting integration。它在继承 ALG-004 的 ordinary intent 上透明增加恢复过程观测、episode
+timer、连续 stable dwell 和 timeout latch；普通命令保持当前完整 motor feedback position、
+fan-zero，TIMED_OUT 使用精确 safe-stop。它不是 default controller，未实现 actuator allocation。
+Level E 是 synthetic normalized software dynamic benchmark；hardware validation 为
+**NOT AUTHORIZED / NOT EXECUTED**，real actuator safety 与 real Balance Recovery 均为
+**NOT VERIFIED**。
 
 Flight `ImuState` 还提供与 `relative_pitch_rad` 同软件正方向的
 `relative_pitch_rate_rad_s`。该值由同一 IMU 样本的姿态和 body-frame 三轴角速度派生；原始
@@ -319,6 +331,7 @@ python3 -m windarmor_flight_control.synthetic_dry_run
 | [ALG-002 Task Spec](docs/algorithm_tasks/ALG-002.md) | 运动趋势与阻尼的独立 v1 能力与安全边界 |
 | [ALG-003 Task Spec](docs/algorithm_tasks/ALG-003.md) | 输入噪声鲁棒性的独立 v1 能力与安全边界 |
 | [ALG-004 Task Spec](docs/algorithm_tasks/ALG-004.md) | 输出幅值、slew 与历史重置的独立 v1 能力与安全边界 |
+| [ALG-005 Task Spec](docs/algorithm_tasks/ALG-005.md) | 恢复过程、phase、dwell 与 timeout latch 的独立 v1 契约 |
 | [Algorithm Benchmark](docs/ALGORITHM_BENCHMARK.md) | 算法 qualification、版本化场景与历史同级比较契约 |
 | [算法开发者指南](docs/ALGORITHM_DEVELOPER_GUIDE.md) | 正式算法 API、安全和开发规范 |
 | [Flight Control API](docs/FLIGHT_CONTROL_API.md) | 稳定算法接口契约 |
