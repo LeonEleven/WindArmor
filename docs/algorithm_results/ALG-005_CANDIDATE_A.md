@@ -265,6 +265,65 @@ non-mapping 配置拒绝按实际 factory/config contract 检查，不把省略�
 所有 controller fail-close/timeout 均精确 `FlightCommand.safe_stop()`，无 actuator payload。
 actuator allocation：NOT IMPLEMENTED，abstract intent 不编码为 motor/fan direction。
 
+## Comparative implementation metrics
+
+按 [ALG-005 Profile v1 §12.11](../ALGORITHM_BENCHMARK.md#1211-comparative-metrics-与版本边界)
+补充以下 comparative metrics。Configuration clarity 的依据是本文已有固定 implementation
+SHA 的配置序列化、默认值和拒绝测试证据；本次文档补充没有重新执行或替换 Formal Qualification。
+
+| Metric | Result / method |
+| --- | --- |
+| Production physical LOC | 235 lines |
+| LOC method | 对下方 fixed implementation Git object 执行 `git show … \| wc -l`；仅 production ALG-005 module，包含 code、blank lines、comments、docstrings |
+| Cyclomatic complexity | NOT MEASURED；本次未安装工具或依赖 |
+| Configuration fields | 13 frozen fields |
+| Stable serialization | PASS；使用 Metadata 中原有稳定 JSON，值未改变 |
+| Frozen defaults | PASS；省略 configuration 时使用唯一冻结默认配置 |
+| Units / semantics documented | PASS；逐字段见下表 |
+| Invalid / unknown / non-frozen rejection | PASS；沿用已有正式配置验证证据 |
+| Scenario-specific tuning | NO |
+| dt-specific tuning | NO |
+| Post-result tuning | NO |
+| Configuration clarity | PASS |
+
+Physical LOC 精确测量命令与实际输出：
+
+```bash
+git show \
+  4f7e86e7526486e107a451d4332ff33565ce1e42:src/windarmor_flight_control/windarmor_flight_control/algorithms/alg005_candidate_a.py \
+  | wc -l
+# 实际输出：235
+```
+
+该 `wc -l` 口径与 ALG-004 Result 一致，仅计 fixed implementation SHA 的 ALG-005 production
+module；不计 benchmark helper、tests、inherited ALG-004 module、README 或 docs。
+Cyclomatic complexity: NOT MEASURED。上述指标不合成总分，不用于未定义的候选排名。
+
+| Configuration field | Frozen value | Unit | Semantics |
+| --- | ---: | --- | --- |
+| `kp_intent_per_rad` | 1.0 | intent unit / rad | inherited proportional feedback gain |
+| `kd_intent_per_rad_s` | 0.1 | intent unit / (rad/s) | inherited signed damping gain |
+| `window_size` | 2 | samples | inherited two-sample input moving average |
+| `max_abs_intent` | 0.10 | intent unit | inherited ordinary intent clamp magnitude U |
+| `max_slew_rate` | 2.0 | intent unit / s | inherited current-dt ordinary output slew limit S |
+| `disturbance_pitch_rad` | 0.040 | rad | inclusive absolute pitch disturbance threshold；与 rate guard 为 OR |
+| `disturbance_pitch_rate_rad_s` | 0.200 | rad/s | inclusive absolute pitch-rate disturbance threshold |
+| `settling_pitch_rad` | 0.020 | rad | inclusive absolute pitch settling threshold；与 rate guard 为 AND |
+| `settling_pitch_rate_rad_s` | 0.100 | rad/s | inclusive absolute pitch-rate settling threshold |
+| `stable_pitch_rad` | 0.010 | rad | inclusive absolute pitch stable-confirmation threshold；与 rate guard 为 AND |
+| `stable_pitch_rate_rad_s` | 0.050 | rad/s | inclusive absolute pitch-rate stable-confirmation threshold |
+| `stable_dwell_sec` | 0.300 | s | stable envelope 内连续有效 dt 的确认时长 |
+| `recovery_timeout_sec` | 3.000 | s | active episode 有效 dt timeout threshold；优先于同帧 dwell completion |
+
+Candidate v1 的 legal policy 是 13 个字段仅接受各自 frozen exact value，`window_size` 须为
+integer 2；这不是开放 numeric range 或调参接口。字段值 bool、string、None、NaN/±Inf、
+non-frozen value，以及 unknown key、non-mapping configuration 均拒绝；省略 configuration
+合法并选择 frozen defaults，不将省略配置与非法字段值 None 混淆。
+Benchmark / Formal Qualification 使用同一固定 configuration：NO scenario-specific tuning、
+NO dt-specific tuning、NO post-result tuning；本次补充没有改变原有 JSON 或任何配置值。
+**Configuration clarity: PASS**，依据为参数数量、稳定序列化、唯一默认值、明确单位/语义、
+frozen legal-value policy 与已有非法配置拒绝证据齐全。
+
 ## Future-task boundary
 
 ALG-006 allocation：NOT IMPLEMENTED；ALG-007 multi-axis：NOT IMPLEMENTED；
