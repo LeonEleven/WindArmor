@@ -149,10 +149,11 @@ M2 包含 ALG-005 和 ALG-006。目标是从逐帧基础纠偏扩展为可描述
 M2 需要比静态输入—输出测试更强的时序场景、replay 或 dynamic benchmark。进入真实执行器
 验证仍须另行评审和授权。
 
-当前 M1 software qualification chain 已完成并集成；M2 已进入 ALG-005 规范阶段。
-[`ALG-005 Task Spec v1`](algorithm_tasks/ALG-005.md) 与
-[Algorithm Benchmark v1 / ALG-005 Profile v1](ALGORITHM_BENCHMARK.md#12-alg-005-profile-v1)
-已冻结设计，Candidate 尚未实现。
+当前 M1 software qualification chain 已完成并集成；M2 的
+[ALG-005 Candidate A](algorithm_results/ALG-005_CANDIDATE_A.md) 已完成固定 implementation SHA 上的
+Formal Qualification：**PASS / ALG-005 QUALIFIED / awaiting integration**。
+[`ALG-005 Task Spec v1`](algorithm_tasks/ALG-005.md)、Profile v1、fixture/plant 保持冻结；
+该资格限于 Level A/B/D/E 纯软件证据，不证明真实 actuator safety 或 Balance Recovery。
 
 ### ALG-005 — Recovery Process
 
@@ -182,8 +183,9 @@ sim-to-real 或硬件证据。
 - recoverable dynamic scenario 在冻结时间、overshoot 和 oscillation gate 内完成；
 - unrecoverable fixture 在冻结窗口 timeout 并 fail-close。
 
-本任务不锁定多执行器分配、不实现 motor/fan mapping，也不扩展到完整多轴控制。当前仅冻结
-Task Spec/Profile/fixture/plant；ALG-005 Candidate A 为 `NOT IMPLEMENTED`。
+本任务不锁定多执行器分配、不实现 motor/fan mapping，也不扩展到完整多轴控制。
+ALG-005 Candidate A 为 **QUALIFIED / awaiting integration**；ALG-006 allocation 尚未实现，
+不得自动启动。
 
 ### ALG-006 — Actuator Coordination / Control Allocation
 
@@ -342,19 +344,12 @@ release 前必须完成该版本所需的真实硬件验证；否则发布说明
 
 ## 11. 下一推荐任务
 
-ALG-001、ALG-002、ALG-003、ALG-004 Candidate A 均已完成各自固定 implementation commit 上的
-纯软件资格验证，M1 software qualification chain 为 **COMPLETE / INTEGRATED**。ALG-005 Task
-Spec v1、Profile v1、`ALG005-FIXTURE-v1` 和 `ALG005-SYNTHETIC-PLANT-v1` 已在当前工作单元
-冻结设计；这不表示 ALG-005 Candidate、真实 actuator safety 或 Balance Recovery 已完成。
+ALG-001～004 Candidate A 的 M1 software qualification chain 为 **COMPLETE / INTEGRATED**。
+[ALG-005 Candidate A Result](algorithm_results/ALG-005_CANDIDATE_A.md) 已记录固定 implementation
+SHA 上重新执行的 Formal Qualification：**PASS / ALG-005 QUALIFIED / awaiting integration**。
+Task Spec v1、Profile v1、`ALG005-FIXTURE-v1` 和 `ALG005-SYNTHETIC-PLANT-v1` 未改变。
 
-当前规范资产必须先完成 Remote Review；review PASS 后仍需用户单独授权创建 PR，并在用户
-授权合入 `develop` 后，才可启动下一工作单元：
-
-```text
-v0.5.0-011 — ALG-005 Candidate A Implementation
-```
-
-下一任务只实现 Candidate 和必要软件测试，不得把 implementation 与针对 fixed implementation
-SHA 的正式 qualification Result 混为同一步，也不自动进入 ALG-006、PR/merge 或真实硬件测试。
-未来 Candidate 仍须重新通过 ALG-001～004 inheritance、Level A/B/D/E Hard Gates，并在独立
-Result 中记录 exact SHA 的正式资格证据。
+下一步先进行 **Candidate Result Remote Review**；review PASS 后，由用户单独授权创建 PR
+及后续 integration。本轮软件资格不等于真实 actuator safety 或真实 Balance Recovery 验证，
+不自动启动 ALG-006、PR/merge、release 或硬件测试。真实执行器分配与硬件验证仍需独立任务、
+评审和明确授权。

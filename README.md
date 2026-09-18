@@ -267,13 +267,15 @@ Benchmark v1 / ALG-004 Profile v1 的 Level A/B/D 纯软件 qualification，结�
 controller，也不把 shaped intent 映射到电机或风扇；software envelope 不等于 real actuator
 safety，Balance Recovery 仍为 NOT VERIFIED，且没有任何硬件授权。
 
-ALG-005 Candidate A 为 **IMPLEMENTED FOR REVIEW**，在继承 ALG-004 的 ordinary intent 上
-透明增加恢复过程观测、episode timer、连续 stable dwell 和 timeout latch。普通 Level B 命令
-保持当前完整 motor feedback position、fan-zero；TIMED_OUT 使用精确 safe-stop。
-它不是 default controller，未实现 actuator allocation。Level E 是 synthetic normalized
-software dynamic benchmark；本轮仅执行 implementation-stage software verification，
-结果为 **PASS**；Formal Qualification 为 **NOT EXECUTED**，Candidate Result 为 **NOT CREATED**。
-上述软件验证不是硬件证据，real actuator safety 与 real Balance Recovery 均为 **NOT VERIFIED**。
+ALG-005 Candidate A 已在固定 implementation SHA
+`4f7e86e7526486e107a451d4332ff33565ce1e42` 上完成 Level A/B/D/E 纯软件
+Formal Qualification：**PASS / [ALG-005 QUALIFIED](docs/algorithm_results/ALG-005_CANDIDATE_A.md)**，
+awaiting integration。它在继承 ALG-004 的 ordinary intent 上透明增加恢复过程观测、episode
+timer、连续 stable dwell 和 timeout latch；普通命令保持当前完整 motor feedback position、
+fan-zero，TIMED_OUT 使用精确 safe-stop。它不是 default controller，未实现 actuator allocation。
+Level E 是 synthetic normalized software dynamic benchmark；hardware validation 为
+**NOT AUTHORIZED / NOT EXECUTED**，real actuator safety 与 real Balance Recovery 均为
+**NOT VERIFIED**。
 
 Flight `ImuState` 还提供与 `relative_pitch_rad` 同软件正方向的
 `relative_pitch_rate_rad_s`。该值由同一 IMU 样本的姿态和 body-frame 三轴角速度派生；原始

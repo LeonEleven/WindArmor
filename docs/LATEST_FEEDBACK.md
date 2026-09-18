@@ -4,20 +4,21 @@
 
 ## 当前状态
 
-- 日期：2026-09-17
-- 当前任务：`v0.5.0-011 — ALG-005 Candidate A Implementation`
+- 日期：2026-09-18
+- 当前任务：`v0.5.0-012 — ALG-005 Candidate A Formal Qualification`
 - task branch：`feature/algo-005-candidate-a`
 - task-start baseline：`develop@9d54137e003b6c95bb8bfb2e4df43556faf14adc`
+- fixed implementation / formal qualification tree：`4f7e86e7526486e107a451d4332ff33565ce1e42`
+- implementation Remote Review：**PASS**
 - 当前 stable release：**v0.4.0**；previous stable：v0.3.2
 - 下一版本研发目标：**v0.5.0 — Balance Recovery；NOT RELEASED**
 - ALG-001～004：**QUALIFIED**；M1 software qualification chain：**COMPLETE / INTEGRATED**
 - ALG-005 Task Spec：[v1 / INTEGRATED](algorithm_tasks/ALG-005.md)
 - ALG-005 Profile：[v1 / INTEGRATED](ALGORITHM_BENCHMARK.md#12-alg-005-profile-v1)
 - `ALG005-FIXTURE-v1` / `ALG005-SYNTHETIC-PLANT-v1`：**INTEGRATED / UNCHANGED**
-- ALG-005 Candidate A：**IMPLEMENTED FOR REVIEW**
-- implementation-stage software verification：**PASS**
-- Formal Qualification：**NOT EXECUTED**
-- Candidate Result：**NOT CREATED**
+- ALG-005 Candidate A：**QUALIFIED / awaiting integration**
+- Formal Qualification：**PASS**
+- Candidate Result：[**CREATED**](algorithm_results/ALG-005_CANDIDATE_A.md)
 - hardware access：**NO**
 - hardware authorization：**NONE**
 - hardware validation / Level F：**NOT AUTHORIZED / NOT EXECUTED**
@@ -50,66 +51,60 @@ Factory 保持 `windarmor_flight_control.algorithms.alg005_candidate_a:create_co
 Candidate 不是 default controller，不实现 allocation，不改变 Flight API、Runtime、authority、
 ownership、adapters、hardware mapping、E-STOP、watchdog、lease 或 soft limits。
 
-## 冻结测试与软件证据
+## 本轮正式资格证据
 
-[Benchmark helper](../src/windarmor_flight_control/test/alg005_benchmark.py) 编码冻结 Level D
-D00/D01/D02/D03/D04/D90 scripted sequences；[Candidate tests](../src/windarmor_flight_control/test/test_alg005_candidate_a.py)
-覆盖 R01/R02、F01、I01–I04、O01、全部历史 external-fault variants、timeout 加 transient fault、
-validation reject、reset 和合法 variable dt。D02 检查第 14/15 stable-confirmation 帧，D90 检查
-第 149/150 active update。独立 interval-list oracle 检查每帧 phase、elapsed、dwell 和 entry。
-ALG-001～004 inheritance 在最终 process intent 上重新执行；ALG-004 requested-intent adapter
-只替换 inherited request source，真实 production shaper 和最终 process manager 都执行，
-process context 为无 active episode 的 `(0,0)`，没有 stub process manager。
+全部正式命令在上述 exact implementation SHA 和干净工作区重新执行；
+implementation-stage 旧日志未作为 Formal Qualification evidence。
+[Candidate Result](algorithm_results/ALG-005_CANDIDATE_A.md) 保留本轮 metadata、实际环境、
+13 字段稳定 JSON、命令、逐场景 metrics、gates、inheritance 与限制；本轮唯一原始证据目录为
+`/tmp/windarmor-alg005-formal.zmtwCg`，所有 logs/JUnit/metrics/reporting scripts 均未加入 Git。
 
-Level E 为 **synthetic normalized software dynamic benchmark**，严格使用冻结 semi-implicit
-Euler：`alpha=1.0*theta+6.0*u-2.4*omega+a_ext`，`dt=0.020 s`，先推进 omega 再推进 theta。
-E00/E01/E02/E03/E04/E90 均完整运行；E04 恰在第 25 pre-step 后施加 rate impulse。
-Metric 固定首次 DISTURBED/SETTLING origins，包含 entry 与 confirmation intervals，不因
-setback 或后续 episode 改选更晚 origin；final settling interval 和 setback count 仅为诊断。
-每帧同时检查 inherited target、envelope、slew、directed transition、合法 hold/safe-stop，
-并执行三次完整重复、逐帧镜像、finite 和 final 25-sample stable tail 检查。
+Formal targeted：**639 passed**；historical ALG-001～004 regression：
+**47 + 84 + 172 + 433 = 736 passed**。两项均 exit 0、0 errors/failures/skipped。
+ALG-005 inheritance 正式结论来自最终 process path 的新 Candidate 测试；
+历史 Candidate 自身回归仅作额外 regression，四项 ALG-001/002/003/004 inheritance 均 PASS。
+ALG-004 requested-intent fixture 只注入 inherited request source，production shaper 与真实
+ALG-005 manager 均执行，不 stub process path。
 
-本轮仅形成 implementation-stage software evidence，不是 Formal Qualification，不写
-`ALG-005 QUALIFIED`，不创建 `ALG-005_CANDIDATE_A.md`。
+Level A/B/D/E：**EXECUTED / PASS**。D00/D01/D02/D03/D04/D90 P/N、R01/R02、
+F01、I01–I04、O01 均 PASS。D02 第 14/15 stable-confirmation updates 为
+0.280 s / SETTLING 与 0.300 s / STABLE；D03 setback 清 dwell、保留 episode/first-settling
+origins，recovery/settling-completion/final-local 为 0.800/0.700/0.400 s，setback count=1；
+D90 第 149/150 active updates 为 2.980 s / NOT TIMED_OUT 与 3.000 s / TIMED_OUT，
+随后 neutral 输入仍 u=0、exact safe-stop、latch 保持。
 
-本轮最终 targeted 为 **639 passed**，ALG-001～005 Candidate regression 为 **1375 passed**；
-两者均 0 errors、0 failures、0 skipped。ALG-001/002/003/004 inheritance、factory、configuration
-serialization/validation、普通 hold 与 safe-stop command validation 全部 PASS。
-`scripts/check_ci_safety.py`、`scripts/check_git_whitespace.py`、`git diff --check` 均 PASS。
-仓库未发现独立 Markdown scanner；使用 local `/tmp` scanner 检查 README/本文件内部目标和
-heading fragments，48 targets、0 failures。source/test/helper 只读审查确认无 ROS graph、
-hardware backend、random 或 wall-clock scoring。
+Level E 全部 11 scenarios 各三轮 complete runs，Recovery/Settling/Timeout/Overshoot/
+Oscillation Gates 均 PASS。E01/E02/E03/E04 P/N recovery 分别为
+1.380/1.680/1.720/1.760 s，overshoot ratios（E01～03）分别为
+0.05897369503153988/0.09085088367664404/0.34910468559886176，effective pitch reversal
+counts 为 0/0/1/0；所有 recoverable scenarios 末 25 帧/0.500 s stable tail PASS。
+E00 无 episode、全程零值 STABLE；E90P/N NOT RECOVERED，在 3.000 s timeout 并 safe-stop。
+maximum mirror delta=0.0，maximum three-run repeatability delta=0.0，finite violation count=0。
+显示舍入不参与 gate；全部完整 metrics 与 phase timeline 见 Result。
 
-完整 `scripts/ci_software.sh`：**PASS / exit 0**。Python compile、五包 build/test 均 PASS；
-tooling 26、motor 431、fan 159、flight/interfaces 1733 passed。最终 `colcon test-result`：
-**2354 tests、0 errors、0 failures、0 skipped**。这些统计仅属于 implementation-stage 纯软件验证。
+factory、13 字段 frozen configuration serialization/rejection、non-default Candidate、
+当前完整 feedback hold/fan-zero、command validation、reset、external fail-close 和 timeout
+latch tests 均 PASS。stable-only exit 清 dwell、保持 SETTLING；timeout 优先于同帧 dwell completion。
+Flight API、Runtime、hardware mapping 和既有 safety mechanisms 均未改变。
 
-Level E 所有场景 implementation-stage gates PASS；镜像误差与三次重复 delta 为 0，全部
-数值 finite。下表 P/N 指标相同，时间单位秒；显示舍入不参与 gate 比较。
-
-| Scenario | recovery_time | settling_completion_time | final_settling_interval | setback count | overshoot ratio | effective pitch reversals |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| E00 | 未定义（无 episode） | 未定义 | 未定义 | 0 | 不评分 | 0 |
-| E01P/N | 1.380 | 0.480 | 0.480 | 0 | 0.058974 | 0 |
-| E02P/N | 1.680 | 0.480 | 0.480 | 0 | 0.090851 | 0 |
-| E03P/N | 1.720 | 1.400 | 1.400 | 0 | 0.349105 | 1 |
-| E04P/N | 1.760 | 0.540 | 0.540 | 0 | 不评分 | 0 |
-| E90P/N | 未恢复 | 未定义 | 未定义 | 0 | 不评分 | 0 |
-
-E00 全程 STABLE、无 episode/timeout；E90 在 3.000 s 精确 timeout、u=0.0、Level B safe-stop，
-后续合法输入保持 latch。D03 setback 场景的 recovery/settling-completion/final-local intervals
-分别为 0.800/0.700/0.400 s，setback count 为 1；完整首次起点评分未被局部时间缩短。
+完整 `scripts/ci_software.sh`：**PASS / exit 0**，fresh build/test 输出在上述目录的
+`ci-output`。tooling **26**、motor **431**、fan **159**、
+Flight/interfaces **1733 passed**；五包 build/test PASS，
+`colcon test-result` 为 **2354 tests、0 errors、0 failures、0 skipped**。
+固定树 safety checker、whitespace checker 与 diff check PASS。
+所有正式命令完成后、文档生成前，fixed SHA post-check 仍相同，working tree clean。
 
 ## 剩余边界与下一工作单元
 
-实现软件 PASS 仍不能证明真实机器人动力学、真实执行器方向、安全或真实 Balance Recovery。
-冻结 Task Spec/Profile 的 Candidate NOT IMPLEMENTED 是设计时 metadata，本轮不回写。
-硬件验证未执行，原因是无硬件授权；Level C optional preview 未执行，不属于本轮必需检查。
+**ALG-005 QUALIFIED** 仅指 fixed SHA + Profile v1 + fixture v1 + synthetic plant v1 的
+软件资格。Level E 不证明可信真实机器人动力学、sim-to-real、执行器效果/安全、
+最大可恢复真实扰动或真实 Balance Recovery。Level C optional preview 未执行，不属 Hard Gate；
+Level F/真实硬件未授权且未执行。冻结 Task Spec/Profile 的设计时 Candidate metadata 保持不变。
 
-下一步停在 Remote Review：review PASS 且 production/test 不需修改后，单独固定 exact
-implementation SHA，再启动独立 Formal Qualification；若 changes requested，则在同一任务
-分支修正、重新验证并创建新的普通 review commit。PR、merge、release 与硬件访问均不在本轮
-授权范围内，ALG-006 actuator allocation 尚未启动。
+下一步是 **Candidate Result Remote Review**；Result review PASS 后，由用户单独授权创建 PR。
+本轮停在 Result review checkpoint，不自动 PR/merge/integration/release；
+ALG-006 allocation、ALG-007 multi-axis、ALG-008 full disturbance recovery 均 NOT IMPLEMENTED，
+ALG-006 不自动启动。硬件访问须另行明确授权。
 
 ## 历史证据保留
 
