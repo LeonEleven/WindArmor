@@ -280,13 +280,17 @@ Level E 是 synthetic normalized software dynamic benchmark；hardware validatio
 **NOT VERIFIED**。
 
 ALG-006 Candidate A 已在当前开发工作单元实现 frozen single-axis normalized allocation seam，
-保持为 non-default Candidate。fixture authority 仅是 Level A/D 纯软件资格输入，不是
+保持为 non-default Candidate，并已在固定 implementation SHA
+`9a7a624713010eff48cf7112b0501266eb24521e` 上完成 Algorithm Benchmark v1 / ALG-006
+Profile v1 的 Level A/B/D 与 ALG-005 Level E inheritance 正式纯软件资格，结论为
+**PASS / [ALG-006 QUALIFIED](docs/algorithm_results/ALG-006_CANDIDATE_A.md) / NOT INTEGRATED**。
+fixture authority 仅是 Level A/D 纯软件资格输入，不是
 `FlightState` 字段、Candidate 配置或实测 motor/fan authority；普通 Controller task-local
 observation 固定使用 nominal `(1,1,1)`，只表示不增加 synthetic benchmark bottleneck，不表示
 物理 authority。由于尚无 normalized motor group 到 absolute rad target 的 projection contract，
 physical projection 为 **NOT IMPLEMENTED**；Level B 仍使用完整当前位置 hold 与 fan-zero，且
-不从运行状态推导 numerical authority。Formal Qualification 为 **NOT EXECUTED**，Candidate
-Result 为 **NOT CREATED**；hardware validation 为 **NOT AUTHORIZED / NOT EXECUTED**，real
+不从运行状态推导 numerical authority。Candidate 尚未创建 PR 或合入 `develop`；hardware
+validation 为 **NOT AUTHORIZED / NOT EXECUTED**，real
 actuator safety 与 real Balance Recovery 均为 **NOT VERIFIED**。runtime actuator availability /
 normalized authority source contract 仍为 **NOT DEFINED / NOT VERIFIED**。
 
