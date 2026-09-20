@@ -280,10 +280,13 @@ Level E 是 synthetic normalized software dynamic benchmark；hardware validatio
 **NOT VERIFIED**。
 
 ALG-006 Task Spec/Profile v1 冻结单轴 normalized actuator allocation 资格设计；当前 Candidate
-为 **NOT IMPLEMENTED**。fixture authority 只用于纯软件资格，不是实测 motor/fan authority。
-由于尚无 normalized motor group 到 absolute rad target 的 projection contract，Level B 继续
-使用完整当前位置 hold 与 fan-zero；这不表示 allocation 已物理执行。真实执行器方向、效果、
-安全和 Balance Recovery 均为 **NOT VERIFIED**，且没有任何硬件授权。
+为 **NOT IMPLEMENTED**。fixture authority 仅是 Level A/D 纯软件资格输入，不是 `FlightState`
+字段、Candidate 配置或实测 motor/fan authority；普通 Controller 路径固定的 nominal
+`(1,1,1)` 只表示不增加 synthetic bottleneck，不表示物理 authority。由于尚无 normalized motor
+group 到 absolute rad target 的 projection contract，Level B 继续使用完整当前位置 hold 与
+fan-zero，且不从运行状态推导 numerical authority；这不表示 allocation 已物理执行。runtime
+actuator availability / normalized authority source contract 为 **NOT DEFINED / NOT VERIFIED**。
+真实执行器方向、效果、安全和 Balance Recovery 均为 **NOT VERIFIED**，且没有任何硬件授权。
 
 Flight `ImuState` 还提供与 `relative_pitch_rad` 同软件正方向的
 `relative_pitch_rate_rad_s`。该值由同一 IMU 样本的姿态和 body-frame 三轴角速度派生；原始

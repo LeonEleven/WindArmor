@@ -37,8 +37,10 @@ ordinary allocator、保留 latch 并走精确 `FlightCommand.safe_stop()`。ext
 unhealthy/unknown/illegal-dt 同样在 ordinary allocation 前拒绝。out-of-contract ordinary `u`
 不允许 silent clamp。
 
-`ALG006-NORMALIZED-ALLOCATION-v1` 使用三个 dimensionless `[0,1]` synthetic authority：
-`motor_authority`、`left_fan_authority`、`right_fan_authority`。对合法 ordinary input：
+`ALG006-NORMALIZED-ALLOCATION-v1` 在 Level A/D qualification seam 使用三个 dimensionless
+`[0,1]` synthetic authority：`motor_authority`、`left_fan_authority`、
+`right_fan_authority`。它们不是 `FlightState` fields、Runtime hardware authority、Candidate
+configuration、measured capability 或 health-to-effectiveness mapping。对合法 ordinary input：
 
 ```text
 r = u / 0.10
@@ -51,6 +53,9 @@ residual = r - sign(r) * q
 状态冻结为 `NEUTRAL / ALLOCATED / SATURATED / INFEASIBLE / FAIL_CLOSED`。该模型只表达
 所有必需 normalized resources 共同可承载的 magnitude，不表示 motor/fan effectiveness 相同、
 可以互相等效替代，也不表示 torque、thrust、RPM、PWM 或真实 recovery capability。
+普通 Controller observation 固定使用 nominal `(1,1,1)`，仅表示不增加 synthetic benchmark
+bottleneck，不表示 100% physical authority、full torque/thrust、hardware margin 或 safety evidence，
+且不是可调配置。
 
 ALG-006 v1 不重新设计 ALG-005，不重调 gains，不新增 filter/output shaping；不处理 roll、
 multi-axis、axis coupling、combined saturation、axis priority 或 differential fan，这些属于
@@ -61,9 +66,10 @@ command fallback。
 
 - Level A：**HARD GATE**，直接评分 normalized allocation seam、status、residual 和
   timeout/fail-close disposition；
-- Level B：**HARD GATE**，评分 factory、state/command validation、完整 motor frame、fan frame
-  和 exact safe-stop；当前没有 normalized motor request → absolute rad projection contract，
-  ordinary payload 继续保持 ALG-005 的当前完整 motor position hold 与 fan-zero；
+- Level B：**HARD GATE**，评分 factory、现有 `FlightState`/`dt` 与 command validation、完整当前
+  motor hold、fan-zero、timeout/internal failure/existing faults 的 exact safe-stop、无 prior command
+  reuse 及 reset/history；不从运行状态计算 numerical authority，也不注入 D05。当前没有
+  normalized motor request → absolute rad projection contract；
 - Level C：optional preview only；
 - Level D：**HARD GATE**，`ALG006-D00`～`D12` 覆盖 neutral、正负/full request、motor/fan
   bottleneck、known-zero authority、reversal、zero crossing、invalid request/authority、ALG-005
@@ -88,6 +94,11 @@ direction、normalized motor request → position rad projection、fan RPM/thrus
 arm、left/right fan physical symmetry、motor/fan relative authority、actuator latency/rate/deadband/
 cross-coupling、safe actuator recovery envelope、maximum recoverable disturbance、real closed-loop
 Balance Recovery 和 sim-to-real equivalence。
+
+runtime actuator availability / normalized authority source contract 为 **NOT DEFINED / NOT
+VERIFIED**。未来若要根据 availability 降低 authority、进入 `INFEASIBLE`、degraded allocation
+或 actuator substitution，必须先独立冻结 source/semantics/validity/fail-close contract；Candidate A
+不得从现有 health/output/mapping 临时推导。
 
 ## ALG-005 integrated evidence 保留
 

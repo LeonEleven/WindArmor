@@ -194,14 +194,19 @@ recovery intent 转换为微电机 pitch group 与左右风扇之间一致、受
 allocation。独立规范见 [ALG-006 Task Spec v1](algorithm_tasks/ALG-006.md)，固定资格设计见
 [Algorithm Benchmark v1 / ALG-006 Profile v1](ALGORITHM_BENCHMARK.md#13-alg-006-profile-v1)。
 
-`ALG006-NORMALIZED-ALLOCATION-v1` 只使用 dimensionless synthetic authority，并选择 motor 与
-左右 fan 共同可承载的 normalized magnitude；左右 fan 保持对称，未分配部分显式保存为 signed
-residual。它不定义真实 actuator matrix、motor/fan physical effectiveness、normalized motor
-request 到 position rad 的 projection、fan thrust/PWM 或 differential allocation。
+`ALG006-NORMALIZED-ALLOCATION-v1` 只在 Level A/D qualification seam 使用 dimensionless
+synthetic authority，并选择 motor 与左右 fan 共同可承载的 normalized magnitude；左右 fan
+保持对称，未分配部分显式保存为 signed residual。authority 不是 `FlightState` field、Candidate
+configuration 或 measured capability。普通 Controller observation 固定使用 nominal `(1,1,1)`，
+仅表示不增加 synthetic bottleneck，不表示 physical authority。它不定义真实 actuator matrix、
+motor/fan physical effectiveness、normalized motor request 到 position rad 的 projection、fan
+thrust/PWM 或 differential allocation。
 
 Level A 直接评分 normalized seam；Level B 继续评分完整当前 motor hold、fan-zero、validation
-和 safe-stop，不从 payload 反推 allocation；Level D 冻结 D00～D12 scripted scenarios。v1 不
-新增缺乏 characterization 依据的 actuator dynamic plant，但未来 Candidate 必须原样重跑
+和 safe-stop，不从 payload 或运行状态推导 allocation/authority，也不注入 D05；Level D 冻结
+D00～D12 scripted scenarios。runtime actuator availability / normalized authority source contract
+保持 `NOT DEFINED / NOT VERIFIED`，未来 degraded/substitution 行为须先独立冻结 contract。v1
+不新增缺乏 characterization 依据的 actuator dynamic plant，但未来 Candidate 必须原样重跑
 ALG-005 Profile v1 Level E 作为 inheritance Hard Gate。roll/multi-axis、axis coupling、combined
 saturation、axis priority 和 differential fan 仍属于 ALG-007。
 
