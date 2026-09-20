@@ -151,7 +151,7 @@ M2 需要比静态输入—输出测试更强的时序场景、replay 或 dynami
 
 当前 M1 software qualification chain 已完成并集成；M2 的
 [ALG-005 Candidate A](algorithm_results/ALG-005_CANDIDATE_A.md) 已完成固定 implementation SHA 上的
-Formal Qualification：**PASS / ALG-005 QUALIFIED / awaiting integration**。
+Formal Qualification：**PASS / ALG-005 QUALIFIED / INTEGRATED**。
 [`ALG-005 Task Spec v1`](algorithm_tasks/ALG-005.md)、Profile v1、fixture/plant 保持冻结；
 该资格限于 Level A/B/D/E 纯软件证据，不证明真实 actuator safety 或 Balance Recovery。
 
@@ -184,20 +184,31 @@ sim-to-real 或硬件证据。
 - unrecoverable fixture 在冻结窗口 timeout 并 fail-close。
 
 本任务不锁定多执行器分配、不实现 motor/fan mapping，也不扩展到完整多轴控制。
-ALG-005 Candidate A 为 **QUALIFIED / awaiting integration**；ALG-006 allocation 尚未实现，
-不得自动启动。
+ALG-005 Candidate A 为 **QUALIFIED / INTEGRATED**。ALG-006 Task Spec/Profile v1 已进入冻结
+工作单元，但 Candidate allocation 仍为 `NOT IMPLEMENTED`。
 
 ### ALG-006 — Actuator Coordination / Control Allocation
 
-主要能力：把抽象恢复作用需求逐步转换为微电机与左右风扇之间一致、受限、可解释的协同
-命令。
+主要能力：保留 ALG-005 process outcome 的 timeout/fail-close 语义，把合法 ordinary final
+recovery intent 转换为微电机 pitch group 与左右风扇之间一致、受限、可解释的单轴 normalized
+allocation。独立规范见 [ALG-006 Task Spec v1](algorithm_tasks/ALG-006.md)，固定资格设计见
+[Algorithm Benchmark v1 / ALG-006 Profile v1](ALGORITHM_BENCHMARK.md#13-alg-006-profile-v1)。
 
-资格验证应覆盖执行器可用性组合、分配饱和、冲突需求、方向切换、control effort 以及任何
-必要状态未知/失效时的安全行为。分配不得绕过完整四电机帧、归一化风扇命令、控制权、
-底层软限位或安全停止契约。
+`ALG006-NORMALIZED-ALLOCATION-v1` 只在 Level A/D qualification seam 使用 dimensionless
+synthetic authority，并选择 motor 与左右 fan 共同可承载的 normalized magnitude；左右 fan
+保持对称，未分配部分显式保存为 signed residual。authority 不是 `FlightState` field、Candidate
+configuration 或 measured capability。普通 Controller observation 固定使用 nominal `(1,1,1)`，
+仅表示不增加 synthetic bottleneck，不表示 physical authority。它不定义真实 actuator matrix、
+motor/fan physical effectiveness、normalized motor request 到 position rad 的 projection、fan
+thrust/PWM 或 differential allocation。
 
-具体分配矩阵、优先级、优化目标和增益必须来自独立 Task Spec、模型或实验依据；在没有
-依据时不得写死。本任务不以单轴分配结果宣称已经具备多轴扰动恢复。
+Level A 直接评分 normalized seam；Level B 继续评分完整当前 motor hold、fan-zero、validation
+和 safe-stop，不从 payload 或运行状态推导 allocation/authority，也不注入 D05；Level D 冻结
+D00～D12 scripted scenarios。runtime actuator availability / normalized authority source contract
+保持 `NOT DEFINED / NOT VERIFIED`，未来 degraded/substitution 行为须先独立冻结 contract。v1
+不新增缺乏 characterization 依据的 actuator dynamic plant，但未来 Candidate 必须原样重跑
+ALG-005 Profile v1 Level E 作为 inheritance Hard Gate。roll/multi-axis、axis coupling、combined
+saturation、axis priority 和 differential fan 仍属于 ALG-007。
 
 ## 5. M3 — Full Balance Recovery
 
@@ -346,10 +357,11 @@ release 前必须完成该版本所需的真实硬件验证；否则发布说明
 
 ALG-001～004 Candidate A 的 M1 software qualification chain 为 **COMPLETE / INTEGRATED**。
 [ALG-005 Candidate A Result](algorithm_results/ALG-005_CANDIDATE_A.md) 已记录固定 implementation
-SHA 上重新执行的 Formal Qualification：**PASS / ALG-005 QUALIFIED / awaiting integration**。
+SHA 上重新执行的 Formal Qualification：**PASS / ALG-005 QUALIFIED / INTEGRATED**。
 Task Spec v1、Profile v1、`ALG005-FIXTURE-v1` 和 `ALG005-SYNTHETIC-PLANT-v1` 未改变。
 
-下一步先进行 **Candidate Result Remote Review**；review PASS 后，由用户单独授权创建 PR
-及后续 integration。本轮软件资格不等于真实 actuator safety 或真实 Balance Recovery 验证，
-不自动启动 ALG-006、PR/merge、release 或硬件测试。真实执行器分配与硬件验证仍需独立任务、
-评审和明确授权。
+当前推荐工作单元是冻结 [ALG-006 Task Spec v1](algorithm_tasks/ALG-006.md) 与
+[ALG-006 Profile v1](ALGORITHM_BENCHMARK.md#13-alg-006-profile-v1)。ALG-006 Candidate、Candidate
+Result、真实 actuator projection 和硬件验证均未实现/未执行；后续 Candidate implementation
+仍须独立任务与授权。本轮设计不等于 real actuator safety 或 real Balance Recovery 验证，
+不自动启动 PR/merge、release 或硬件测试。
