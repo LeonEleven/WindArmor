@@ -14,8 +14,8 @@
 
 本文件同时承载 `Algorithm Benchmark v1` 的全局 Contract，以及任务级
 `ALG-001 Profile v1`、`ALG-002 Profile v1`、`ALG-003 Profile v1`、`ALG-004 Profile v1` 和
-`ALG-005 Profile v1`。它不包含任何 candidate result；Task Profile 的存在不表示对应 candidate
-已实现或已 PASS。
+`ALG-005 Profile v1` 和 `ALG-006 Profile v1`。它不包含任何 candidate result；Task Profile 的
+存在不表示对应 candidate 已实现或已 PASS。
 
 ## 2. 版本规则
 
@@ -27,6 +27,7 @@
 | ALG-003 Task Benchmark Profile | `ALG-003 Profile v1` |
 | ALG-004 Task Benchmark Profile | `ALG-004 Profile v1` |
 | ALG-005 Task Benchmark Profile | `ALG-005 Profile v1` |
+| ALG-006 Task Benchmark Profile | `ALG-006 Profile v1` |
 
 在两个 candidate 已开始正式历史比较后，不得静默修改 fixture、scenario、阈值、容差或
 评分规则。实质变化必须升级对应版本：任务局部变化升级 Profile（例如 v1 → v2）；跨任务
@@ -1411,3 +1412,245 @@ fixture、plant 常量、更新顺序、scenario、阈值、metric 公式或 Har
 本轮 Profile v1 Remote Review 修复发生在 Candidate `NOT IMPLEMENTED`、正式结果与历史比较
 均未开始时：移除奖励晚进入 SETTLING 的局部时间 Hard Gate，明确固定 completion origin 与
 过程语义 gate；没有按 Candidate 输出调整 fixture、plant、继承参数或其它 Hard Gates。
+
+## 13. ALG-006 Profile v1
+
+对应 [ALG-006 Task Spec v1](algorithm_tasks/ALG-006.md)。本 Profile 只新增保留 ALG-005 process
+outcome 的 single-axis normalized allocation qualification，不修改全局 `Algorithm Benchmark v1`
+或 ALG-001～005 的 frozen Task Spec、Profile、fixture、plant、Result 和资格定义。ALG-006
+Candidate 为 `NOT IMPLEMENTED`；本节不创建 Candidate Result 或预填 PASS。
+
+### 13.1 观测 seam、输入 disposition 与层级
+
+Level A/D 使用无 ROS、无硬件的 task-local seam 观察：
+
+```text
+input:
+  ALG-005 process outcome {final_recovery_intent, phase, timeout_latched}
+  motor_authority
+  left_fan_authority
+  right_fan_authority
+
+output:
+  normalized_request
+  motor_pitch_group
+  left_fan
+  right_fan
+  residual
+  status = NEUTRAL | ALLOCATED | SATURATED | INFEASIBLE | FAIL_CLOSED
+  failure/stop disposition sufficient to preserve timeout vs other invalid input
+```
+
+字段名和实现类型不是公开 Flight API；observable 关系是 qualification contract。seam 必须在
+allocation 前区分 ordinary ALG-005 outcome、`TIMED_OUT` exact-zero sentinel、external
+fail-close/validation disposition，不能只接收一个来源不明的 float。
+
+Level B 独立观察现有 factory、`FlightState`、`FlightCommand` 和 validation。由于 v1 没有
+normalized motor group → absolute rad 的 projection contract，ordinary command 继续允许精确
+复制当前合法完整 motor feedback position hold，左右 fan 为 `0.0`。`TIMED_OUT`、allocation
+`FAIL_CLOSED`、external actuator availability `INFEASIBLE` 和现有 controller-layer faults 均返回
+精确 `FlightCommand.safe_stop()`。不得从 Level B payload 反推 Level A allocation。
+
+| Level | ALG-006 v1 要求 | 结论边界 |
+| --- | --- | --- |
+| A | **HARD GATE** | normalized allocation 数值、状态、input disposition 与 fail-close |
+| B | **HARD GATE** | factory、validation、完整 hold frame、fan-zero、safe-stop |
+| C | optional preview | 不替代 A/B/D/E，不证明 executable allocation |
+| D | **HARD GATE** | `ALG006-NORMALIZED-ALLOCATION-v1` scripted replay |
+| E | **inheritance HARD GATE** | 原样重跑 ALG-005 Profile v1 Level E；不新增 actuator plant |
+| F | **NOT AUTHORIZED / NOT EXECUTED** | 真实硬件另需独立授权 |
+
+### 13.2 Frozen normalized contract 与输入合法性
+
+ordinary ALG-005 final intent `u` 的单位是 inherited intent unit，合法范围固定为
+`[-0.10,+0.10]`。`0.10` 只来自 ALG-004 frozen abstract envelope，不是 actuator capability：
+
+```text
+r = u / 0.10
+r in [-1.0,+1.0], dimensionless
+```
+
+非 finite 或超出 inherited envelope 的 ordinary `u` 必须 `FAIL_CLOSED`，不得 clamp。ordinary
+exact `u==0.0` 才能进入 `NEUTRAL`。ALG-005 `TIMED_OUT` 的 exact `u==0.0` 必须旁路普通
+normalization，保留 latch 并进入 safe-stop disposition；不得判 `NEUTRAL`。
+
+fixture authority 全部为 dimensionless `[0,1]`：
+
+```text
+motor_authority
+left_fan_authority
+right_fan_authority
+```
+
+这些值是 synthetic qualification inputs，不是 measured authority、torque、thrust、PWM、RPM、
+actuator effectiveness 或 hardware limits。每项都必须是非 bool 的 finite number 且位于闭区间
+`[0,1]`；`None`、unknown、bool、string、NaN、Inf 或越界值均 `FAIL_CLOSED`。authority 是各
+scenario 明确提供的 fixture input，不是 Candidate 可按场景调节的 configuration。
+
+对合法 ordinary input：
+
+```text
+q = min(abs(r), motor_authority, left_fan_authority, right_fan_authority)
+motor_pitch_group = sign(r) * q
+left_fan = q
+right_fan = q
+residual = r - sign(r) * q
+```
+
+`sign(r)` 对非零值为 `+1/-1`；zero 使用独立 exact-neutral branch。每个合法 result 必须 finite，
+并满足 `motor_pitch_group in [-1,1]`、fan pair in `[0,1]`、`left_fan==right_fan` 和 signed residual
+关系。不得把 motor group 描述成 rad/torque，也不得把 fan 值描述成 thrust ratio 或可执行 PWM。
+
+状态冻结为：
+
+- exact `r==0`：`NEUTRAL`，motor/fans/residual 全部 exact zero；
+- `r!=0` 且 `q==abs(r)`：`ALLOCATED`；
+- `0<q<abs(r)`：`SATURATED`；
+- `r!=0`、authority 合法已知且 `q==0`：`INFEASIBLE`；
+- 任一 contract-invalid input 或 timeout/fail-close disposition：`FAIL_CLOSED`。
+
+`INFEASIBLE` 是合法已知 authority 下无法形成共同 allocation 的诊断结果；controller integration
+必须 safe-stop 且不得复用 prior command。`SATURATED` 是合法 ordinary allocation，保留明确
+residual，不因 saturation 本身 reset history。
+
+### 13.3 软件容差、优先级与 symmetry
+
+以下仅为 software floating-point tolerance，不是硬件 tolerance：
+
+```text
+abs_tol = 1e-9
+rel_tol = 1e-6
+tol(a,b) = 1e-9 + 1e-6 * max(abs(a), abs(b))
+```
+
+exact-zero sentinel/neutral、枚举、bool、scenario count 和 reset/reuse 判断不使用 tolerance。
+derived normalized 数值、镜像与重复性使用 `tol()`；预定义十进制 expected value 使用未舍入
+计算结果评分。
+
+v1 priority 固定为：上游 timeout/fail-close → input validity → authority bounds → left/right
+single-axis symmetry → maximize common executable normalized magnitude → preserve residual。不得
+引入 motor-first、fan-first、left/right-first 或 physical weighted matrix。交换左右 fan authority
+后 `q`、motor group、fan pair、residual 和 status 必须一致；不得利用较高一侧的剩余 authority
+生成 differential command。
+
+### 13.4 `ALG006-NORMALIZED-ALLOCATION-v1` scenario set
+
+除明确 sequence 外，每个场景 fresh/reset 后独立执行。P/N 表示 request 取反、authority 不变；
+预期 fan magnitude 相同，motor/residual 符号镜像。所有 scenario 至少完整重复三次。
+
+| Scenario | Frozen input | Frozen expected behavior |
+| --- | --- | --- |
+| `ALG006-D00` | ordinary `u=0.0`；authorities=`1,1,1` | `r=0`；all-zero；residual=0；`NEUTRAL` |
+| `ALG006-D01P/N` | ordinary `u=±0.025`；caps=`1,1,1` | `r=±0.25`；`q=0.25`；motor=`±0.25`；fans=`0.25,0.25`；residual=0；`ALLOCATED` |
+| `ALG006-D02P/N` | ordinary `u=±0.10`；caps=`1,1,1` | `r=±1`；exact bounded full allocation；residual=0；`ALLOCATED` |
+| `ALG006-D03P/N` | ordinary `u=±0.08`；caps=`0.6,1,1` | `r=±0.8`；`q=0.6`；motor=`±0.6`；fans=`0.6,0.6`；residual=`±0.2`；`SATURATED` |
+| `ALG006-D04L` | ordinary `u=+0.08`；caps=`1,0.4,0.9` | `q=0.4`；fans both `0.4`；residual `+0.4`；`SATURATED` |
+| `ALG006-D04R` | D04L fan caps exchanged: `1,0.9,0.4` | same common `q`, allocation, residual and status |
+| `ALG006-D05` | ordinary `u=+0.08`；任一已知 authority 为 `0`，其余合法 | all-zero allocation；signed residual `+0.8`；`INFEASIBLE`；Level B safe-stop；不复用 prior ordinary command |
+| `ALG006-D06` | sequence ordinary `u=+0.08 -> -0.08`；caps=`1,1,1` | motor `+0.8 -> -0.8`；fans `0.8 -> 0.8`；residual zero；无 hysteresis/stale reuse |
+| `ALG006-D07` | sequence ordinary `u=+0.025 -> 0 -> -0.025`；caps=`1,1,1` | exact neutral middle frame；末帧负镜像；无 prior allocation reuse |
+| `ALG006-D08` | ordinary `u=NaN,+Inf,-Inf`；并分别测试 `±0.10` 外的 finite 值 | 每个 variant `FAIL_CLOSED` / documented validation rejection；Level B safe-stop |
+| `ALG006-D09` | 每项 authority 分别为 `None/unknown/NaN/+Inf/-Inf/-0.1/1.1/bool` | 每个 variant `FAIL_CLOSED`；无 silent clamp 或 prior reuse |
+| `ALG006-D10` | ALG-005 `phase=TIMED_OUT`、`timeout_latched=true`、final intent exact `0.0` | bypass ordinary allocation；`FAIL_CLOSED` with timeout disposition；exact safe-stop；MUST NOT become `NEUTRAL`；latch preserved |
+| `ALG006-D11` | 建立 ordinary allocation；explicit reset；重放固定 D03P sequence | reset 后与 fresh identical replay 逐字段等价 |
+| `ALG006-D12` | 同一 reset + D00～D10 合法/故障 sequence 完整重复至少 3 次 | 对齐 output/status/disposition 完全可重复；无跨 run history |
+
+D05 的 zero authority 分别覆盖 motor、left fan 和 right fan；结果都不得使用其它 resource 的剩余
+authority 作 substitution。D08/D09 的 `FAIL_CLOSED` task-local output 可以使用固定 all-zero
+diagnostic payload，但 residual 不得被解释为已完成 allocation；qualification 必须同时评分
+status/disposition 和 Level B safe-stop，不能只看数值零。
+
+### 13.5 Sequence、reset 与 fail-close Hard Gates
+
+allocator v1 必须 stateless，不得新增 moving average、hysteresis、slew limiter 或 previous-command
+fallback。D06/D07 要求当前输出只由当前合法 input 决定。显式 reset 必须保留 ALG-001～005
+既有清理语义，并清除任何 ALG-006 observation/cache；D11/D12 必须证明 fresh-start equivalence。
+
+allocation `FAIL_CLOSED`、external controller-layer fault 或 external actuator availability
+`INFEASIBLE` 必须使 controller 返回 exact safe-stop，清除 ordinary task-local history，且不输出
+旧 allocation/command。已有 ALG-005 timeout latch 时，ALG-006 fault 不得清除 latch；只有
+explicit reset 可清除。validation-layer reject 仍由前置校验拒绝，并由 harness 显式 reset 后
+验证恢复，不能冒充 controller safe-stop。
+
+### 13.6 Level B、factory 与 projection blocker
+
+未来 Candidate 必须通过现有 `module.path:factory` loader，使用可稳定序列化的固定配置，并
+拒绝 unknown/invalid/non-frozen 配置。所有普通和 safe-stop commands 都必须通过
+`validate_flight_command()`。
+
+普通 Level B 不通过 actuator payload 执行或反推 task-local allocation：它精确复制当前合法完整
+`left_lift/left_pitch/right_pitch/right_lift` position feedback，fan commands 为 `0.0/0.0`。
+不同当前 motor baseline 不能复用旧 frame。`INFEASIBLE`、`FAIL_CLOSED`、TIMED_OUT 和现有
+fault paths 都必须 exact safe-stop、无 actuator payload。
+
+这是 v1 的明确 design boundary：当前没有 normalized motor allocation → absolute motor rad
+target 的证据或 projection contract。不得为让 payload 非零而选择任意 rad scale、`motor_signs`
+或 fan PWM；现有 physical mapping/soft limits 不构成 recovery direction/effectiveness evidence。
+若 executable projection 被列为 Candidate 必需条件，Candidate implementation 必须阻塞并先
+建立独立、可 review 的 projection contract，而不是修改本 Profile。
+
+### 13.7 ALG-001～005 inheritance 与 Level E 决策
+
+正式 qualification 必须在 ALG-006 Candidate 的最终 ordinary/fail-close integration path 上，
+重新运行未修改的 ALG-001、ALG-002、ALG-003、ALG-004 和 ALG-005 Profile v1；历史 Result
+不代替本轮 execution。必须覆盖 gains/方向、damping、filter/history、output envelope/slew/
+directed transition、process phases/timers/timeout latch、factory/Level B、合法 variable `dt`、
+reset、全部 fail-close、mirror 和 repeatability。
+
+ALG-005 Profile v1 Level A/B/D/E 都是 inheritance Hard Gates。Level E 必须原样使用
+`ALG005-SYNTHETIC-PLANT-v1` 和 frozen scenarios/metrics，不引入 allocation dynamics，也不从
+hold/fan-zero Level B payload 反推 normalized allocation。
+
+ALG-006 Profile v1 **不新增 task-specific Level E actuator dynamic plant**，因为当前没有经验证
+依据支持 motor gain/torque effectiveness、fan thrust gain、moment arm、actuator time constant、
+deadband、slew/effectiveness 或 motor/fan relative authority。现在发明这些参数会形成第二套
+未经验证的 synthetic physical model。ALG-005 Level E inheritance PASS 不能证明 ALG-006
+allocation 的真实动态效果。未来只有通过 `ALG-006 Profile v2` 或独立 Level F evidence 才能
+引入经依据支持的 actuator dynamics；不得静默改写 v1。
+
+### 13.8 Hard Qualification checklist
+
+- [ ] metadata、baseline/implementation SHA、固定配置、Profile、fixture、环境和命令完整；
+- [ ] ALG-005 outcome 与 timeout sentinel 的结构化来源语义：PASS；
+- [ ] ordinary normalization、bounds 和 out-of-envelope fail-close：PASS；
+- [ ] authority validity/bounds 与 synthetic-only labeling：PASS；
+- [ ] common-`q` algebra、output bounds、status 和 signed residual：PASS；
+- [ ] left/right symmetry、D04 mirror consistency、无 differential over-allocation：PASS；
+- [ ] D00～D12 全部 scenario/variant：PASS；
+- [ ] neutral、allocated、saturated、infeasible 和 fail-closed classification：PASS；
+- [ ] D06 reversal、D07 zero crossing：无 hysteresis/history reuse；
+- [ ] reset、external fail-close、timeout latch preservation 和 fresh-start equivalence：PASS；
+- [ ] finite、mirror 和至少三次 repeatability：PASS；
+- [ ] factory/configuration、Level B validation、current hold/fan-zero 与 exact safe-stop：PASS；
+- [ ] ALG-001 inheritance：PASS；
+- [ ] ALG-002 inheritance：PASS；
+- [ ] ALG-003 inheritance：PASS；
+- [ ] ALG-004 inheritance：PASS；
+- [ ] ALG-005 A/B/D/E inheritance：PASS；
+- [ ] no ALG-007 multi-axis/priority/coupling leakage：PASS；
+- [ ] no public API/Runtime/authority/hardware mapping/safety mechanism change：PASS；
+- [ ] hardware access `NO`；hardware validation `NOT AUTHORIZED / NOT EXECUTED`。
+
+任一全局、本节或 inheritance Hard Gate FAIL，Overall 必须为 `ALG-006 NOT QUALIFIED`；其它
+metrics 不得抵消。全部 PASS 也只证明 frozen normalized fixture 内的软件 allocation 资格，
+不证明 executable physical projection、actuator effectiveness/safety、真实动态恢复、最大可恢复
+扰动、sim-to-real 或 real Balance Recovery。
+
+### 13.9 Comparative metrics、evidence gaps 与版本边界
+
+只有全部 Hard Qualification PASS 后，才按场景报告：`r/q`、各 allocation、signed residual、
+allocated fraction `q/abs(r)`（nonzero request only）、bottleneck classification、status、最大
+mirror error、三次 repeatability delta、implementation physical LOC（注明口径）与 configuration
+clarity。不得合成无依据总分，也不得把更大的 synthetic authority 描述成更好的硬件。
+
+以下保持 `UNKNOWN / NOT VERIFIED`：real motor torque effectiveness、motor recovery direction、
+normalized motor request → rad projection、fan RPM/thrust/direction/moment arm、left/right fan
+physical symmetry、motor/fan relative authority、actuator latency/rate/deadband/cross-coupling、safe
+actuator recovery envelope、maximum recoverable disturbance、real closed-loop Balance Recovery 和
+sim-to-real equivalence。它们只能由未来 hardware characterization / Level F 或经评审的后续
+Profile 解决。
+
+fixture、scenario、公式、status、容差或 Hard Gate 的实质变化必须升级 `ALG-006 Profile`；
+不能为使 Candidate 通过而调整。当前 hardware access 为 `NO`，authorization 为 `NONE`，hardware
+validation 为 `NOT AUTHORIZED / NOT EXECUTED`，real actuator safety 和 real Balance Recovery
+均为 `NOT VERIFIED`。
