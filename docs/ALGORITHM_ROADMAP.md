@@ -184,8 +184,9 @@ sim-to-real 或硬件证据。
 - unrecoverable fixture 在冻结窗口 timeout 并 fail-close。
 
 本任务不锁定多执行器分配、不实现 motor/fan mapping，也不扩展到完整多轴控制。
-ALG-005 Candidate A 为 **QUALIFIED / INTEGRATED**。ALG-006 Task Spec/Profile v1 已进入冻结
-工作单元，但 Candidate allocation 仍为 `NOT IMPLEMENTED`。
+ALG-005 Candidate A 为 **QUALIFIED / INTEGRATED**。ALG-006 Candidate A 已在固定 implementation
+SHA `9a7a624713010eff48cf7112b0501266eb24521e` 上完成正式纯软件资格，结论为
+**PASS / [ALG-006 QUALIFIED](algorithm_results/ALG-006_CANDIDATE_A.md) / NOT INTEGRATED**。
 
 ### ALG-006 — Actuator Coordination / Control Allocation
 
@@ -206,8 +207,8 @@ Level A 直接评分 normalized seam；Level B 继续评分完整当前 motor ho
 和 safe-stop，不从 payload 或运行状态推导 allocation/authority，也不注入 D05；Level D 冻结
 D00～D12 scripted scenarios。runtime actuator availability / normalized authority source contract
 保持 `NOT DEFINED / NOT VERIFIED`，未来 degraded/substitution 行为须先独立冻结 contract。v1
-不新增缺乏 characterization 依据的 actuator dynamic plant，但未来 Candidate 必须原样重跑
-ALG-005 Profile v1 Level E 作为 inheritance Hard Gate。roll/multi-axis、axis coupling、combined
+不新增缺乏 characterization 依据的 actuator dynamic plant；Candidate A 已原样重跑
+ALG-005 Profile v1 Level E 并通过 inheritance Hard Gate。roll/multi-axis、axis coupling、combined
 saturation、axis priority 和 differential fan 仍属于 ALG-007。
 
 ## 5. M3 — Full Balance Recovery
@@ -360,8 +361,12 @@ ALG-001～004 Candidate A 的 M1 software qualification chain 为 **COMPLETE / I
 SHA 上重新执行的 Formal Qualification：**PASS / ALG-005 QUALIFIED / INTEGRATED**。
 Task Spec v1、Profile v1、`ALG005-FIXTURE-v1` 和 `ALG005-SYNTHETIC-PLANT-v1` 未改变。
 
-当前推荐工作单元是冻结 [ALG-006 Task Spec v1](algorithm_tasks/ALG-006.md) 与
-[ALG-006 Profile v1](ALGORITHM_BENCHMARK.md#13-alg-006-profile-v1)。ALG-006 Candidate、Candidate
-Result、真实 actuator projection 和硬件验证均未实现/未执行；后续 Candidate implementation
-仍须独立任务与授权。本轮设计不等于 real actuator safety 或 real Balance Recovery 验证，
-不自动启动 PR/merge、release 或硬件测试。
+[ALG-006 Candidate A Result](algorithm_results/ALG-006_CANDIDATE_A.md) 已记录固定 implementation
+SHA 上重新执行的 Formal Qualification：**PASS / ALG-006 QUALIFIED / NOT INTEGRATED**。
+Task Spec v1、Profile v1、`ALG006-NORMALIZED-ALLOCATION-v1` 和 inherited
+`ALG005-SYNTHETIC-PLANT-v1` 均未改变。
+
+下一步是对 ALG-006 Candidate Result 进行 remote review；创建 PR、合入 `develop`、分支清理、
+release 或硬件验证都需要各自授权。normalized motor allocation 到 absolute rad projection、
+runtime actuator availability 到 normalized authority contract、真实 motor/fan effectiveness 与
+安全恢复包线仍未定义或未验证；本轮资格不等于 real actuator safety 或 real Balance Recovery。
