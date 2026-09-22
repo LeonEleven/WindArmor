@@ -186,7 +186,7 @@ sim-to-real 或硬件证据。
 本任务不锁定多执行器分配、不实现 motor/fan mapping，也不扩展到完整多轴控制。
 ALG-005 Candidate A 为 **QUALIFIED / INTEGRATED**。ALG-006 Candidate A 已在固定 implementation
 SHA `9a7a624713010eff48cf7112b0501266eb24521e` 上完成正式纯软件资格，结论为
-**PASS / [ALG-006 QUALIFIED](algorithm_results/ALG-006_CANDIDATE_A.md) / NOT INTEGRATED**。
+**PASS / [ALG-006 QUALIFIED](algorithm_results/ALG-006_CANDIDATE_A.md) / INTEGRATED**。
 
 ### ALG-006 — Actuator Coordination / Control Allocation
 
@@ -220,6 +220,14 @@ M3 包含 ALG-007 和 ALG-008。目标是形成至少 pitch/roll 的多轴恢复
 
 主要能力：从主要单轴问题扩展到至少 pitch 和 roll，并处理轴间耦合、同时扰动、组合饱和
 以及不同方向上的恢复优先级。
+
+[ALG-007 Task Spec v1 design](algorithm_tasks/ALG-007.md) 与
+[planned benchmark design](ALGORITHM_BENCHMARK.md#14-alg-007-planned-profile-design-v1) 已形成
+design Remote Review checkpoint；状态为 **DESIGN / PLANNED**。Candidate 未实现，Profile
+尚未冻结，Candidate Result 未创建，Formal Qualification 未执行。当前公开状态虽有相对 roll
+角度，但没有统一的相对 roll rate；现有分配仅为单轴 normalized 软件抽象。因此多轴
+arbitration、synthetic coupling 的数值模型和动态阈值须在 Candidate 前 review 冻结，不能
+由硬件名称或 metadata 推断真实 pitch/roll authority。
 
 资格验证应使用覆盖单轴和组合扰动的统一场景集，防止一个轴改善时另一个轴明显恶化；同时
 保留 M1/M2 的输入有效性、噪声、输出约束、过程控制和失效后安全闭锁能力。本阶段不能仅凭
@@ -362,11 +370,13 @@ SHA 上重新执行的 Formal Qualification：**PASS / ALG-005 QUALIFIED / INTEG
 Task Spec v1、Profile v1、`ALG005-FIXTURE-v1` 和 `ALG005-SYNTHETIC-PLANT-v1` 未改变。
 
 [ALG-006 Candidate A Result](algorithm_results/ALG-006_CANDIDATE_A.md) 已记录固定 implementation
-SHA 上重新执行的 Formal Qualification：**PASS / ALG-006 QUALIFIED / NOT INTEGRATED**。
+SHA 上重新执行的 Formal Qualification：**PASS / ALG-006 QUALIFIED / INTEGRATED**。
 Task Spec v1、Profile v1、`ALG006-NORMALIZED-ALLOCATION-v1` 和 inherited
 `ALG005-SYNTHETIC-PLANT-v1` 均未改变。
 
-下一步是对 ALG-006 Candidate Result 进行 remote review；创建 PR、合入 `develop`、分支清理、
-release 或硬件验证都需要各自授权。normalized motor allocation 到 absolute rad projection、
-runtime actuator availability 到 normalized authority contract、真实 motor/fan effectiveness 与
-安全恢复包线仍未定义或未验证；本轮资格不等于 real actuator safety 或 real Balance Recovery。
+当前下一步是 ALG-007 Task Spec 与 planned benchmark 的 **design Remote Review**，并在
+Candidate 任务启动前解决其中的 review items。normalized motor allocation 到 absolute rad
+projection、runtime actuator availability 到 normalized authority contract、真实 motor/fan
+effectiveness 与安全恢复包线仍未定义或未验证；软件资格不等于 real actuator safety 或 real
+Balance Recovery。ALG-007 Candidate、Formal Qualification、PR、merge、release 和硬件验证
+均不属于本 design checkpoint。
