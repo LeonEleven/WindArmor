@@ -221,13 +221,15 @@ M3 包含 ALG-007 和 ALG-008。目标是形成至少 pitch/roll 的多轴恢复
 主要能力：从主要单轴问题扩展到至少 pitch 和 roll，并处理轴间耦合、同时扰动、组合饱和
 以及不同方向上的恢复优先级。
 
-[ALG-007 Task Spec v1 design](algorithm_tasks/ALG-007.md) 与
-[planned benchmark design](ALGORITHM_BENCHMARK.md#14-alg-007-planned-profile-design-v1) 已形成
-design Remote Review checkpoint；状态为 **DESIGN / PLANNED**。Candidate 未实现，Profile
-尚未冻结，Candidate Result 未创建，Formal Qualification 未执行。当前公开状态虽有相对 roll
-角度，但没有统一的相对 roll rate；现有分配仅为单轴 normalized 软件抽象。因此多轴
-arbitration、synthetic coupling 的数值模型和动态阈值须在 Candidate 前 review 冻结，不能
-由硬件名称或 metadata 推断真实 pitch/roll authority。
+[ALG-007 Task Spec](algorithm_tasks/ALG-007.md) 的前一设计已通过 review 并集成。
+[Benchmark §14](ALGORITHM_BENCHMARK.md#14-alg-007-planned-profile-design-v1) 现已冻结候选前的
+纯软件 vector arbitration、status/residual 优先级、synthetic coupling fixture 和联合 Level E
+数值门槛，状态为 **PRE-CANDIDATE CONTRACTS PARTIALLY FROZEN**，完整 Profile 仍
+**NOT FROZEN**。未来共享 `relative_roll_rate_rad_s` 的坐标/采样契约已定义，但字段尚未实现，
+近奇异点规则仍待独立前置任务；normalized 双轴请求到非零可执行 `FlightCommand` 的投影也
+`NOT DEFINED / NOT VERIFIED`。因此 Candidate **BLOCKED / NOT IMPLEMENTED**，Candidate
+Result 未创建，Formal Qualification 未执行。软件 caps、预算和耦合均不从硬件名称或 metadata
+推断真实 pitch/roll authority。
 
 资格验证应使用覆盖单轴和组合扰动的统一场景集，防止一个轴改善时另一个轴明显恶化；同时
 保留 M1/M2 的输入有效性、噪声、输出约束、过程控制和失效后安全闭锁能力。本阶段不能仅凭
@@ -374,9 +376,10 @@ SHA 上重新执行的 Formal Qualification：**PASS / ALG-006 QUALIFIED / INTEG
 Task Spec v1、Profile v1、`ALG006-NORMALIZED-ALLOCATION-v1` 和 inherited
 `ALG005-SYNTHETIC-PLANT-v1` 均未改变。
 
-当前下一步是 ALG-007 Task Spec 与 planned benchmark 的 **design Remote Review**，并在
-Candidate 任务启动前解决其中的 review items。normalized motor allocation 到 absolute rad
-projection、runtime actuator availability 到 normalized authority contract、真实 motor/fan
-effectiveness 与安全恢复包线仍未定义或未验证；软件资格不等于 real actuator safety 或 real
-Balance Recovery。ALG-007 Candidate、Formal Qualification、PR、merge、release 和硬件验证
-均不属于本 design checkpoint。
+当前下一工作单元优先处理 ALG-007 的共享 roll-rate API/runtime 前置任务：独立评审近欧拉
+奇异点规则、兼容迁移、同采样配对、有效性与纯软件验收测试。另需独立评审非零 executable
+`FlightCommand` projection；其绝对 motor rad/fan command 方向和能力缺少证据。
+runtime availability 到 numerical authority、真实 motor/fan effectiveness 与安全恢复包线
+仍未定义或未验证。软件 fixture 和既有资格不等于 real actuator safety 或 real Balance
+Recovery；后者仍 **NOT VERIFIED**。ALG-007 Candidate、Formal Qualification、PR、merge、
+release 和硬件验证均不属于本候选前文档工作单元。

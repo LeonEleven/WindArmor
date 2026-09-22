@@ -14,8 +14,9 @@
 
 本文件同时承载 `Algorithm Benchmark v1` 的全局 Contract，以及任务级
 `ALG-001 Profile v1`、`ALG-002 Profile v1`、`ALG-003 Profile v1`、`ALG-004 Profile v1` 和
-`ALG-005 Profile v1` 和 `ALG-006 Profile v1`。第 14 节另记录 ALG-007 **planned design**，
-尚非冻结 Profile。它不包含任何 candidate result；Task Profile 的
+`ALG-005 Profile v1` 和 `ALG-006 Profile v1`。第 14 节记录 ALG-007 **部分冻结的候选前
+软件契约**；共享 roll-rate API、非零可执行投影与完整 Profile 仍未冻结。它不包含任何 Candidate
+Result；Task Profile 的
 存在不表示对应 candidate 已实现或已 PASS。
 
 ## 2. 版本规则
@@ -29,7 +30,7 @@
 | ALG-004 Task Benchmark Profile | `ALG-004 Profile v1` |
 | ALG-005 Task Benchmark Profile | `ALG-005 Profile v1` |
 | ALG-006 Task Benchmark Profile | `ALG-006 Profile v1` |
-| ALG-007 Task Benchmark Profile | `PLANNED / NOT FROZEN`；design v1 见第 14 节 |
+| ALG-007 Task Benchmark Profile | `PRE-CANDIDATE CONTRACTS PARTIALLY FROZEN / full Profile NOT FROZEN`；见第 14 节 |
 
 在两个 candidate 已开始正式历史比较后，不得静默修改 fixture、scenario、阈值、容差或
 评分规则。实质变化必须升级对应版本：任务局部变化升级 Profile（例如 v1 → v2）；跨任务
@@ -1684,10 +1685,12 @@ validation 为 `NOT AUTHORIZED / NOT EXECUTED`，real actuator safety 和 real B
 
 ## 14. ALG-007 planned profile design v1
 
-对应 [ALG-007 Task Spec v1 design](algorithm_tasks/ALG-007.md)。本节状态为
-**DESIGN / PLANNED / NOT YET QUALIFIED**；不是冻结的 `ALG-007 Profile v1`，不含实现、运行
-结果或预填 PASS。`ALG001`～`ALG006` Profile、fixture 和历史 Result 保持原样。正式 Profile
-必须先解决 14.5 的 review items 并版本化；不得按未来 Candidate 的表现倒调门槛。
+对应 [ALG-007 Task Spec](algorithm_tasks/ALG-007.md)。PR #17 的 design review 已
+**PASS / INTEGRATED**；本节当前状态为 **PRE-CANDIDATE CONTRACTS PARTIALLY FROZEN /
+CANDIDATE BLOCKED / NOT YET QUALIFIED**。§14.2 的向量规则及 §14.3 的纯软件合成数值和评分
+规则已冻结；这仍不是完整 `ALG-007 Profile v1`，不含 Candidate、运行结果或预填 PASS。
+`ALG001`～`ALG006` Profile、fixture 和历史 Result 保持原样。完整 Profile 必须先解决 §14.5
+的前置依赖并版本化；不得按未来 Candidate 的表现倒调门槛。
 
 ### 14.1 观测 seam、层级和继承
 
@@ -1696,23 +1699,23 @@ validation 为 `NOT AUTHORIZED / NOT EXECUTED`，real actuator safety 和 real B
 每帧在同一次 update 记录 `(pitch_request,roll_request)`、
 `(pitch_served,roll_served)`、signed residual、status/disposition、phase/latch 和 Level B 完整
 command；不能分别运行两个单轴 controller 后拼接结果。task-local seam 仅为软件资格观测，
-不是公开 API 或可执行 mixer。Level A/D 评分抽象双轴行为；Level B 评分 factory、state/
+不是公开 API 或可执行 mixer。Level A/D/E 评分抽象双轴行为；Level B 评分 factory、state/
 command validation、当前完整 motor position hold、fan-zero 及 exact safe-stop；Level C 仅可
 作 preview。ALG-001～006 全部现有 Hard Gates 必须在未来 Candidate 最终路径 fresh 重跑，
 含 ALG-005 Level E；这项单轴 Level E 不替代新的多轴动态证据。Level F 未授权、未执行。
 
-### 14.2 `ALG007-SYNTHETIC-VECTOR-v1` 规划 fixture
+### 14.2 `ALG007-SYNTHETIC-VECTOR-v1` 冻结的软件向量契约
 
-以下是供 review 的 normalized software stress model，**不是** WindArmor 物理分配矩阵或
+以下是 candidate-independent 的 normalized software stress model，**不是** WindArmor 物理分配矩阵或
 motor/fan relative authority。每轴合法 request 与 synthetic axis cap 位于 `[-1,1]`、`[0,1]`，
 共享 budget `b` 位于 `[0,1]`。设计示例使用 `b=1`；它是竞争条件的归一化测试数字，
-不表示 100% 真实执行器能力。axis caps 与 `b` **严格只在 Level A/D task-local qualification
+不表示 100% 真实执行器能力。axis caps 与 `b` **严格只在 Level A/D/E task-local qualification
 fixture 中显式提供**；它们不是 `FlightState` public fields、runtime hardware authority、
 measured actuator capability 或 Candidate configuration。Candidate 不得由 motor/fan health、
 availability、`actuation_allowed`、hardware mapping、soft limits、PWM 或 `motor_signs` 推导
-数值 caps/`b`。若普通 Level B preview 需要 nominal software values，其来源和
-“不增加/按设计施加 synthetic qualification constraint”的语义须在 Candidate 前 review；
-不得解释为 physical authority，也不得从 Level B payload 反推。
+数值 caps/`b`。当前普通 Level B 只做完整 motor position hold / fan `0,0`；其
+nominal axis caps / combined budget 为 **NOT APPLICABLE**。未来非零可执行投影若改变
+Level B，须由独立评审契约重新定义软件数值来源；不得从 Level B payload 反推。
 
 axis caps 与 `b` 均必须是非 bool、finite 的已知数字，并严格处于闭区间 `[0,1]`。
 `None`、bool、NaN、`+Inf/-Inf`、负值或大于 `1` 是 invalid fixture input；验证边界不能
@@ -1721,31 +1724,38 @@ task-local fixture validation 拒绝必须记录 rejection layer，不能冒充 
 controller PASS；若传至 task-local seam，必须 `FAIL_CLOSED`。不得 silent clamp、把 unknown/
 invalid `b` 当作 `0` 或 `1`，也不得复用先前的 served vector/allocation。若故障进入
 controller layer，Level B 必须返回 exact `FlightCommand.safe_stop()`，清除 ordinary history，
-并保持已有 timeout latch。合法 served vector 的中立结构门槛拟为：
+并保持已有 timeout latch。两个 request 分量也必须是 known、非 bool、finite，严格在
+`[-1,1]`，不静默限幅。合法输入按以下**固定顺序**求值，精确零请求单独分支：
 
 ```text
-sign(served_i) = sign(request_i) or served_i = 0
-abs(served_i) <= min(abs(request_i), axis_cap_i)
-abs(served_pitch) + abs(served_roll) <= b
-residual_i = request_i - served_i
-all values finite; ordinary zero vector -> exact zero vector
+d_i = 0.0                                      if request_i == 0.0
+    = sign(request_i)*min(abs(request_i),cap_i)  otherwise
+demand = abs(d_pitch)+abs(d_roll)
+served_i = d_i                                 if demand <= b
+         = d_i*(b/demand)                      if demand > b (hence demand > 0)
+residual_i = request_i-served_i
 ```
 
-这些是联合预算与逐轴 cap 两层**软件**约束。仅有每轴分别在 `[-1,1]` 内不足以通过 combined
-saturation；非零 residual 不能静默丢弃，invalid/unknown cap 或 `b` 不能被当作 0 或 1。若
-`abs(r_p)+abs(r_r)` 在两个轴 cap 与共享 budget 内，拟要求完整服务；在竞争下，必须按预先
-冻结的 deterministic arbitration 决定分配，且不能绕过上述边界。尚未选择 pitch-first、
-roll-first、等比或 hardware-weighted policy；确切竞争期望和 status 分类 **TBD / review**。
-没有确切规则前不能开始 Formal Qualification。
+`b=0` 且 `demand>0` 自然产生 exact `(0,0)`；`demand=0` 不进入除法。所有结果 finite；
+`sign(served_i)=sign(request_i)` 或 served exact zero，逐轴不超过 request/cap，联合 L1
+不超过 `b`。运算只读当前合法帧，因而无状态、确定、轴交换对称、正负镜像、保 exact zero，
+不复用旧帧，也不依赖 Candidate 输出。没有 pitch-first、roll-first 或 hardware weighting。
+浮点派生值按 §14.1 的 `tol()` 比较；输入合法边界、exact zero、enum、场景数不使用容差。
 
 合法的已知 zero-capability 是诊断，不是 invalid input：某轴非零 request 且该轴 `cap=0`
 时，该轴 served 必须为 exact zero、signed residual 保留原 request；另一轴在不竞争的合法
 能力/预算内仍可服务。`b=0` 且联合 request 非零时，两轴 served 均为 exact zero、residual
 等于 request。两者均须可辨识为受影响轴或整个向量的 **INFEASIBLE 语义**，且不得复用旧
-served vector。ordinary zero request 才是 `NEUTRAL`；已知正能力不足可表现为
-`SATURATED`；invalid input 为 `FAIL_CLOSED`；继承的 `TIMED_OUT` 是独立 stop disposition。
-混合场景的全局 status enum 及竞争期 residual 精确评分仍为 pre-Candidate review item，
-不得因此合并上述不同语义。
+served vector。全局 status 沿用 ALG-006 vocabulary，按以下优先级冻结：故障/非法/未知
+先 `FAIL_CLOSED`；已锁存 `TIMED_OUT` 保持 `FAIL_CLOSED` status + `TIMEOUT` disposition，
+不作为普通零评分；合法 ordinary `(0,0)` 为 `NEUTRAL`；任一非零请求轴 `cap_i=0` 或非零
+请求且 `b=0` 为全局 `INFEASIBLE`；全请求分量均完整服务为 `ALLOCATED`；其余合法正能力
+不足为 `SATURATED`。混合零 cap 的另一轴仍按公式服务，全局 `INFEASIBLE` 不清零它。
+每轴 `(request,served,residual,cap_hit,zero_cap)` 可作 task-local 诊断，不是新公共 API。
+`disposition` 区分 `ORDINARY`、`TIMEOUT`、`INVALID_CONTRACT`、外部/内部 fail-close；
+status、逐轴诊断、disposition 与 signed residual 不能相互代替。非法 request 没有可信
+`request-served` 数值，不得伪造普通 residual；故障观测为 stop sentinel，不能当 ordinary zero。
+累计 residual/竞争时间仅为诊断或比较指标，不能抵消任何结构 Hard Gate FAIL。
 
 | 规划 ID | 同一帧输入或 sequence | 目的 / 中立期望 |
 | --- | --- | --- |
@@ -1765,31 +1775,124 @@ served vector。ordinary zero request 才是 `NEUTRAL`；已知正能力不足�
 | `ALG007-D12A` | `(0.40,0.30)`、caps `(0,1)`、`b=1`；再交换轴/cap | 零 cap 轴 nonzero request 的 served 为零、signed residual 保留；另一轴非竞争服务；受影响轴 INFEASIBLE，不复用旧 vector |
 | `ALG007-D12B` | `(0.40,0.30)`、caps `(1,1)`、`b=0` | 合法已知 combined zero-capability；served exact `(0,0)`、residual `(0.40,0.30)`；整个向量 INFEASIBLE，不复用旧 vector |
 
-ID、数值和结构关系是 **planned fixture design**，不是 Candidate 结果。若 review 决定调整
-这些内容，须在正式 Profile 冻结前记录；冻结后改动须升版。所有场景也要检查普通 Level B
-payload 经 `validate_flight_command()`，不能把 task-local served vector 反推为 motor rad 或 fan PWM。
+下表是上述公式对固定输入的直接代数结果；未带符号的行可独立翻转任一请求轴，服务量与
+residual 在该轴同样翻转，status 不变。`D03` 的四个象限取
+`(sigma_p*0.25,sigma_r*0.25)`，`sigma_p,sigma_r ∈ {-1,+1}`。轴交换必须同步交换 request
+与 cap；相应输出分量也交换。
 
-### 14.3 轴耦合与多轴动态 fixture 设计
+| 场景 / request；caps；b | served `(pitch,roll)` | signed residual `(pitch,roll)` | global status |
+| --- | --- | --- | --- |
+| D00 `(0,0);(1,1);1` | `(0,0)` exact | `(0,0)` exact | `NEUTRAL` |
+| D03 `(sigma_p*0.25,sigma_r*0.25);(1,1);1` | 同 request | `(0,0)` | `ALLOCATED` |
+| 不等幅无竞争 `(0.40,0.20);(1,1);1` | `(0.40,0.20)` | `(0,0)` | `ALLOCATED` |
+| D04 `(0.80,0.30);(1,1);1` | `(8/11,3/11)` | `(4/55,3/110)` | `SATURATED` |
+| D04 轴交换 `(0.30,0.80);(1,1);1` | `(3/11,8/11)` | `(3/110,4/55)` | `SATURATED` |
+| D05 `(0.80,0.80);(1,1);1` | `(0.50,0.50)` | `(0.30,0.30)` | `SATURATED` |
+| D06 `(0.80,0.30);(0.20,1);1` | `(0.20,0.30)` | `(0.60,0)` | `SATURATED` |
+| D12A `(0.40,0.30);(0,1);1` | `(0,0.30)` | `(0.40,0)` | `INFEASIBLE` |
+| D12B `(0.40,0.30);(1,1);0` | `(0,0)` exact | `(0.40,0.30)` | `INFEASIBLE` |
 
-另需 `ALG007-SYNTHETIC-COUPLING-v1`：以双轴软件状态、同步外部扰动及非对角耦合项形成
-software stress model，按固定 `dt` 逐帧更新两个轴，记录 peak、settling、overshoot、
-oscillation、residual 和竞争持续时间。至少有 pitch-only、roll-only、同号/反号同时扰动、
-不等幅扰动、耦合使另一轴偏离、一个轴饱和另一个仍可控、零扰动、故意不可恢复 timeout
-场景。扰动、初态、target、axis caps、combined budget 必须分别显式给出；同一 run 中禁止
-按输出调节模型。比较窗口从首次联合扰动开始，不能在一个轴改善后重启另一轴的计时。
+这些是冻结的软件 fixture 期望，不是 Candidate 结果。任何实质修改须在完整 Profile review
+时版本化；所有场景还须检查普通 Level B payload 经 `validate_flight_command()`，不能把
+task-local served vector 反推为 motor rad 或 fan PWM。
 
-耦合系数、roll rate/source、状态更新公式、样本数、horizon 及动态 Hard Gates 当前 **TBD**。
-既有 `ALG005-SYNTHETIC-PLANT-v1` 的 `dt=0.020 s`、4.000 s/3.500 s、0.300 s dwell、
-3.000 s timeout 和 `2.500 s` recovery gate 只属于原 pitch 单轴 fixture；可作为设计参照，
-不能无依据复制为 roll/双轴 PASS 阈值。新模型只可使用明示的无量纲/软件单位常量，必须
-注明不是 hardware characterization，不推导真实 maximum recoverable disturbance 或稳定性。
-没有新的多轴 Level E Hard Gate，就不能给 ALG-007 完整多轴 recovery `QUALIFIED` 结论。
+### 14.3 `ALG007-SYNTHETIC-COUPLING-v1` 冻结的软件 Level E fixture
+
+这是**纯软件**的双轴归一化应力模型，不是 WindArmor 物理动力学、actuator 分配矩阵或
+sim-to-real 模型。状态 `theta=(pitch,roll)` 单位为软件 rad、`omega` 为软件 rad/s；
+`u=(served_pitch,served_roll)` 是 §14.2 的无量纲向量，`a_ext` 为软件 rad/s²。
+两个轴同构；控制作用严格对角，非对角项仅来自状态耦合：
+
+```text
+dt = 0.020 s                  kappa = +0.25 s^-2
+alpha_p = 1.0*theta_p + kappa*theta_r - 2.4*omega_p + 0.6*u_p + a_ext_p
+alpha_r = 1.0*theta_r + kappa*theta_p - 2.4*omega_r + 0.6*u_r + a_ext_r
+omega_next_i = omega_i + dt*alpha_i
+theta_next_i = theta_i + dt*omega_next_i
+```
+
+`1.0 s^-2` 与 `2.4 s^-1` 仅借 ALG-005 的软件状态尺度作可比参考；ALG-005
+`6.0` 每 intent unit 经 `0.10` 归一化得到本模型的 `0.6` 每 normalized unit。
+这不是电机或风扇 effectiveness。`kappa=0` 时 plant 方程退化为两个同构单轴软件 plant；
+`kappa=0.25` 在 pitch-only 参考轨迹产生约 `0.00253 rad` 次轴峰值，显著大于
+`dt/2` 轨迹差。`0.75` 虽增大耦合，却使预算竞争参考恢复逼近继承的 `3.000 s`
+timeout；`0.25` 保留可测耦合与时间余量。两个 acceleration 必须由同一个 old-state
+snapshot 及同一帧 `u/a_ext` 计算；先同步更新两个 rate，再用各自新 rate 更新两个 angle。
+`t_k=k*dt` 是推进前样本时间。绝不能先推进 pitch 再让 roll 读取半帧新状态。
+
+目标状态始终为 `theta=(0,0), omega=(0,0)`；首次接受的样本就是 `t0=0`，无 priming
+sample。以下每行在 reset 后独立运行，`P/N` 表示**整个** `theta0/omega0/a_ext` 向量同时取正负
+镜像；另作 pitch/roll 交换（连 caps 一起交换）。未写项为 `omega0=(0,0)`、
+`caps=(1,1)`、`b=1`、`a_ext=(0,0)`。普通场景各 200 steps / 4.000 s，E90 各
+175 steps / 3.500 s；全程不能因达到 gate 提前退出。
+
+| ID | `theta0 (pitch,roll)` | 特别输入 / 目的 |
+| --- | --- | --- |
+| `ALG007-E00` | `(0,0)` | 零扰动、exact neutral；不建立 episode |
+| `ALG007-E01P/N` | `(±0.08,0)` | pitch-only；`kappa` 必须使 roll 状态可测偏离 |
+| `ALG007-E02P/N` | `(0,±0.08)` | roll-only 与轴交换 |
+| `ALG007-E03P/N` | `(±0.08,±0.08)` | 同号联合恢复与 L1 竞争 |
+| `ALG007-E04P/N` | `(±0.08,∓0.08)` | 反号联合恢复 |
+| `ALG007-E05P/N` | `(±0.12,±0.04)` | 不等幅联合恢复 |
+| `ALG007-E06P/N` | `(±0.08,±0.08)` | `caps=(0.40,1)`；一轴 cap 饱和，另一轴仍服务 |
+| `ALG007-E07P/N` | `(±0.08,±0.08)` | `b=0.75`；combined-budget 饱和 |
+| `ALG007-E90P/N` | `(±0.08,±0.08)` | `a_ext=(±0.40,±0.40)` 持续；故意不可恢复，期望 timeout |
+
+E90 在 `3.000 s` 前的同号联合需求中，每轴外扰 `0.40`，共享预算最多给双轴合计
+`0.6` 软件控制加速度，合计外扰为 `0.8`；此 fixture 不表示最大真实扰动。
+E90 余下 `0.500 s` 只用于检查 timeout 后 exact safe-stop/latch，不声称恢复。
+单轴初态为零的另一轴不得被忽略，E01/E02 兼作 coupling-driven secondary-axis 场景。
+
+**共同计时与 Hard Gates：** 首次扰动帧为 `t0`，从该帧起累计已接受正有限 `dt`；一轴
+改善、phase setback 或再次进入 envelope 不重启任一计时。所有 ordinary 状态、命令、
+residual、加速度和指标 finite。联合 settling envelope 为每轴
+`|theta_i|<=0.024 rad` 且 `|omega_i|<=0.120 rad/s`；联合 stable envelope 为每轴
+`|theta_i|<=0.012 rad` 且 `|omega_i|<=0.060 rad/s`，边界 inclusive。joint recovery
+envelope 就是两轴同时满足的 stable envelope；settling envelope 只标记中间过程，不能
+单独计为恢复。任一轴离开 stable envelope 则 joint dwell 清零；至少连续 `0.400 s`
+（20 个接受帧）同时满足，
+且最终确认 STABLE 的累计 recovery time `<=2.750 s + 1e-9`。E01～E07 必须有
+联合扰动、恢复与 settling 过程，最终 `0.800 s`（40 帧）始终处于 joint stable
+envelope，不得以 timeout/reset 计为 recovered。E00 全程 exact 零状态和零软件服务，
+无 episode/timeout。共同 timeout 继承 `3.000 s`，E90 首次 `TIMED_OUT` 须满足
+`3.000 <= elapsed < 3.020 s`，随后 task-local `u=(0,0)` exact、Level B exact
+`FlightCommand.safe_stop()`，锁存到显式 reset；任一 recoverable 场景 timeout 即 FAIL。
+
+**逐轴指标与 Hard Gates：** 对初始该轴 `theta0_i != 0`，从首次零交叉起按初始符号反向
+最大幅值除以 `|theta0_i|` 求 overshoot ratio；未交叉时为零，每轴
+`<=0.25 + 1e-9`。初始为零的次轴不定义 ratio，改要求全程 `peak_abs_theta_i<=0.020 rad`
+（E01/E02）；不能把两轴结果相减。有效振荡从 `t0` 至 run 结束，先删除该轴所有
+`|theta_i|<=0.001 rad` 样本，再统计相邻剩余样本符号反转，每轴最多 `1` 次。
+删除零带不能隐藏零带外反转。任何一轴 overshoot、次轴峰值或反转超限即场景 FAIL。
+记录逐轴 peak angle/rate、最终误差、overshoot、reversal、served/residual 和控制努力；
+combined-budget active 帧严格定义为逐轴 cap 后 `demand>b`，另记 cap-hit 帧与累计时长。
+这些积分/累计值是诊断，不能抵消 recovery、settling、timeout 或其它结构 Hard Gate。
+
+**Candidate-independent 选择证据：** 本次临时纯标准库脚本 `/tmp/alg007_sanity.py` 以
+`python3 /tmp/alg007_sanity.py` 扫描 `kappa=0,0.25,0.5,0.75`、
+`dt=0.04,0.02,0.01`，用与任何 ALG-007 Candidate 无关的参考律
+`request_i=clamp(-8*theta_i-2*omega_i,-1,1)` 经 §14.2 分配，再同步推进上述 plant。
+参考律仅用于证明 fixture 的数值可行性，**不是** Candidate 规定的控制律或 gain。
+选择 `kappa=0.25, dt=0.020` 后，`dt/2` 对照的 recoverable joint dwell 完成时刻
+差 `<=0.020 s`，逐帧同时间点 angle/rate 最大差分别 `<0.00070 rad`、
+`<0.00063 rad/s`；E90 到 `3.000 s` 的差分别 `<0.00286 rad`、
+`<0.00113 rad/s`。轴交换与全向量符号镜像逐帧相等；零耦合单轴次轴精确为零。
+所选耦合下，参考 E01～E07 的 joint dwell 完成时间为 `1.92～2.38 s`，最慢场景距
+`2.750 s` gate 有 `0.370 s`，距继承 timeout 有 `0.620 s`；最迟恢复后到 4.000 s
+终点仍有 `1.620 s` 稳定尾段。参考 overshoot 最大约 `0.001`、有效反转为 `0`；
+`0.25` 与 `1` 的 gates 保留明显余量。E90 到 `3.000 s` 未恢复，最大角约 `0.440 rad`。
+选择 stable angle `0.012` 为 `0.08` 基准初态的 15%，settling 取两倍；rate
+阈值同样按合成轨迹检查，`0.400 s` dwell 用于联合稳定而非复制 ALG-005 单轴
+`0.300 s`。`dt=0.020` 和 `4.000/3.500 s` 虽与 ALG-005 相同，本次分别由半步长
+收敛、最终尾段和 timeout 后 latch 观察重新支持；不得声称由硬件频率或动态得出。
+所有数值在 Candidate 实现前确定，不按未来表现调整。独立重建只需上述方程、场景表、
+参考律、逐帧更新顺序和评分定义；临时脚本不进入仓库。
 
 ### 14.4 Planned qualification 与证据边界
 
 未来 Hard Gates 至少覆盖：元数据与固定 implementation SHA、A/B/D 联合场景、双轴 bounds、
 finite、exact sentinel、deterministic arbitration、signed residual、失效闭锁、reset、三次完整
-repeat、ALG-001～006 final-path inheritance，以及 review 后冻结的新 Level E 多轴动态指标。
+repeat、ALG-001～006 final-path inheritance，以及 §14.3 已冻结的新 Level E 多轴动态指标。
 全部门槛互不抵消；fail 或未执行必须标明 `NOT QUALIFIED` 或 `NOT EXECUTED`，不能由好的
 单轴指标补偿。只有全部 Hard Gates PASS 后，才可按场景报告逐轴 peak/error/time、竞争
 期间 residual、饱和帧数、镜像误差和控制努力等 comparative metrics；不合成无依据总分。
@@ -1800,16 +1903,23 @@ roll/pitch 真实 allocation、执行器动态、最大可恢复扰动、sim-to-
 和 real Balance Recovery 均 `UNKNOWN / NOT VERIFIED`。hardware access `NO`；Level F
 `NOT AUTHORIZED / NOT EXECUTED`。
 
-### 14.5 冻结前 review items
+### 14.5 完整 Profile 前置依赖与状态
 
-1. 确定 roll rate 的坐标/符号、有效性、新鲜度和来源；共享 API 变更须独立评审与迁移。
-2. 在任何 Candidate 实现前冻结 arbitration 规则、竞争期望、零能力混合场景的全局
-   status enum 与竞争期 residual 评分。
-3. 预先冻结 coupling plant 参数、更新顺序、场景/样本数/horizon、双轴恢复/settling/
-   overshoot/oscillation 阈值及理由；不能根据 Candidate 表现倒调。
-4. 明确 nonzero executable projection 是否另立任务；当前 Level B 仅 hold/fan-zero。
-5. 若 Level B preview 需要 nominal axis caps/combined budget，预先审查并固定其
-   software-only 来源与语义；不得从 runtime/hardware metadata 推导 numerical authority。
+1. Task Spec §7 冻结的是未来 shared API/runtime 的 **PLANNED CONTRACT / NOT IMPLEMENTED**。
+   `relative_roll_rate_rad_s` 当前不存在；其 Z-Y-X 公式、同采样和有效性规则已给出，但
+   近 gimbal lock 的数值条件缺乏输入误差/速率界，精确 guard **NOT FROZEN**。独立 API
+   任务须评审兼容迁移、实现和测试，不能把旧 pitch guard `1e-9` 直接套到 roll。
+2. Task Spec §8 的 executable nonzero `FlightCommand` projection 是
+   **SEPARATE REVIEWED PREREQUISITE / NOT DEFINED / NOT VERIFIED**。当前 Level B 只做
+   motor hold / fan zero；caps/budget **NOT APPLICABLE**。必须另有方向、字段、绝对/
+   增量、中性点、包络和安全证据，不能由硬件 metadata 或软件 fixture 推断。
+3. Roll request 来源、归一化与继承 pitch intent 的兼容关系仍待 Candidate 前评审；§14.2
+   只接受已经给出的 task-local normalized request，不指定控制律。
+4. 前置依赖完成后才能 review 并版本化完整 `ALG-007 Profile v1`；本节软件向量与
+   synthetic Level E 数值已在 Candidate 前冻结，变化须说明并升级版本，不得据 Candidate
+   输出倒调。没有完整 Profile 就不能执行 Formal Qualification。
 
-在这些项目完成之前，本节只供 **design Remote Review**；ALG-007 Candidate、Candidate Result
-和 Formal Qualification 均未开始。
+ALG-007 Candidate **BLOCKED / NOT IMPLEMENTED**，Candidate Result **NOT CREATED**，Formal
+Qualification **NOT EXECUTED**；hardware access **NO**，authorization **NONE**，validation
+**NOT AUTHORIZED / NOT EXECUTED**。real actuator safety、硬件动态闭环恢复和 real Balance
+Recovery 均 **NOT VERIFIED**；v0.5.0 **NOT RELEASED**。
