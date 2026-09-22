@@ -14,7 +14,8 @@
 
 本文件同时承载 `Algorithm Benchmark v1` 的全局 Contract，以及任务级
 `ALG-001 Profile v1`、`ALG-002 Profile v1`、`ALG-003 Profile v1`、`ALG-004 Profile v1` 和
-`ALG-005 Profile v1` 和 `ALG-006 Profile v1`。它不包含任何 candidate result；Task Profile 的
+`ALG-005 Profile v1` 和 `ALG-006 Profile v1`。第 14 节另记录 ALG-007 **planned design**，
+尚非冻结 Profile。它不包含任何 candidate result；Task Profile 的
 存在不表示对应 candidate 已实现或已 PASS。
 
 ## 2. 版本规则
@@ -28,6 +29,7 @@
 | ALG-004 Task Benchmark Profile | `ALG-004 Profile v1` |
 | ALG-005 Task Benchmark Profile | `ALG-005 Profile v1` |
 | ALG-006 Task Benchmark Profile | `ALG-006 Profile v1` |
+| ALG-007 Task Benchmark Profile | `PLANNED / NOT FROZEN`；design v1 见第 14 节 |
 
 在两个 candidate 已开始正式历史比较后，不得静默修改 fixture、scenario、阈值、容差或
 评分规则。实质变化必须升级对应版本：任务局部变化升级 Profile（例如 v1 → v2）；跨任务
@@ -1679,3 +1681,105 @@ fixture、scenario、公式、status、容差或 Hard Gate 的实质变化必须
 不能为使 Candidate 通过而调整。当前 hardware access 为 `NO`，authorization 为 `NONE`，hardware
 validation 为 `NOT AUTHORIZED / NOT EXECUTED`，real actuator safety 和 real Balance Recovery
 均为 `NOT VERIFIED`。
+
+## 14. ALG-007 planned profile design v1
+
+对应 [ALG-007 Task Spec v1 design](algorithm_tasks/ALG-007.md)。本节状态为
+**DESIGN / PLANNED / NOT YET QUALIFIED**；不是冻结的 `ALG-007 Profile v1`，不含实现、运行
+结果或预填 PASS。`ALG001`～`ALG006` Profile、fixture 和历史 Result 保持原样。正式 Profile
+必须先解决 14.5 的 review items 并版本化；不得按未来 Candidate 的表现倒调门槛。
+
+### 14.1 观测 seam、层级和继承
+
+沿用纯内存 `FlightState` fixture、`dataclasses.replace()`、`reset()` 后独立场景、固定配置、
+`dt` sequence、完整 run 三次 repeat、正负镜像及 `tol(a,b)=1e-9+1e-6*max(abs(a),abs(b))`。
+每帧在同一次 update 记录 `(pitch_request,roll_request)`、
+`(pitch_served,roll_served)`、signed residual、status/disposition、phase/latch 和 Level B 完整
+command；不能分别运行两个单轴 controller 后拼接结果。task-local seam 仅为软件资格观测，
+不是公开 API 或可执行 mixer。Level A/D 评分抽象双轴行为；Level B 评分 factory、state/
+command validation、当前完整 motor position hold、fan-zero 及 exact safe-stop；Level C 仅可
+作 preview。ALG-001～006 全部现有 Hard Gates 必须在未来 Candidate 最终路径 fresh 重跑，
+含 ALG-005 Level E；这项单轴 Level E 不替代新的多轴动态证据。Level F 未授权、未执行。
+
+### 14.2 `ALG007-SYNTHETIC-VECTOR-v1` 规划 fixture
+
+以下是供 review 的 normalized software stress model，**不是** WindArmor 物理分配矩阵或
+motor/fan relative authority。每轴合法 request 与 synthetic axis cap 位于 `[-1,1]`、`[0,1]`，
+共享 budget `b` 位于 `[0,1]`。设计示例使用 `b=1`；它是竞争条件的归一化测试数字，
+不表示 100% 真实执行器能力。合法 served vector 的中立结构门槛拟为：
+
+```text
+sign(served_i) = sign(request_i) or served_i = 0
+abs(served_i) <= min(abs(request_i), axis_cap_i)
+abs(served_pitch) + abs(served_roll) <= b
+residual_i = request_i - served_i
+all values finite; ordinary zero vector -> exact zero vector
+```
+
+这些是联合预算与逐轴 cap 两层**软件**约束。仅有每轴分别在 `[-1,1]` 内不足以通过 combined
+saturation；非零 residual 不能静默丢弃，invalid/unknown cap 不能被当作 0 或 1。若
+`abs(r_p)+abs(r_r)` 在两个轴 cap 与共享 budget 内，拟要求完整服务；在竞争下，必须按预先
+冻结的 deterministic arbitration 决定分配，且不能绕过上述边界。尚未选择 pitch-first、
+roll-first、等比或 hardware-weighted policy；确切竞争期望和 status 分类 **TBD / review**。
+没有确切规则前不能开始 Formal Qualification。
+
+| 规划 ID | 同一帧输入或 sequence | 目的 / 中立期望 |
+| --- | --- | --- |
+| `ALG007-D00` | `(0,0)`、caps `(1,1)`、`b=1` | exact ordinary neutral；与 timeout zero 分开 |
+| `ALG007-D01P/N` | pitch-only `(±0.25,0)` | 继承 pitch request 方向/数值及 ALG-006 单轴路径 |
+| `ALG007-D02P/N` | roll-only `(0,±0.25)` | roll 软件方向、零 pitch 服务与有限输出；不冒充 roll rate 验证 |
+| `ALG007-D03` | 同时 `(0.25,0.25)`，及各轴独立取反的四个象限 | 同一帧双轴服务、镜像、非竞争组合 |
+| `ALG007-D04` | 同时 `(0.80,0.30)` 及轴交换/符号变体 | 不等幅竞争、逐轴 residual、确定性 arbitration |
+| `ALG007-D05` | `(0.80,0.80)`、`b=1` | combined saturation；联合预算、finite、status/residual、重复性 |
+| `ALG007-D06` | `(0.80,0.30)`、caps `(0.20,1)`、`b=1`；再交换轴 | 一轴 cap 命中而另一轴仍有预算，不无故关闭另一轴 |
+| `ALG007-D07` | 同时双轴序列：`(+,−) -> (−,+) -> (0,0)` | 当前帧、反向、exact neutral、无 prior allocation reuse |
+| `ALG007-D08` | 任一轴 request/cap 为 `None`、bool、NaN、Inf 或越界 | validation reject 或 `FAIL_CLOSED`；不得容差接受越界 |
+| `ALG007-D09` | 在联合请求后注入 stale/unknown/unhealthy、非法 `dt` 或 internal failure | exact safe-stop；ordinary history 清除；cold-start 等价 |
+| `ALG007-D10` | 继承的 `TIMED_OUT` exact-zero sentinel；再输入合法双轴状态 | safe-stop/latch 保持；不得判普通 neutral |
+| `ALG007-D11` | reset 后完整 D00～D10 正序、反序、至少三次 | 同状态/历史逐字段可重复、无跨场景污染 |
+
+ID、数值和结构关系是 **planned fixture design**，不是 Candidate 结果。若 review 决定调整
+这些内容，须在正式 Profile 冻结前记录；冻结后改动须升版。所有场景也要检查普通 Level B
+payload 经 `validate_flight_command()`，不能把 task-local served vector 反推为 motor rad 或 fan PWM。
+
+### 14.3 轴耦合与多轴动态 fixture 设计
+
+另需 `ALG007-SYNTHETIC-COUPLING-v1`：以双轴软件状态、同步外部扰动及非对角耦合项形成
+software stress model，按固定 `dt` 逐帧更新两个轴，记录 peak、settling、overshoot、
+oscillation、residual 和竞争持续时间。至少有 pitch-only、roll-only、同号/反号同时扰动、
+不等幅扰动、耦合使另一轴偏离、一个轴饱和另一个仍可控、零扰动、故意不可恢复 timeout
+场景。扰动、初态、target、axis caps、combined budget 必须分别显式给出；同一 run 中禁止
+按输出调节模型。比较窗口从首次联合扰动开始，不能在一个轴改善后重启另一轴的计时。
+
+耦合系数、roll rate/source、状态更新公式、样本数、horizon 及动态 Hard Gates 当前 **TBD**。
+既有 `ALG005-SYNTHETIC-PLANT-v1` 的 `dt=0.020 s`、4.000 s/3.500 s、0.300 s dwell、
+3.000 s timeout 和 `2.500 s` recovery gate 只属于原 pitch 单轴 fixture；可作为设计参照，
+不能无依据复制为 roll/双轴 PASS 阈值。新模型只可使用明示的无量纲/软件单位常量，必须
+注明不是 hardware characterization，不推导真实 maximum recoverable disturbance 或稳定性。
+没有新的多轴 Level E Hard Gate，就不能给 ALG-007 完整多轴 recovery `QUALIFIED` 结论。
+
+### 14.4 Planned qualification 与证据边界
+
+未来 Hard Gates 至少覆盖：元数据与固定 implementation SHA、A/B/D 联合场景、双轴 bounds、
+finite、exact sentinel、deterministic arbitration、signed residual、失效闭锁、reset、三次完整
+repeat、ALG-001～006 final-path inheritance，以及 review 后冻结的新 Level E 多轴动态指标。
+全部门槛互不抵消；fail 或未执行必须标明 `NOT QUALIFIED` 或 `NOT EXECUTED`，不能由好的
+单轴指标补偿。只有全部 Hard Gates PASS 后，才可按场景报告逐轴 peak/error/time、竞争
+期间 residual、饱和帧数、镜像误差和控制努力等 comparative metrics；不合成无依据总分。
+
+本节全部预算、cap 和 coupling 均为 synthetic benchmark assumptions。`FlightState` 的状态
+布尔值和 hardware metadata 不产生 numerical authority。motor torque、fan thrust、力臂、
+roll/pitch 真实 allocation、执行器动态、最大可恢复扰动、sim-to-real、real actuator safety
+和 real Balance Recovery 均 `UNKNOWN / NOT VERIFIED`。hardware access `NO`；Level F
+`NOT AUTHORIZED / NOT EXECUTED`。
+
+### 14.5 冻结前 review items
+
+1. 确定 roll rate 的坐标/符号、有效性、新鲜度和来源；共享 API 变更须独立评审与迁移。
+2. 在任何 Candidate 实现前冻结 arbitration 规则、竞争期望、status 与 residual 评分。
+3. 预先冻结 coupling plant 参数、更新顺序、场景/样本数/horizon、双轴恢复/settling/
+   overshoot/oscillation 阈值及理由；不能根据 Candidate 表现倒调。
+4. 明确 nonzero executable projection 是否另立任务；当前 Level B 仅 hold/fan-zero。
+
+在这些项目完成之前，本节只供 **design Remote Review**；ALG-007 Candidate、Candidate Result
+和 Formal Qualification 均未开始。
