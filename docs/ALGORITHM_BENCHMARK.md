@@ -1905,10 +1905,15 @@ roll/pitch 真实 allocation、执行器动态、最大可恢复扰动、sim-to-
 
 ### 14.5 完整 Profile 前置依赖与状态
 
-1. Task Spec §7 冻结的是未来 shared API/runtime 的 **PLANNED CONTRACT / NOT IMPLEMENTED**。
-   `relative_roll_rate_rad_s` 当前不存在；其 Z-Y-X 公式、同采样和有效性规则已给出，但
-   近 gimbal lock 的数值条件缺乏输入误差/速率界，精确 guard **NOT FROZEN**。独立 API
-   任务须评审兼容迁移、实现和测试，不能把旧 pitch guard `1e-9` 直接套到 roll。
+1. v0.5.0-020A 已冻结 Task Spec §7 的 Z-Y-X 公式、`K(theta)=1/abs(cos(theta))` conditioning
+   model、optional-derived API compatibility、same-sample/lifecycle 与 `roll_axis_sign` wiring
+   设计。`relative_roll_rate_rad_s` 当前仍 **PLANNED / NOT IMPLEMENTED**。它不进入 legacy/base
+   IMU complete measurement set；conditioning-only unavailable 使用 `None`，需要 roll rate 的
+   consumer 额外要求 base `valid/fresh`、字段存在且 finite，ALG-001～006 的 valid domain 不得
+   因此收缩。精确 near-singularity guard 因缺少 body-rate/orientation error bound、可接受输出
+   error budget 或 verified operating envelope 而 **NOT FROZEN**；旧 pitch guard `1e-9` 在其
+   accepted side 仍允许接近 `1e9` 的理论增益，不能直接套用。020B boundary tests 保持
+   **BLOCKED ON NUMERICAL RULE**。
 2. Task Spec §8 的 executable nonzero `FlightCommand` projection 是
    **SEPARATE REVIEWED PREREQUISITE / NOT DEFINED / NOT VERIFIED**。当前 Level B 只做
    motor hold / fan zero；caps/budget **NOT APPLICABLE**。必须另有方向、字段、绝对/

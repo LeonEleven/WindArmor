@@ -225,8 +225,10 @@ M3 包含 ALG-007 和 ALG-008。目标是形成至少 pitch/roll 的多轴恢复
 [Benchmark §14](ALGORITHM_BENCHMARK.md#14-alg-007-planned-profile-design-v1) 现已冻结候选前的
 纯软件 vector arbitration、status/residual 优先级、synthetic coupling fixture 和联合 Level E
 数值门槛，状态为 **PRE-CANDIDATE CONTRACTS PARTIALLY FROZEN**，完整 Profile 仍
-**NOT FROZEN**。未来共享 `relative_roll_rate_rad_s` 的坐标/采样契约已定义，但字段尚未实现，
-近奇异点规则仍待独立前置任务；normalized 双轴请求到非零可执行 `FlightCommand` 的投影也
+**NOT FROZEN**。v0.5.0-020A 已冻结未来共享 `relative_roll_rate_rad_s` 的公式、conditioning
+model、optional-derived 兼容语义、符号 wiring 与同采样/生命周期设计，但字段尚未实现；精确
+near-singularity 数值界因缺少输入误差/允许输出误差或 verified operating envelope 而
+**NOT FROZEN**。normalized 双轴请求到非零可执行 `FlightCommand` 的投影也
 `NOT DEFINED / NOT VERIFIED`。因此 Candidate **BLOCKED / NOT IMPLEMENTED**，Candidate
 Result 未创建，Formal Qualification 未执行。软件 caps、预算和耦合均不从硬件名称或 metadata
 推断真实 pitch/roll authority。
@@ -376,8 +378,10 @@ SHA 上重新执行的 Formal Qualification：**PASS / ALG-006 QUALIFIED / INTEG
 Task Spec v1、Profile v1、`ALG006-NORMALIZED-ALLOCATION-v1` 和 inherited
 `ALG005-SYNTHETIC-PLANT-v1` 均未改变。
 
-当前下一工作单元优先处理 ALG-007 的共享 roll-rate API/runtime 前置任务：独立评审近欧拉
-奇异点规则、兼容迁移、同采样配对、有效性与纯软件验收测试。另需独立评审非零 executable
+当前下一工作单元应先关闭 ALG-007 roll-rate 的数值证据 blocker：冻结可审查的 source
+error / acceptable output error budget，或 verified operating envelope，由此确定 exact
+near-singularity guard。兼容迁移、同采样、有效性、sign wiring 与未来验收矩阵已由 020A
+冻结；数值规则冻结后才能进入 020B shared API/runtime implementation。另需独立评审非零 executable
 `FlightCommand` projection；其绝对 motor rad/fan command 方向和能力缺少证据。
 runtime availability 到 numerical authority、真实 motor/fan effectiveness 与安全恢复包线
 仍未定义或未验证。软件 fixture 和既有资格不等于 real actuator safety 或 real Balance
