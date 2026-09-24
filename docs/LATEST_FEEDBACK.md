@@ -5,10 +5,10 @@
 
 ## 当前工作单元
 
-- 日期：2026-09-23；Task：`v0.5.0-020A — Relative Roll-rate Singularity + API Compatibility Design Freeze`；
-  task branch：`docs/alg-007-roll-rate-prereq`。
-- task-start baseline：`origin/develop@ae27a2b0e3dd17ccfb111fdc2c61842ba9cc53bf`；
-  v0.5.0-019 已 **MERGED / INTEGRATED**。
+- 日期：2026-09-24；Task：`v0.5.0-020A.1 — ALG-007 Roll-rate Near-singularity Numerical Evidence Review + Gap Freeze`；
+  task branch：`docs/alg-007-roll-rate-evidence-gap`。
+- task-start baseline：`origin/develop@0bc0dffe6d673d8b3bb49427896af41a581b432d`；
+  v0.5.0-019 与 v0.5.0-020A 均已 **MERGED / INTEGRATED**。
 - Stable release：`v0.4.0`；v0.5.0：**NOT RELEASED**。
 - ALG-001～006：**QUALIFIED / INTEGRATED**。ALG-006 fixed implementation SHA：
   `9a7a624713010eff48cf7112b0501266eb24521e`；Formal Qualification/Result evidence SHA：
@@ -16,8 +16,8 @@
 - [ALG-007 Task Spec](algorithm_tasks/ALG-007.md) 与
   [Benchmark §14](ALGORITHM_BENCHMARK.md#14-alg-007-planned-profile-design-v1)：020A 已冻结
   roll-rate formula、conditioning model、optional-derived API compatibility、sign wiring 与
-  lifecycle design；exact numerical near-singularity rule **NOT FROZEN**；full Profile
-  **NOT FROZEN**。
+  lifecycle design；020A.1 已完成 candidate-independent numerical evidence review 并冻结
+  evidence gap。exact numerical near-singularity rule 与 full Profile 均 **NOT FROZEN**。
 - ALG-007 Candidate：**BLOCKED / NOT IMPLEMENTED**；Candidate Result：**NOT CREATED**；
   Formal Qualification：**NOT EXECUTED**。
 
@@ -32,10 +32,24 @@ default-`None` 的 optional derived measurement；它不进入 legacy/base compl
 roll rate 的 consumer 显式要求 base valid/fresh、字段存在且 finite。无需额外 public validity
 flag，prior roll rate 不得补入新 unavailable frame。
 
-Z-Y-X 公式及 `||a(phi,theta)||_2=1/abs(cos(theta))` 已独立确认。现有 pitch-rate `1e-9`
-guard 只表示接近数学奇异点；在 accepted side 理论 amplification 仍可接近 `1e9`。仓库缺少
-经验证的 body-rate/orientation error bound、允许 roll-rate output error budget 或 operating
-envelope，因此 exact numerical guard **NOT FROZEN**，不得猜测角度或 `K_max`。
+020A.1 重新审计了 authoritative docs、IMU parser/driver、Flight adapter/validation 与必要的
+benchmark/test evidence。当前未找到 reviewed body-rate measurement/uncertainty bound、
+quaternion/Euler/pitch uncertainty bound、finite body-rate runtime envelope、controller/API accepted
+derived roll-rate error budget、numerical amplification budget，或 verified applicable software/
+physical attitude envelope。`GYRO_FULL_SCALE=2000.0 deg/s` 只是 raw protocol conversion 的
+implementation constant；Runtime 只要求 finite input。ALG-003 noise、ALG-005/007 dynamic 数值
+是 synthetic qualification inputs。电机软限位与 hardware metadata 也不约束机体姿态或 IMU
+误差；以上均不能用于推导 guard。
+
+Z-Y-X 公式及 `||partial f/partial(p,q,r)||_2=K(theta)=1/abs(cos(theta))` 已复核；同时
+`partial f/partial phi=tan(theta)*(cos(phi)*q-sin(phi)*r)`，
+`partial f/partial theta=sec(theta)^2*(sin(phi)*q+cos(phi)*r)`。因此 orientation uncertainty
+非零时，body-rate-only propagation 不完整；finite uncertainty rule 还需要在完整 pitch interval
+上排除 singularity，并约束 worst-case `sec/sec^2`、relevant body-rate magnitude/projection 与
+accepted output error。现有 `EULER_GIMBAL_LOCK_COS_TOLERANCE=1e-9` 只表示 mathematical /
+implementation singularity guard；accepted side 理论 amplification 仍可接近 `1e9`，不是
+conditioning/error bound 或 operating envelope。当前不冻结 `theta_max`、`K_max` 或 exact guard；
+020B 保持 **BLOCKED ON NUMERICAL RULE**。
 
 `roll_axis_sign` 未来复用 relative attitude producer 的同名 key，严格为 `+1/-1`，不能从
 `motor_signs` 或 actuator mapping 推断。Flight Runtime 当前只 wiring `pitch_axis_sign`；020B
@@ -64,8 +78,10 @@ DEFINED / NOT VERIFIED。** 当前没有从 normalized pitch/roll request 到 ab
 - Real actuator safety、dynamic closed-loop recovery on hardware 与 real Balance Recovery：
   **NOT VERIFIED**。motor torque、fan thrust、力臂、真实轴向分配、相对/动态 authority、
   availability → numerical authority、最大可恢复扰动和 sim-to-real 均 **UNKNOWN / NOT VERIFIED**。
-- 下一工作单元优先关闭 exact near-singularity 数值证据 blocker：提供并评审 source error /
-  acceptable output error budget，或 verified operating envelope。数值规则冻结后才进入 020B
-  shared API/runtime implementation；另立 nonzero executable projection 的证据/安全契约。
-  020A 未修改 production、测试、config、launch、API/architecture 文档或历史 Result，也未执行
-  硬件验证。
+- numerical blocker 只能由足够 reviewed source/body-rate + orientation uncertainty、相关 rate
+  magnitude 与 accepted output error budget，独立 verified applicable operating envelope，或另行
+  review 的 explicit normative software/API conditioning policy 解除。policy 不能冒充 hardware
+  evidence；外部 sensor specification 不足时可能需要另行授权 characterization。数值规则冻结后
+  才进入 020B shared API/runtime implementation；另立 nonzero executable projection 的证据/安全
+  契约。020A.1 未修改 production、测试、config、launch、API/architecture 文档或历史 Result，
+  也未执行硬件验证。
