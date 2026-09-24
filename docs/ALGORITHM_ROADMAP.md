@@ -226,9 +226,14 @@ M3 包含 ALG-007 和 ALG-008。目标是形成至少 pitch/roll 的多轴恢复
 纯软件 vector arbitration、status/residual 优先级、synthetic coupling fixture 和联合 Level E
 数值门槛，状态为 **PRE-CANDIDATE CONTRACTS PARTIALLY FROZEN**，完整 Profile 仍
 **NOT FROZEN**。v0.5.0-020A 已冻结未来共享 `relative_roll_rate_rad_s` 的公式、conditioning
-model、optional-derived 兼容语义、符号 wiring 与同采样/生命周期设计，但字段尚未实现；精确
-near-singularity 数值界因缺少输入误差/允许输出误差或 verified operating envelope 而
-**NOT FROZEN**。normalized 双轴请求到非零可执行 `FlightCommand` 的投影也
+model、optional-derived 兼容语义、符号 wiring 与同采样/生命周期设计，但字段尚未实现。
+v0.5.0-020A.1 已完成 candidate-independent repository evidence audit：parser 满量程常量与
+synthetic fixture 都不能充当传感器 uncertainty、运行输入包络或允许输出误差；仓库也没有
+verified applicable attitude envelope。orientation uncertainty 还通过 `tan(theta)` 与
+`sec(theta)^2` sensitivity 耦合 body-rate magnitude，故只使用 `K(theta)` 的 body-rate error
+relation 不完整。当前冻结的是 evidence gap，不是任意 `theta_max`/`K_max`；exact rule 仍
+**NOT FROZEN**，020B **BLOCKED ON NUMERICAL RULE**。normalized 双轴请求到非零可执行
+`FlightCommand` 的投影也
 `NOT DEFINED / NOT VERIFIED`。因此 Candidate **BLOCKED / NOT IMPLEMENTED**，Candidate
 Result 未创建，Formal Qualification 未执行。软件 caps、预算和耦合均不从硬件名称或 metadata
 推断真实 pitch/roll authority。
@@ -378,11 +383,14 @@ SHA 上重新执行的 Formal Qualification：**PASS / ALG-006 QUALIFIED / INTEG
 Task Spec v1、Profile v1、`ALG006-NORMALIZED-ALLOCATION-v1` 和 inherited
 `ALG005-SYNTHETIC-PLANT-v1` 均未改变。
 
-当前下一工作单元应先关闭 ALG-007 roll-rate 的数值证据 blocker：冻结可审查的 source
-error / acceptable output error budget，或 verified operating envelope，由此确定 exact
-near-singularity guard。兼容迁移、同采样、有效性、sign wiring 与未来验收矩阵已由 020A
-冻结；数值规则冻结后才能进入 020B shared API/runtime implementation。另需独立评审非零 executable
-`FlightCommand` projection；其绝对 motor rad/fan command 方向和能力缺少证据。
+v0.5.0-020A.1 已确认并冻结 ALG-007 roll-rate 的数值 evidence gap。下一工作单元必须先通过
+以下任一路径解除 blocker：评审完整 source/body-rate 与 orientation/pitch uncertainty、相关
+rate magnitude 和 accepted derived-output error budget；取得独立 verified applicable operating
+envelope；或单独评审明确的 normative software/API conditioning policy。software policy 不能
+表述为硬件能力或物理安全包络；若外部 sensor specification 不足，hardware/sensor
+characterization 需要另行授权。兼容迁移、同采样、有效性、sign wiring 与未来验收矩阵已由
+020A 冻结；exact numerical rule 冻结后才能进入 020B shared API/runtime implementation。另需
+独立评审非零 executable `FlightCommand` projection；其绝对 motor rad/fan command 方向和能力缺少证据。
 runtime availability 到 numerical authority、真实 motor/fan effectiveness 与安全恢复包线
 仍未定义或未验证。软件 fixture 和既有资格不等于 real actuator safety 或 real Balance
 Recovery；后者仍 **NOT VERIFIED**。ALG-007 Candidate、Formal Qualification、PR、merge、

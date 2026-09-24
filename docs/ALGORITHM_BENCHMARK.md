@@ -15,8 +15,8 @@
 本文件同时承载 `Algorithm Benchmark v1` 的全局 Contract，以及任务级
 `ALG-001 Profile v1`、`ALG-002 Profile v1`、`ALG-003 Profile v1`、`ALG-004 Profile v1` 和
 `ALG-005 Profile v1` 和 `ALG-006 Profile v1`。第 14 节记录 ALG-007 **部分冻结的候选前
-软件契约**；共享 roll-rate API、非零可执行投影与完整 Profile 仍未冻结。它不包含任何 Candidate
-Result；Task Profile 的
+软件契约**及 v0.5.0-020A.1 已冻结的 numerical evidence gap；共享 roll-rate API、非零可执行
+投影与完整 Profile 仍未冻结。它不包含任何 Candidate Result；Task Profile 的
 存在不表示对应 candidate 已实现或已 PASS。
 
 ## 2. 版本规则
@@ -1910,17 +1910,30 @@ roll/pitch 真实 allocation、执行器动态、最大可恢复扰动、sim-to-
    设计。`relative_roll_rate_rad_s` 当前仍 **PLANNED / NOT IMPLEMENTED**。它不进入 legacy/base
    IMU complete measurement set；conditioning-only unavailable 使用 `None`，需要 roll rate 的
    consumer 额外要求 base `valid/fresh`、字段存在且 finite，ALG-001～006 的 valid domain 不得
-   因此收缩。精确 near-singularity guard 因缺少 body-rate/orientation error bound、可接受输出
-   error budget 或 verified operating envelope 而 **NOT FROZEN**；旧 pitch guard `1e-9` 在其
-   accepted side 仍允许接近 `1e9` 的理论增益，不能直接套用。020B boundary tests 保持
-   **BLOCKED ON NUMERICAL RULE**。
-2. Task Spec §8 的 executable nonzero `FlightCommand` projection 是
+   因此收缩。
+2. v0.5.0-020A.1 已完成 candidate-independent repository evidence audit。当前没有 reviewed
+   body-rate measurement/uncertainty bound、orientation/pitch uncertainty bound、finite runtime
+   rate envelope、accepted derived-output error budget 或 verified applicable attitude envelope。
+   parser 的 `GYRO_FULL_SCALE=2000.0 deg/s` 只是 raw conversion implementation constant；
+   ALG-003/005/007 数值是 synthetic qualification inputs；二者都不是上述 evidence。故冻结的是
+   **EVIDENCE INSUFFICIENT / GAP FROZEN**，不冻结 `theta_max`、`K_max` 或 exact guard。
+3. 对冻结映射，`||partial f/partial(p,q,r)||_2=K(theta)`，但
+   `partial f/partial phi=tan(theta)*(cos(phi)*q-sin(phi)*r)`，且
+   `partial f/partial theta=sec(theta)^2*(sin(phi)*q+cos(phi)*r)`。所以 body-rate-only relation
+   在 orientation uncertainty 非零时不完整；future rule 必须覆盖完整 pitch uncertainty interval、
+   singularity crossing、worst-case `sec/sec^2`、relevant rate magnitude 与组合输出误差。
+   旧 pitch guard `1e-9` 仅是 mathematical/implementation singularity guard；accepted side 理论
+   gain 仍可接近 `1e9`，不能提升为 conditioning/error bound。exact rule 仍 **NOT FROZEN**，
+   020B boundary tests 保持 **BLOCKED ON NUMERICAL RULE**。blocker 只能由足够 reviewed source
+   uncertainty + accepted output budget、独立 verified operating envelope，或另行 review 的明确
+   software/API conditioning policy 解除；policy 不能冒充硬件证据。
+4. Task Spec §8 的 executable nonzero `FlightCommand` projection 是
    **SEPARATE REVIEWED PREREQUISITE / NOT DEFINED / NOT VERIFIED**。当前 Level B 只做
    motor hold / fan zero；caps/budget **NOT APPLICABLE**。必须另有方向、字段、绝对/
    增量、中性点、包络和安全证据，不能由硬件 metadata 或软件 fixture 推断。
-3. Roll request 来源、归一化与继承 pitch intent 的兼容关系仍待 Candidate 前评审；§14.2
+5. Roll request 来源、归一化与继承 pitch intent 的兼容关系仍待 Candidate 前评审；§14.2
    只接受已经给出的 task-local normalized request，不指定控制律。
-4. 前置依赖完成后才能 review 并版本化完整 `ALG-007 Profile v1`；本节软件向量与
+6. 前置依赖完成后才能 review 并版本化完整 `ALG-007 Profile v1`；本节软件向量与
    synthetic Level E 数值已在 Candidate 前冻结，变化须说明并升级版本，不得据 Candidate
    输出倒调。没有完整 Profile 就不能执行 Formal Qualification。
 
