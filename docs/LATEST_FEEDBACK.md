@@ -5,83 +5,101 @@
 
 ## 当前工作单元
 
-- 日期：2026-09-24；Task：`v0.5.0-020A.1 — ALG-007 Roll-rate Near-singularity Numerical Evidence Review + Gap Freeze`；
-  task branch：`docs/alg-007-roll-rate-evidence-gap`。
-- task-start baseline：`origin/develop@0bc0dffe6d673d8b3bb49427896af41a581b432d`；
-  v0.5.0-019 与 v0.5.0-020A 均已 **MERGED / INTEGRATED**。
+- 日期：2026-09-24；Task：`v0.5.0-020A.2 — ALG-007 IMU Data-path Provenance + Sample
+  Coherence Prerequisite Freeze`；task branch：`docs/alg-007-imu-sample-coherence-prereq`。
+- task-start baseline：`origin/develop@00d6f2fe105a837311bfe99a69755fd383766f2d`；
+  v0.5.0-019、v0.5.0-020A 与 v0.5.0-020A.1 均已 **MERGED / INTEGRATED**。
 - Stable release：`v0.4.0`；v0.5.0：**NOT RELEASED**。
 - ALG-001～006：**QUALIFIED / INTEGRATED**。ALG-006 fixed implementation SHA：
   `9a7a624713010eff48cf7112b0501266eb24521e`；Formal Qualification/Result evidence SHA：
   `6729443d5e190986c75b8521a4ec7ebd0554d34e`。
 - [ALG-007 Task Spec](algorithm_tasks/ALG-007.md) 与
   [Benchmark §14](ALGORITHM_BENCHMARK.md#14-alg-007-planned-profile-design-v1)：020A 已冻结
-  roll-rate formula、conditioning model、optional-derived API compatibility、sign wiring 与
-  lifecycle design；020A.1 已完成 candidate-independent numerical evidence review 并冻结
-  evidence gap。exact numerical near-singularity rule 与 full Profile 均 **NOT FROZEN**。
+  roll-rate 公式、conditioning model、optional-derived compatibility、sign wiring 与逻辑
+  same-sample/lifecycle design；020A.1 已冻结 numerical evidence gap；020A.2 已冻结 IMU
+  data-path / module-configuration provenance 与 coherent composite-sample prerequisite。
+- `relative_roll_rate_rad_s`：**PLANNED / NOT IMPLEMENTED**；exact near-singularity rule、
+  `theta_max`、`K_max`：**NOT FROZEN**。
 - ALG-007 Candidate：**BLOCKED / NOT IMPLEMENTED**；Candidate Result：**NOT CREATED**；
   Formal Qualification：**NOT EXECUTED**。
 
-## 稳定工程结论与前置依赖
+## IMU data-path provenance freeze
 
-从当前 source/tests 确认：`ImuState` 是全部字段无 default 的 frozen dataclass，有相对
-roll/pitch 与统一 pitch rate，但没有 `relative_roll_rate_rad_s`；仓库 4 个直接构造点均为
-keyword construction。当前 `imu.valid` 要求完整 base measurement set，ALG-001～006 都依赖
-`imu.valid/fresh`，但没有旧算法读取 roll rate。020A 因此冻结未来字段为 append-at-end、
-default-`None` 的 optional derived measurement；它不进入 legacy/base complete set。source
-合法但 roll conditioning unavailable 时保留 pair、字段置 `None`，不使整体 IMU invalid；需要
-roll rate 的 consumer 显式要求 base valid/fresh、字段存在且 finite。无需额外 public validity
-flag，prior roll rate 不得补入新 unavailable frame。
+当前 production path 的厂家 orientation source 是 `0x53 ANGLE` Euler，不是 `0x59`
+quaternion。parser 解析 `0x51 ACC`、`0x52 GYRO`、`0x53 ANGLE`，不解析/使用 `0x59`；driver
+把 `0x53` Euler 转成软件生成的 ROS `(x,y,z,w)` quaternion，下游再从该表示重建 Z-Y-X Euler。
+因此 vendor quaternion quantization 不适用于当前 active path。
 
-020A.1 重新审计了 authoritative docs、IMU parser/driver、Flight adapter/validation 与必要的
-benchmark/test evidence。当前未找到 reviewed body-rate measurement/uncertainty bound、
-quaternion/Euler/pitch uncertainty bound、finite body-rate runtime envelope、controller/API accepted
-derived roll-rate error budget、numerical amplification budget，或 verified applicable software/
-physical attitude envelope。`GYRO_FULL_SCALE=2000.0 deg/s` 只是 raw protocol conversion 的
-implementation constant；Runtime 只要求 finite input。ALG-003 noise、ALG-005/007 dynamic 数值
-是 synthetic qualification inputs。电机软限位与 hardware metadata 也不约束机体姿态或 IMU
-误差；以上均不能用于推导 guard。
+`0x52` 应称为 **module-reported angular velocity**。厂家模块内部存在 offset、auto-calibration、
+filtering、static detection 与 low-rate zeroing/threshold behavior；当前证据不能把它无条件称为
+raw MEMS rate。WindArmor wire decode 使用厂家 `signed_int16 / 32768 * 2000 deg/s` 后转
+`rad/s`，与 documented fixed range 一致，但该范围不是 robot operating envelope。
 
-Z-Y-X 公式及 `||partial f/partial(p,q,r)||_2=K(theta)=1/abs(cos(theta))` 已复核；同时
-`partial f/partial phi=tan(theta)*(cos(phi)*q-sin(phi)*r)`，
-`partial f/partial theta=sec(theta)^2*(sin(phi)*q+cos(phi)*r)`。因此 orientation uncertainty
-非零时，body-rate-only propagation 不完整；finite uncertainty rule 还需要在完整 pitch interval
-上排除 singularity，并约束 worst-case `sec/sec^2`、relevant body-rate magnitude/projection 与
-accepted output error。现有 `EULER_GIMBAL_LOCK_COS_TOLERANCE=1e-9` 只表示 mathematical /
-implementation singularity guard；accepted side 理论 amplification 仍可接近 `1e9`，不是
-conditioning/error bound 或 operating envelope。当前不冻结 `theta_max`、`K_max` 或 exact guard；
-020B 保持 **BLOCKED ON NUMERICAL RULE**。
+厂家资料来自人工已审查的 external evidence handoff，不是 repository-tracked normative
+specification；本工作单元不声称独立读取或验证原 PDF/模型。owner 确认实际 IMU 只使用厂家
+上位机做过功能测试且未主动修改配置，因此物理设备**合理预期**仍为 documented vendor
+defaults；WindArmor Runtime 没有 write/readback verification，不能称为 `VERIFIED DEFAULT`。
 
-`roll_axis_sign` 未来复用 relative attitude producer 的同名 key，严格为 `+1/-1`，不能从
-`motor_signs` 或 actuator mapping 推断。Flight Runtime 当前只 wiring `pitch_axis_sign`；020B
-须显式新增 roll sign、跨两份 node-scoped config 比较与防 roll/pitch 互换测试。同一 raw
-orientation/body-rate、exact stamp pairing、freshness、disconnect/reconnect、zero-generation
-与 no-prior-reuse contract 已冻结。共享字段/Runtime/tests/API docs 均仍
-**PLANNED / NOT IMPLEMENTED**。
+## Sample coherence freeze
 
-`ALG007-SYNTHETIC-VECTOR-v1` 已冻结无状态逐轴 cap + combined L1 等比例预算、
-exact zero、signed residual 和 `FAIL_CLOSED` / `TIMEOUT` / `NEUTRAL` / `INFEASIBLE` /
-`ALLOCATED` / `SATURATED` 的优先级。当前 Level B 仍只做 motor hold / fan zero；
-nominal 双轴 caps/budget **NOT APPLICABLE**。`ALG007-SYNTHETIC-COUPLING-v1` 已由
-candidate-independent 纯软件 sanity study 冻结对称状态耦合方程、`dt`、场景、horizon 与
-逐轴 Level E gates；这些数值不表征真实硬件。
+当前 parser 为 ACC/GYRO/ANGLE 分别保存 latest cache；合法 `0x53` 到达时，driver 使用 latest
+ACC + latest GYRO + current ANGLE 合成一条新的 ROS `sensor_msgs/Imu` 并生成 ROS timestamp。
+parser 没有 vendor sample/cycle ID、per-frame source timestamp 或完整 module-update generation，
+也不使用 `0x50 TIME`。
 
-**Executable nonzero FlightCommand projection = SEPARATE REVIEWED PREREQUISITE = NOT
-DEFINED / NOT VERIFIED。** 当前没有从 normalized pitch/roll request 到 absolute motor rad
-和/或非零 fan command 的方向、基线、包络及相对 authority 证据。roll request 来源及其与
-继承 pitch `0.10` intent 的兼容关系也待评审。完成这些前置依赖及完整 Profile review 前，
-不得进入 ALG-007 Candidate。
+- Same composite ROS `Imu`：**CURRENTLY AVAILABLE**；
+- Same vendor module update/cycle：**NOT PROVEN**；
+- lost/bad `GYRO_N+1` + arriving `ANGLE_N+1`：不能排除 `GYRO_N + ANGLE_N+1`；
+- reconnect 后先到 new angle：当前没有证明 parser partial/component cache 清空，不能排除
+  reconnect 前 gyro + reconnect 后 angle；
+- 上述是当前静态实现允许/不能排除的 sequence，**不是硬件已观察故障**。
 
-## Hardware / evidence boundary 与下一步
+020A 的 logical same-sample contract 不变。未来 coherent composite implementation 必须保证：
+previous gyro 不与 new angle 组合；reconnect/reset 清除或代次隔离 partial/component/pending state；
+fresh ROS timestamp 不掩盖 stale component；只有新完成的 coherent composite sample 才建立
+downstream freshness。具体 state machine、source-time、cycle tracking 或 bookkeeping 方案尚未选择。
+
+## Configuration 与 specification applicability
+
+厂家 defaults handoff 包括：RSW `0x001E`（ACC/GYRO/ANGLE/MAG，无 quaternion）、RRATE
+`10 Hz`、BAUD `9600`、BANDWIDTH `20 Hz`、fixed GYRORANGE `2000 deg/s`、AXIS6 `0`
+（9-axis）、FILTK `30`、GYROCALTIME `1000 ms`、WZTIME `500 ms`、WZSTATIC
+`0.3 deg/s`。host serial baud `9600` 是 source-controlled；module side BAUD 与其它关键配置均
+未由 WindArmor write/readback。完整 matrix 见 Task Spec §7.8.3。
+
+- gyro range 与 `0.061035... deg/s/LSB` protocol quantization：**DIRECTLY APPLICABLE TO WIRE
+  DECODE**，但不是 operating/error bound；
+- Euler `0.005493... deg/LSB` protocol quantization：**DIRECTLY APPLICABLE**；
+- gyro RMS noise `0.028~0.07 deg/s-rms @ 100 Hz bandwidth`：**NOT PROVEN DIRECTLY
+  APPLICABLE**；module bandwidth 无 readback，owner-history expectation 为 default `20 Hz`；
+- static zero drift 与 temperature drift：**CONDITIONALLY APPLICABLE**，不是 hard maximum；
+- pitch/roll static `0.1 deg`、dynamic `0.5 deg` typical accuracy：**CONDITIONALLY APPLICABLE**，
+  不是 guaranteed hard maximum；
+- 与正式表冲突的产品特点 `0.05/0.1 deg`：不得用于 numerical guard；
+- vendor `0x59` quaternion quantization：**NOT APPLICABLE TO CURRENT ACTIVE DATA PATH**。
+
+## 独立 blockers 与下一步
+
+- **Blocker A — numerical uncertainty/error budget**：仍缺 deterministic combined source
+  uncertainty、relevant rate magnitude、accepted derived roll-rate error budget 与 exact guard；
+  `EULER_GIMBAL_LOCK_COS_TOLERANCE=1e-9` 仍只是 mathematical/implementation guard。
+- **Blocker B — sample coherence/data path**：必须关闭 old gyro + new angle、reconnect prior
+  reuse、vendor-cycle identity 与 coherent freshness gap。
+- **Module configuration contract**：未来需单独 review startup configure、startup
+  readback/reject mismatch 或 explicit external provisioning contract；本任务未选择方案。
+
+任一 blocker 关闭都不能推出另一个已关闭。两类 blocker、所需 lifecycle/reset semantics 与
+可接受 module configuration contract 未完成前，020B 保持 **BLOCKED**；不得实现 shared
+roll-rate API/runtime。Executable nonzero `FlightCommand` projection 仍是独立的
+**NOT DEFINED / NOT VERIFIED** prerequisite，完成全部前置依赖及完整 Profile review 前不得进入
+ALG-007 Candidate。
+
+## Hardware / evidence boundary
 
 - Hardware access：**NO**；authorization：**NONE**；hardware validation / Level F：
   **NOT AUTHORIZED / NOT EXECUTED**。
-- Real actuator safety、dynamic closed-loop recovery on hardware 与 real Balance Recovery：
-  **NOT VERIFIED**。motor torque、fan thrust、力臂、真实轴向分配、相对/动态 authority、
-  availability → numerical authority、最大可恢复扰动和 sim-to-real 均 **UNKNOWN / NOT VERIFIED**。
-- numerical blocker 只能由足够 reviewed source/body-rate + orientation uncertainty、相关 rate
-  magnitude 与 accepted output error budget，独立 verified applicable operating envelope，或另行
-  review 的 explicit normative software/API conditioning policy 解除。policy 不能冒充 hardware
-  evidence；外部 sensor specification 不足时可能需要另行授权 characterization。数值规则冻结后
-  才进入 020B shared API/runtime implementation；另立 nonzero executable projection 的证据/安全
-  契约。020A.1 未修改 production、测试、config、launch、API/architecture 文档或历史 Result，
-  也未执行硬件验证。
+- Real actuator safety、hardware dynamic closed-loop recovery 与 real Balance Recovery：
+  **NOT VERIFIED**。
+- 020A.2 不修改 production source、tests、config、launch 或 CI，不实现 coherence mechanism、
+  configuration write/readback、`relative_roll_rate_rad_s`、roll sign wiring、Candidate 或非零
+  executable projection。
