@@ -15,8 +15,9 @@
 本文件同时承载 `Algorithm Benchmark v1` 的全局 Contract，以及任务级
 `ALG-001 Profile v1`、`ALG-002 Profile v1`、`ALG-003 Profile v1`、`ALG-004 Profile v1` 和
 `ALG-005 Profile v1` 和 `ALG-006 Profile v1`。第 14 节记录 ALG-007 **部分冻结的候选前
-软件契约**及 v0.5.0-020A.1 已冻结的 numerical evidence gap；共享 roll-rate API、非零可执行
-投影与完整 Profile 仍未冻结。它不包含任何 Candidate Result；Task Profile 的
+软件契约**、v0.5.0-020A.1 已冻结的 numerical evidence gap，以及 v0.5.0-020A.2 已冻结的
+IMU data-path / sample-coherence prerequisite；共享 roll-rate API、非零可执行投影与完整
+Profile 仍未冻结。它不包含任何 Candidate Result；Task Profile 的
 存在不表示对应 candidate 已实现或已 PASS。
 
 ## 2. 版本规则
@@ -1914,7 +1915,7 @@ roll/pitch 真实 allocation、执行器动态、最大可恢复扰动、sim-to-
 2. v0.5.0-020A.1 已完成 candidate-independent repository evidence audit。当前没有 reviewed
    body-rate measurement/uncertainty bound、orientation/pitch uncertainty bound、finite runtime
    rate envelope、accepted derived-output error budget 或 verified applicable attitude envelope。
-   parser 的 `GYRO_FULL_SCALE=2000.0 deg/s` 只是 raw conversion implementation constant；
+   parser 的 `GYRO_FULL_SCALE=2000.0 deg/s` 只是 module-reported `0x52` wire-decode constant；
    ALG-003/005/007 数值是 synthetic qualification inputs；二者都不是上述 evidence。故冻结的是
    **EVIDENCE INSUFFICIENT / GAP FROZEN**，不冻结 `theta_max`、`K_max` 或 exact guard。
 3. 对冻结映射，`||partial f/partial(p,q,r)||_2=K(theta)`，但
@@ -1927,13 +1928,22 @@ roll/pitch 真实 allocation、执行器动态、最大可恢复扰动、sim-to-
    020B boundary tests 保持 **BLOCKED ON NUMERICAL RULE**。blocker 只能由足够 reviewed source
    uncertainty + accepted output budget、独立 verified operating envelope，或另行 review 的明确
    software/API conditioning policy 解除；policy 不能冒充硬件证据。
-4. Task Spec §8 的 executable nonzero `FlightCommand` projection 是
+4. v0.5.0-020A.2 已冻结 Task Spec §7.8 的 IMU provenance 与 coherent composite-sample
+   prerequisite。当前 vendor orientation source 是 `0x53 ANGLE` Euler，ROS quaternion 由软件
+   生成，vendor `0x59` 未使用；`0x52` 是 module-reported angular velocity，不能无证据称为
+   raw MEMS rate。现有 latest-component cache + `0x53` trigger 只证明 same composite ROS
+   `Imu`，不证明 same vendor module update/cycle；丢失 gyro 或 reconnect sequence 下不能排除
+   prior gyro + new angle。owner history 支持物理设备合理预期仍为 documented vendor defaults，
+   但 Runtime 不 write/readback 验证模块配置。020B 必须在实现前另行关闭 sample-coherence /
+   lifecycle prerequisite 并建立可接受的 module configuration contract；这与 numerical blocker
+   相互独立。
+5. Task Spec §8 的 executable nonzero `FlightCommand` projection 是
    **SEPARATE REVIEWED PREREQUISITE / NOT DEFINED / NOT VERIFIED**。当前 Level B 只做
    motor hold / fan zero；caps/budget **NOT APPLICABLE**。必须另有方向、字段、绝对/
    增量、中性点、包络和安全证据，不能由硬件 metadata 或软件 fixture 推断。
-5. Roll request 来源、归一化与继承 pitch intent 的兼容关系仍待 Candidate 前评审；§14.2
+6. Roll request 来源、归一化与继承 pitch intent 的兼容关系仍待 Candidate 前评审；§14.2
    只接受已经给出的 task-local normalized request，不指定控制律。
-6. 前置依赖完成后才能 review 并版本化完整 `ALG-007 Profile v1`；本节软件向量与
+7. 前置依赖完成后才能 review 并版本化完整 `ALG-007 Profile v1`；本节软件向量与
    synthetic Level E 数值已在 Candidate 前冻结，变化须说明并升级版本，不得据 Candidate
    输出倒调。没有完整 Profile 就不能执行 Formal Qualification。
 
