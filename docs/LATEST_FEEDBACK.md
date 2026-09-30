@@ -52,7 +52,8 @@ parser 没有 vendor sample/cycle ID、per-frame source timestamp 或完整 modu
 也不使用 `0x50 TIME`。
 
 - Level 1 — same composite ROS `Imu`：**PROVEN / CURRENTLY AVAILABLE**；
-- Level 2 — fresh ordered coherent GYRO+ANGLE pair：**DESIGN FROZEN / NOT IMPLEMENTED**；
+- Level 2 — new-since-previous-pair、ordered、no-reuse coherent GYRO+ANGLE pair：
+  **DESIGN FROZEN / NOT IMPLEMENTED**；
 - Level 3 — same vendor output/update cycle：**NOT PROVEN**；
 - Level 4 — same physical sampling instant：**NOT PROVEN**；
 - lost/bad `GYRO_N+1` + arriving `ANGLE_N+1`：不能排除 `GYRO_N + ANGLE_N+1`；
@@ -64,13 +65,15 @@ logical same-sample 的精确软件含义已冻结：每个 Flight-usable pair �
 后新接受的 valid GYRO，以及同一 parser/configuration generation 内随后接受的 valid ANGLE；
 emission 后 GYRO consumed，不得由 duplicate/new ANGLE reuse。一个 ANGLE 前多个 valid GYRO
 采用 latest pending；bad GYRO 不建立 generation，bad ANGLE 不 emission 也不 consume pending
-GYRO。该 contract 不声称 same vendor cycle 或 same physical instant。
+GYRO。该 contract 不证明 bounded temporal freshness，也不声称 same vendor cycle 或 same physical
+instant。
 
 startup、disconnect/reconnect、parser reset、lifecycle reactivate 或 configuration-generation change
 必须清除/代次隔离 partial parser bytes、component cache/pending state、consumed marker、receive
 times、pair availability 与 config marker。required components 各自保留 host receive-time；fresh
 composite timestamp 不得抹去 component age。exact maximum pair/component age **NOT FROZEN**，
-现有 base freshness `0.2 s` 不自动成为 pair-age threshold。
+现有 base freshness `0.2 s` 不自动成为 pair-age threshold。finite component/pair temporal-age rule
+是 ALG-007 roll-rate availability 前的必需前置条件；timing prerequisite **OPEN**。
 
 legacy/base ALG-001～006 validity 与 ALG-007 derived prerequisite 分层：config/coherence-only failure
 默认只令未来 `relative_roll_rate_rad_s=None` / unavailable，不自动使整个 base `ImuState` invalid。
@@ -92,8 +95,12 @@ protocol-feasible；continuous-stream interleave、KEY requirement、request ass
 厂家 defaults handoff 包括：RSW `0x001E`（ACC/GYRO/ANGLE/MAG，无 quaternion）、RRATE
 `10 Hz`、BAUD `9600`、BANDWIDTH `20 Hz`、fixed GYRORANGE `2000 deg/s`、AXIS6 `0`
 （9-axis）、FILTK `30`、GYROCALTIME `1000 ms`、WZTIME `500 ms`、WZSTATIC
-`0.3 deg/s`。host serial baud `9600` 是 source-controlled；module side BAUD 与其它关键配置均
-未由 WindArmor write/readback。完整分类 matrix 见 Task Spec §7.9.6：RSW 只冻结 GYRO+ANGLE
+`0.3 deg/s`。host serial baud 由可配置 `baud` parameter 决定，当前 repository default 为 `9600`；
+module side BAUD 与其它关键配置均未由 WindArmor write/readback。active transport contract 冻结的
+是 module BAUD 必须等于 effective configured host baud，不是永久固定为 `9600`。BAUD readback
+只能在某个匹配 baud 已建立通信后进行，不能经已失败 transport 自行发现 arbitrary unknown baud；
+本设计不包含 baud scanning、auto-detection 或 automatic rewrite。完整分类 matrix 见 Task Spec
+§7.9.6：RSW 只冻结 GYRO+ANGLE
 required bits，不冻结整个 `0x001E`；GYRORANGE 是 fixed wire-decode prerequisite，不是 operating
 envelope；RRATE/BANDWIDTH/ORIENT/AXIS6/FILTK/ACCFILT 的 exact accepted values 尚未冻结。
 GX/GY/GZ offsets 与其它 calibration/device state 只 read/observe，non-default 不自动 failure，
@@ -124,11 +131,14 @@ software contract 不需要新增厂家证据，但 Level-3 vendor-cycle claim �
 - **Implementation prerequisite — coherence/config**：design 已冻结，但 typed valid-frame handling、
   pair FSM/generation、receive-time tracking、reconnect reset、`0x5F` parsing、READADDR transaction
   和 configuration validation generation 均 **NOT IMPLEMENTED**。
-- **Timing prerequisite**：component maximum-age threshold **NOT FROZEN**。
+- **Timing prerequisite**：finite component/pair temporal-age rule 是 ALG-007 roll-rate availability
+  前的 **REQUIRED** prerequisite；exact threshold **NOT FROZEN**。
 
 configuration/coherence design freeze 不关闭 numerical blocker。coherence/config implementation、
-component-age review（如需要）与 exact numerical rule 未完成前，020B 保持 **BLOCKED**；不得
-实现 shared roll-rate API/runtime。Executable nonzero `FlightCommand` projection 仍是独立的
+required finite component/pair temporal-age rule 与 exact numerical rule 未完成前，020B 保持
+**BLOCKED**。具体为 blocked on coherence implementation、configuration verification implementation、
+finite temporal-age rule 和 exact numerical conditioning rule；不得实现 shared roll-rate API/runtime。
+Executable nonzero `FlightCommand` projection 仍是独立的
 **NOT DEFINED / NOT VERIFIED** prerequisite，完成全部前置依赖及完整 Profile review 前不得进入
 ALG-007 Candidate。
 

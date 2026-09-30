@@ -1938,12 +1938,15 @@ roll/pitch 真实 allocation、执行器动态、最大可恢复扰动、sim-to-
    prior gyro + new angle。owner history 支持物理设备合理预期仍为 documented vendor defaults，
    但 Runtime 不 write/readback 验证模块配置。逻辑 same-sample 的 implementation meaning 现冻结
    为：上一 emitted pair 后新接受的 valid GYRO，加同一 parser/configuration generation 内随后
-   接受的 valid ANGLE；pair emission 后 GYRO consumed，不得 reuse。它不声称 same vendor cycle
+   接受的 valid ANGLE；pair emission 后 GYRO consumed，不得 reuse。Level 2 是 ordered/new-
+   generation/no-reuse guarantee，不证明 bounded temporal freshness，也不声称 same vendor cycle
    或 same physical instant。future implementation 还必须保留 per-component receive time，在
    startup/reconnect 建立新 configuration-validation generation，以 readback+validate 后的 current
    generation gate ALG-007 availability，并保护 calibration/device-specific state、不自动写寄存器。
-   这些 design 已冻结但均 **NOT IMPLEMENTED**；component maximum-age threshold 仍 **NOT
-   FROZEN**。020B 同时 blocked on coherence/config implementation 与独立 numerical rule。
+   finite component/pair temporal-age rule 是 ALG-007 roll-rate availability 的必需前置条件，但 exact
+   threshold 仍 **NOT FROZEN**，不得沿用 base `0.2 s`。020B 同时 blocked on coherence
+   implementation、configuration verification implementation、finite temporal-age rule 与独立 exact
+   numerical conditioning rule。
 5. Task Spec §8 的 executable nonzero `FlightCommand` projection 是
    **SEPARATE REVIEWED PREREQUISITE / NOT DEFINED / NOT VERIFIED**。当前 Level B 只做
    motor hold / fan zero；caps/budget **NOT APPLICABLE**。必须另有方向、字段、绝对/
