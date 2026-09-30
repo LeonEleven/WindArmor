@@ -237,7 +237,14 @@ relation 不完整。当前冻结的是 evidence gap，不是任意 `theta_max`/
 module-reported rate。当前同一 composite ROS `Imu` 可证明，但 same vendor module update/cycle
 不可证明；丢 gyro 或 reconnect sequence 下不能排除 prior component reuse。owner history 支持
 实际模块合理预期仍为厂家默认，但 Runtime 未 write/readback 验证配置。sample coherence/data
-path 与 numerical error-budget 是相互独立的 blocker，故 020B **BLOCKED**。normalized 双轴请求
+path 与 numerical error-budget 是相互独立的 blocker。v0.5.0-020A.3 已把 logical same-sample
+精确定义为同一 parser/configuration generation 内的 fresh ordered GYRO + subsequent ANGLE、
+no-reuse 的 Level-2 software coherent component pair，并冻结 reconnect/reset isolation、per-component
+receive-time provenance、base-vs-derived validity，以及 startup/reconnect readback+validate 的
+configuration-validation generation。该 design **FROZEN**，但 coherence、`0x5F`/READADDR 与
+configuration runtime verification 均 **NOT IMPLEMENTED**；same vendor cycle / physical instant
+仍 **NOT PROVEN**，component maximum-age threshold 与 numerical rule 仍 **NOT FROZEN**，故 020B
+**BLOCKED**。normalized 双轴请求
 到非零可执行
 `FlightCommand` 的投影也
 `NOT DEFINED / NOT VERIFIED`。因此 Candidate **BLOCKED / NOT IMPLEMENTED**，Candidate
@@ -390,16 +397,18 @@ Task Spec v1、Profile v1、`ALG006-NORMALIZED-ALLOCATION-v1` 和 inherited
 `ALG005-SYNTHETIC-PLANT-v1` 均未改变。
 
 v0.5.0-020A.1 已确认并冻结 ALG-007 roll-rate 的数值 evidence gap；v0.5.0-020A.2 已冻结
-IMU data-path、module configuration provenance 与 coherent composite-sample prerequisite。
-后续必须先通过
+IMU data-path 与 module configuration provenance；v0.5.0-020A.3 已冻结 conservative Level-2
+coherent GYRO+ANGLE component-pair、reconnect/reset、component receive-time、base/derived validity
+分层，以及 startup/reconnect configuration readback+validate 方向。后续必须先通过
 以下任一路径解除 blocker：评审完整 source/body-rate 与 orientation/pitch uncertainty、相关
 rate magnitude 和 accepted derived-output error budget；取得独立 verified applicable operating
 envelope；或单独评审明确的 normative software/API conditioning policy。software policy 不能
 表述为硬件能力或物理安全包络；若外部 sensor specification 不足，hardware/sensor
-characterization 需要另行授权。同时必须建立不允许 old gyro + new angle、reconnect prior reuse
-或 fresh timestamp 掩盖 stale component 的 coherent composite rule，并选择经 review 的 startup
-configure、readback/reject 或 external provisioning configuration contract。兼容迁移、逻辑同采样、
-有效性、sign wiring 与未来验收矩阵已由 020A 冻结；两类 blocker 与配置前置条件关闭后才能进入
+characterization 需要另行授权。同时必须实现已冻结的 no old-gyro reuse、reconnect generation、
+component receive-time 和 configuration-validation generation，另行冻结 READADDR transaction
+细节并实现 readback/reject；不得以 automatic configure/write 覆盖 calibration/device state。
+兼容迁移、逻辑同采样、有效性、sign wiring 与 future acceptance matrix 已冻结，但 implementation
+仍 pending。coherence/config implementation、numerical blocker 与配置前置条件关闭后才能进入
 020B shared API/runtime implementation。另需
 独立评审非零 executable `FlightCommand` projection；其绝对 motor rad/fan command 方向和能力缺少证据。
 runtime availability 到 numerical authority、真实 motor/fan effectiveness 与安全恢复包线
