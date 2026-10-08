@@ -18,7 +18,7 @@
 
 import math
 import threading
-import time
+from typing import Optional
 
 import rclpy
 import serial
@@ -26,7 +26,7 @@ from rclpy.lifecycle import LifecycleNode, TransitionCallbackReturn, State
 from sensor_msgs.msg import Imu
 from std_msgs.msg import String
 
-from .imu_protocol import WitImuFrameParser, quaternion_from_euler
+from .imu_protocol import ImuCoherenceState, WitImuFrameParser, quaternion_from_euler
 
 # ---------------------------------------------------------------------------
 # 重连策略常量
@@ -63,6 +63,7 @@ class ImuDriverNode(LifecycleNode):
 
         # ---- 初始化实例变量（资源在 on_configure 中创建） ----
         self._parser = None
+        self._parser_generation = 0
         self._imu_pub = None
         self._status_pub = None
         self._stop_event = None
@@ -93,7 +94,8 @@ class ImuDriverNode(LifecycleNode):
         self._topic_name = self.get_parameter("topic_name").get_parameter_value().string_value
 
         # 创建组件
-        self._parser = WitImuFrameParser()
+        self._parser_generation += 1
+        self._parser = WitImuFrameParser(generation=self._parser_generation)
         self._imu_pub = self.create_publisher(Imu, self._topic_name, 20)
         self._status_pub = self.create_publisher(String, "/imu/status", 10)
         self._stop_event = threading.Event()
@@ -107,6 +109,10 @@ class ImuDriverNode(LifecycleNode):
     def on_activate(self, state: State) -> TransitionCallbackReturn:
         """激活阶段：启动串口读取线程。"""
         self.get_logger().info("IMU 节点正在激活...")
+        if self._thread is not None and self._thread.is_alive():
+            self.get_logger().error("上一 IMU 读取线程尚未退出，拒绝重新激活")
+            return TransitionCallbackReturn.FAILURE
+        self._reset_parser()
         self._is_active = True
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._reader_loop, daemon=True)
@@ -122,15 +128,20 @@ class ImuDriverNode(LifecycleNode):
             self._stop_event.set()
         if self._thread is not None:
             self._thread.join(timeout=2.0)
-            self._thread = None
         self._close_serial()
         self._publish_status("disconnected")
+        if self._thread is not None and self._thread.is_alive():
+            self.get_logger().error("IMU 读取线程尚未退出")
+            return TransitionCallbackReturn.FAILURE
+        self._thread = None
         self.get_logger().info("IMU 节点已停用")
         return TransitionCallbackReturn.SUCCESS
 
     def on_cleanup(self, state: State) -> TransitionCallbackReturn:
         """清理阶段：销毁发布器，重置状态。"""
         self.get_logger().info("IMU 节点正在清理...")
+        if self._thread is not None and self._thread.is_alive():
+            return TransitionCallbackReturn.FAILURE
         self._close_serial()
         if self._imu_pub is not None:
             self.destroy_publisher(self._imu_pub)
@@ -168,6 +179,7 @@ class ImuDriverNode(LifecycleNode):
 
     def _try_open_serial(self) -> bool:
         """尝试打开串口，成功返回 True，失败返回 False。"""
+        self._reset_parser()
         try:
             self._serial = serial.Serial(
                 port=self._port,
@@ -190,6 +202,17 @@ class ImuDriverNode(LifecycleNode):
         except Exception:
             pass
         self._serial = None
+        self._reset_parser()
+
+    def _reset_parser(self) -> None:
+        if self._parser is not None:
+            self._parser.reset()
+            self._parser_generation = self._parser.coherence_state().generation
+
+    def coherence_state(self) -> Optional[ImuCoherenceState]:
+        """只读底层 Level-2 候选；未配置时为 None，不代表 ALG-007 可用。"""
+        parser = self._parser
+        return None if parser is None else parser.coherence_state()
 
     def _publish_status(self, status: str) -> None:
         """发布 IMU 连接状态字符串。"""
@@ -207,18 +230,28 @@ class ImuDriverNode(LifecycleNode):
 
     def _reader_loop(self) -> None:
         """串口读取主循环（后台 daemon 线程）。"""
+        # 绑定本次 activation 的资源，旧线程不能继承新 activation 的 stop event。
+        stop_event = self._stop_event
+        parser = self._parser
         reconnect_delay = INITIAL_RECONNECT_DELAY
         attempt_count = 0
 
         # 初始连接
+        if stop_event.is_set():
+            return
         if not self._try_open_serial():
             self.get_logger().info("IMU 正在尝试重连...")
             self._publish_status("reconnecting")
+        if stop_event.is_set():
+            self._close_serial()
+            return
 
         # 主循环
-        while not self._stop_event.is_set():
+        while not stop_event.is_set():
             # ---- 未连接时尝试重连 ----
-            if self._serial is None or not self._serial.is_open:
+            connection = self._serial
+            if connection is None or not connection.is_open:
+                self._close_serial()
                 if attempt_count >= MAX_RECONNECT_ATTEMPTS:
                     self.get_logger().error(
                         f"IMU 重连失败，已达最大尝试次数 {MAX_RECONNECT_ATTEMPTS}，"
@@ -232,7 +265,8 @@ class ImuDriverNode(LifecycleNode):
                     f"等待 {reconnect_delay:.1f}s）"
                 )
                 self._publish_status("reconnecting")
-                time.sleep(reconnect_delay)
+                if stop_event.wait(reconnect_delay):
+                    return
 
                 if self._try_open_serial():
                     reconnect_delay = INITIAL_RECONNECT_DELAY
@@ -242,11 +276,15 @@ class ImuDriverNode(LifecycleNode):
                         reconnect_delay * 1.5, MAX_RECONNECT_DELAY
                     )
                     attempt_count += 1
+                if stop_event.is_set():
+                    self._close_serial()
+                    return
                 continue
 
             # ---- 已连接：检查是否有可读数据 ----
+            read_generation = parser.coherence_state().generation
             try:
-                buff_count = self._serial.in_waiting
+                buff_count = connection.in_waiting
             except (serial.SerialException, OSError) as exc:
                 self.get_logger().error(f"IMU 串口连接断开: {exc}")
                 self._close_serial()
@@ -255,12 +293,12 @@ class ImuDriverNode(LifecycleNode):
                 continue
 
             if buff_count <= 0:
-                time.sleep(IDLE_SLEEP_SEC)
+                stop_event.wait(IDLE_SLEEP_SEC)
                 continue
 
             # ---- 读取并解析数据 ----
             try:
-                buff_data = self._serial.read(buff_count)
+                buff_data = connection.read(buff_count)
             except (serial.SerialException, OSError) as exc:
                 self.get_logger().error(f"读取 IMU 串口数据失败: {exc}")
                 self._close_serial()
@@ -269,7 +307,9 @@ class ImuDriverNode(LifecycleNode):
                 continue
 
             for data_byte in buff_data:
-                if self._parser.parse_byte(data_byte):
+                if stop_event.is_set():
+                    break
+                if parser.parse_byte(data_byte, generation=read_generation):
                     self._publish_imu()
 
     # ------------------------------------------------------------------

@@ -5,142 +5,91 @@
 
 ## 当前工作单元
 
-- 日期：2026-09-30；Task：`v0.5.0-020A.3 — ALG-007 IMU Coherent Component Pair +
-  Configuration Verification Contract Freeze`；task branch：
-  `docs/alg-007-imu-coherence-config-contract`。
-- task-start baseline：`origin/develop@d512fe93f5be1b2ee730ca2a32b95f854516d65d`；
-  v0.5.0-019、v0.5.0-020A、v0.5.0-020A.1 与 v0.5.0-020A.2 均已
-  **MERGED / INTEGRATED**。
+- 日期：2026-10-08；Task：`v0.5.0-020A.4 — IMU GYRO+ANGLE Level-2 软件一致组件对实现`。
+- task-start baseline：`develop@b5608969435c5f54948cc73f901d54e70fb8c69d`。
 - Stable release：`v0.4.0`；v0.5.0：**NOT RELEASED**。
 - ALG-001～006：**QUALIFIED / INTEGRATED**。ALG-006 fixed implementation SHA：
   `9a7a624713010eff48cf7112b0501266eb24521e`；Formal Qualification/Result evidence SHA：
   `6729443d5e190986c75b8521a4ec7ebd0554d34e`。
-- [ALG-007 Task Spec](algorithm_tasks/ALG-007.md) 与
-  [Benchmark §14](ALGORITHM_BENCHMARK.md#14-alg-007-planned-profile-design-v1)：020A 已冻结
-  roll-rate 公式、conditioning model、optional-derived compatibility、sign wiring 与逻辑
-  same-sample/lifecycle design；020A.1 已冻结 numerical evidence gap；020A.2 已冻结 IMU
-  data-path / module-configuration provenance；020A.3 已冻结 Level-2 coherent component-pair 与
-  startup/reconnect configuration readback+validate design，但尚未实现。
-- `relative_roll_rate_rad_s`：**PLANNED / NOT IMPLEMENTED**；exact near-singularity rule、
-  `theta_max`、`K_max`：**NOT FROZEN**。
-- ALG-007 Candidate：**BLOCKED / NOT IMPLEMENTED**；Candidate Result：**NOT CREATED**；
-  Formal Qualification：**NOT EXECUTED**。
+- 020A～020A.3 冻结的设计与厂家 provenance 见
+  [ALG-007 §7.8–7.9](algorithm_tasks/ALG-007.md#78-imu-data-path-provenance-and-sample-coherence-prerequisite--v050-020a2-frozen)
+  与 [Benchmark §14](ALGORITHM_BENCHMARK.md#14-alg-007-planned-profile-design-v1)。
+- `relative_roll_rate_rad_s`：**PLANNED / NOT IMPLEMENTED**；020B 与 ALG-007 Candidate：
+  **BLOCKED / NOT IMPLEMENTED**；Candidate Result：**NOT CREATED**；Formal Qualification：
+  **NOT EXECUTED**。本轮普通回归测试不是新一轮资格验证。
 
-## IMU data-path provenance freeze
+## Level-2 实现与接口
 
-当前 production path 的厂家 orientation source 是 `0x53 ANGLE` Euler，不是 `0x59`
-quaternion。parser 解析 `0x51 ACC`、`0x52 GYRO`、`0x53 ANGLE`，不解析/使用 `0x59`；driver
-把 `0x53` Euler 转成软件生成的 ROS `(x,y,z,w)` quaternion，下游再从该表示重建 Z-Y-X Euler。
-因此 vendor quaternion quantization 不适用于当前 active path。
+parser 在原有合法 ACC/GYRO/ANGLE decode 路径记录不可变组件与配对快照：
 
-`0x52` 应称为 **module-reported angular velocity**。厂家模块内部存在 offset、auto-calibration、
-filtering、static detection 与 low-rate zeroing/threshold behavior；当前证据不能把它无条件称为
-raw MEMS rate。WindArmor wire decode 使用厂家 `signed_int16 / 32768 * 2000 deg/s` 后转
-`rad/s`，与 documented fixed range 一致，但该范围不是 robot operating envelope。
+- 合法新 GYRO 建立 pending；一个 ANGLE 前多个合法 GYRO 使用 latest pending。
+- 同代次随后合法 ANGLE 至多形成一个 pair，成功后清除 pending；ANGLE 单独/重复到达不增加
+  pair count，也不复用已消费 GYRO。
+- 坏校验/残帧不建立合法组件；坏 ANGLE 和坏 GYRO 不消耗已有的未消费合法 pending。
+  前一 pair 的已消费 GYRO 不会因随后 bad GYRO + valid ANGLE 被重新使用。
+- 每个组件独立保存完整合法帧在主机接受时的 `received_monotonic`，不是厂家采样时间、ROS
+  发布时间或一次 serial read 的共同时间。GYRO 为 module-reported rad/s，ANGLE 为度。
+- `reset()` 清除 byte buffer、legacy ACC/GYRO/ANGLE cache、组件时间、pending、历史 pair 与
+  count，递增 generation。driver 在 activation、连接尝试、断线、停用、清理/关闭时接入；
+  reconfigure 保持代次隔离，reset 后迟到的旧 read 字节不能进入新代次。
+- 重连/空闲等待可被 stop event 打断；尚未退出的旧 reader 阻止重新激活。
 
-本工作单元直接复核了 git-ignored 的厂家《10轴IMU模块通讯协议》《用户手册》和两份应用教程；
-它们是 local external manufacturer evidence，不是 repository-tracked normative specification。
-owner 确认实际 IMU 只使用厂家上位机做过功能测试且未主动修改配置，因此物理设备**合理预期**
-仍为 documented vendor defaults；WindArmor Runtime 没有 write/readback verification，不能称为
-`VERIFIED DEFAULT`。
+parser 与 driver 的 `coherence_state()` 为只读观察接口；driver 未配置时返回 `None`。
+`latest_pair` 是本代次最近一次形成的**历史结果**，以 `(generation, pair_count)` 识别更新，
+非空不表示新的更新、有限时间有效性或 ALG-007 availability。接口详见
+[IMU 包 README](../src/imu_cybergear_ros2/README.md#imu-软件一致组件对)。
 
-## Coherent component-pair freeze
-
-当前 parser 为 ACC/GYRO/ANGLE 分别保存 latest cache；合法 `0x53` 到达时，driver 使用 latest
-ACC + latest GYRO + current ANGLE 合成一条新的 ROS `sensor_msgs/Imu` 并生成 ROS timestamp。
-parser 没有 vendor sample/cycle ID、per-frame source timestamp 或完整 module-update generation，
-也不使用 `0x50 TIME`。
-
-- Level 1 — same composite ROS `Imu`：**PROVEN / CURRENTLY AVAILABLE**；
-- Level 2 — new-since-previous-pair、ordered、no-reuse coherent GYRO+ANGLE pair：
-  **DESIGN FROZEN / NOT IMPLEMENTED**；
+- Level 1 — same composite ROS `Imu`：**AVAILABLE / LEGACY BEHAVIOR PRESERVED**；
+- Level 2 — ordered/new/no-reuse coherent GYRO+ANGLE：**IMPLEMENTED / SOFTWARE TESTED**；
 - Level 3 — same vendor output/update cycle：**NOT PROVEN**；
-- Level 4 — same physical sampling instant：**NOT PROVEN**；
-- lost/bad `GYRO_N+1` + arriving `ANGLE_N+1`：不能排除 `GYRO_N + ANGLE_N+1`；
-- reconnect 后先到 new angle：当前没有证明 parser partial/component cache 清空，不能排除
-  reconnect 前 gyro + reconnect 后 angle；
-- 上述是当前静态实现允许/不能排除的 sequence，**不是硬件已观察故障**。
+- Level 4 — same physical sampling instant：**NOT PROVEN**。
 
-logical same-sample 的精确软件含义已冻结：每个 Flight-usable pair 必须包含上一 emitted pair
-后新接受的 valid GYRO，以及同一 parser/configuration generation 内随后接受的 valid ANGLE；
-emission 后 GYRO consumed，不得由 duplicate/new ANGLE reuse。一个 ANGLE 前多个 valid GYRO
-采用 latest pending；bad GYRO 不建立 generation，bad ANGLE 不 emission 也不 consume pending
-GYRO。该 contract 不证明 bounded temporal freshness，也不声称 same vendor cycle 或 same physical
-instant。
+legacy ANGLE 触发 ROS 发布仍允许 latest cached GYRO，并不代表严格 pair；本轮没有将 ROS
+发布收缩为每次 fresh ACC+GYRO+ANGLE。新 pair 只在底层形成可观察的软件候选，没有被 Flight
+消费，ALG-001～006 base validity、默认控制行为、公开 ROS 话题/服务/参数保持不变。
 
-startup、disconnect/reconnect、parser reset、lifecycle reactivate 或 configuration-generation change
-必须清除/代次隔离 partial parser bytes、component cache/pending state、consumed marker、receive
-times、pair availability 与 config marker。required components 各自保留 host receive-time；fresh
-composite timestamp 不得抹去 component age。exact maximum pair/component age **NOT FROZEN**，
-现有 base freshness `0.2 s` 不自动成为 pair-age threshold。finite component/pair temporal-age rule
-是 ALG-007 roll-rate availability 前的必需前置条件；timing prerequisite **OPEN**。
+## 厂家与配置依据
 
-legacy/base ALG-001～006 validity 与 ALG-007 derived prerequisite 分层：config/coherence-only failure
-默认只令未来 `relative_roll_rate_rad_s=None` / unavailable，不自动使整个 base `ImuState` invalid。
-ALG-001～006 validity semantics 未改变。
+本工作单元直接复核 git-ignored `reference/document/IMU/` 的《10轴IMU模块通讯协议》与
+《用户手册》，未将 PDF 加入 Git。厂家 `0x52` signed-int16 / 32768 * 2000 deg/s 与 `0x53`
+signed-int16 / 32768 * 180 deg 支持现有 wire decode；不证明厂家规范帧顺序、cycle identity
+或物理同采样。当前 orientation source 仍为 `0x53` Euler，ROS quaternion 为软件转换；
+`0x50 TIME` 与 `0x59` quaternion 均未新增解析/使用。
 
-## Configuration verification 与 specification applicability
+owner 历史仅支持设备合理预期仍为 documented vendor defaults，**NOT RUNTIME VERIFIED**。
+`0x52` 包含厂家 offset、auto-calibration、filtering、static detection/low-rate zeroing 影响，
+不能称为无条件 raw MEMS rate。wire gyro 满量程不是 robot operating envelope；厂家 typical
+accuracy/noise 不是 guaranteed hard maximum，100 Hz noise specification 的 applicability
+仍未证明；配置分类/defaults 与 specification applicability 完整保留在 Task Spec §7.8–7.9。
 
-选定 design 是 **STARTUP / RECONNECT READBACK + VALIDATE**，required mismatch/readback failure
-只让 ALG-007 derived capability fail closed；它不是 startup factory reset、blind configure-all 或
-external provisioning only。每次 startup、reconnect、relevant reset/transport regeneration 建立新
-configuration-validation generation；validation 完成前及其后第一对 new coherent GYRO+ANGLE
-形成前，ALG-007 unavailable。上一连接 validation 不得继承。
+选定配置 design 仍为 **STARTUP / RECONNECT READBACK + VALIDATE**，required failure 只 gate
+未来 ALG-007 derived capability，不因 config/coherence-only failure 自动使 base IMU invalid。
+`READADDR/0x5F` transaction、parser 与 configuration validation generation 本轮均
+**NOT IMPLEMENTED**；continuous-stream interleave、KEY、request association、timeout 等细节
+仍 **NOT FULLY SPECIFIED / NOT FROZEN**。上一连接 validation 不能跨代次继承。
 
-厂家 `READADDR 0x27` 和固定返回四个连续 16-bit registers 的 `0x55 0x5F` 使 readback
-protocol-feasible；continuous-stream interleave、KEY requirement、request association、timeout 与
-暂停 streaming 的 exact transaction 仍 **NOT FULLY SPECIFIED / NOT FROZEN**。默认政策是
-**DO NOT AUTO-WRITE / DO NOT SAVE / DO NOT RESTORE FACTORY DEFAULTS**。
+默认 **DO NOT AUTO-WRITE / DO NOT SAVE / DO NOT RESTORE FACTORY DEFAULTS**；校准状态受保护，
+非零 offset 不自动视为 failure 或清零。module BAUD 必须等于 effective configured host baud，
+不是永久固定 9600；本轮没有 baud scan/auto-detection/rewrite 或任何寄存器读写。
 
-厂家 defaults handoff 包括：RSW `0x001E`（ACC/GYRO/ANGLE/MAG，无 quaternion）、RRATE
-`10 Hz`、BAUD `9600`、BANDWIDTH `20 Hz`、fixed GYRORANGE `2000 deg/s`、AXIS6 `0`
-（9-axis）、FILTK `30`、GYROCALTIME `1000 ms`、WZTIME `500 ms`、WZSTATIC
-`0.3 deg/s`。host serial baud 由可配置 `baud` parameter 决定，当前 repository default 为 `9600`；
-module side BAUD 与其它关键配置均未由 WindArmor write/readback。active transport contract 冻结的
-是 module BAUD 必须等于 effective configured host baud，不是永久固定为 `9600`。BAUD readback
-只能在某个匹配 baud 已建立通信后进行，不能经已失败 transport 自行发现 arbitrary unknown baud；
-本设计不包含 baud scanning、auto-detection 或 automatic rewrite。完整分类 matrix 见 Task Spec
-§7.9.6：RSW 只冻结 GYRO+ANGLE
-required bits，不冻结整个 `0x001E`；GYRORANGE 是 fixed wire-decode prerequisite，不是 operating
-envelope；RRATE/BANDWIDTH/ORIENT/AXIS6/FILTK/ACCFILT 的 exact accepted values 尚未冻结。
-GX/GY/GZ offsets 与其它 calibration/device state 只 read/observe，non-default 不自动 failure，
-绝不在 startup 清零。GYROCALITHR/GYROCALTIME/WZTIME/WZSTATIC 要求 future runtime
-observability 供 error-model provenance，但 exact accepted values 尚未冻结，也不得自动写入。
+## 软件验证与剩余前置条件
 
-- gyro range 与 `0.061035... deg/s/LSB` protocol quantization：**DIRECTLY APPLICABLE TO WIRE
-  DECODE**，但不是 operating/error bound；
-- Euler `0.005493... deg/LSB` protocol quantization：**DIRECTLY APPLICABLE**；
-- gyro RMS noise `0.028~0.07 deg/s-rms @ 100 Hz bandwidth`：**NOT PROVEN DIRECTLY
-  APPLICABLE**；module bandwidth 无 readback，owner-history expectation 为 default `20 Hz`；
-- static zero drift 与 temperature drift：**CONDITIONALLY APPLICABLE**，不是 hard maximum；
-- pitch/roll static `0.1 deg`、dynamic `0.5 deg` typical accuracy：**CONDITIONALLY APPLICABLE**，
-  不是 guaranteed hard maximum；
-- 与正式表冲突的产品特点 `0.05/0.1 deg`：不得用于 numerical guard；
-- vendor `0x59` quaternion quantization：**NOT APPLICABLE TO CURRENT ACTIVE DATA PATH**。
-
-厂家 frame type/RSW bit mapping 不构成 ACC→GYRO→ANGLE normative order；wire order **NOT
-SPECIFIED**。`0x50 TIME` 没有 sample sequence、per-component timestamp 或与 GYRO/ANGLE 的
-normative binding，**NOT SUFFICIENT AS AUTHORITATIVE SAMPLE ID**。对 conservative Level-2
-software contract 不需要新增厂家证据，但 Level-3 vendor-cycle claim 仍被阻止。
-
-## 独立 blockers 与下一步
-
-- **Blocker A — numerical uncertainty/error budget**：仍缺 deterministic combined source
-  uncertainty、relevant rate magnitude、accepted derived roll-rate error budget 与 exact guard；
-  `EULER_GIMBAL_LOCK_COS_TOLERANCE=1e-9` 仍只是 mathematical/implementation guard。
-- **Implementation prerequisite — coherence/config**：design 已冻结，但 typed valid-frame handling、
-  pair FSM/generation、receive-time tracking、reconnect reset、`0x5F` parsing、READADDR transaction
-  和 configuration validation generation 均 **NOT IMPLEMENTED**。
-- **Timing prerequisite**：finite component/pair temporal-age rule 是 ALG-007 roll-rate availability
-  前的 **REQUIRED** prerequisite；exact threshold **NOT FROZEN**。
-
-configuration/coherence design freeze 不关闭 numerical blocker。coherence/config implementation、
-required finite component/pair temporal-age rule 与 exact numerical rule 未完成前，020B 保持
-**BLOCKED**。具体为 blocked on coherence implementation、configuration verification implementation、
-finite temporal-age rule 和 exact numerical conditioning rule；不得实现 shared roll-rate API/runtime。
-Executable nonzero `FlightCommand` projection 仍是独立的
-**NOT DEFINED / NOT VERIFIED** prerequisite，完成全部前置依赖及完整 Profile review 前不得进入
-ALG-007 Candidate。
+- 定向 parser + fake serial/lifecycle 测试：**PASS，86 项**；覆盖 normal pair、ANGLE alone/
+  duplicate、latest pending、坏校验、跨 read/多帧、独立组件时间、旧缓存/残帧/迟到 read 的
+  reset/reconnect 隔离、deactivate/reactivate、cleanup/reconfigure、shutdown 与 legacy 发布。
+- 完整 `./scripts/ci_software.sh`：**PASS**；五包构建、分包测试（IMU/电机 471、fan 159、
+  Flight/interfaces 2022）与五包完整测试通过，`colcon test-result` 汇总 **2683 tests，
+  0 errors / 0 failures / 0 skipped**。ALG-001～006 回归通过，未执行新的正式资格验证。
+- `git diff --check`、CI safety checker：**PASS**；三份更新 Markdown 文档的本地链接与
+  锚点扫描：**PASS，58 项**。软件测试/构建不构成真实串口或执行器验证。
+- **Configuration prerequisite**：readback transaction、runtime validation/generation 尚未实现。
+- **Timing prerequisite**：必需的 finite component/pair temporal-age rule 尚未冻结；base freshness
+  `0.2 s` 不能自动作为 pair-age threshold，Level-2 不保证 bounded temporal freshness。
+- **Numerical blocker**：deterministic combined uncertainty/error budget、relevant rate magnitude、
+  exact near-singularity rule、`theta_max`、`K_max` 仍 **NOT FROZEN**；现有
+  `EULER_GIMBAL_LOCK_COS_TOLERANCE=1e-9` 只是 mathematical/implementation guard。
+- 非零 executable `FlightCommand` projection、物理 motor/fan authority 与 allocation 仍为独立
+  **NOT DEFINED / NOT VERIFIED** 前置条件；本轮未实现 020B、ALG-007 Candidate 或 roll-rate API。
 
 ## Hardware / evidence boundary
 
@@ -148,6 +97,5 @@ ALG-007 Candidate。
   **NOT AUTHORIZED / NOT EXECUTED**。
 - Real actuator safety、hardware dynamic closed-loop recovery 与 real Balance Recovery：
   **NOT VERIFIED**。
-- 020A.3 不修改 production source、tests、config、launch 或 CI，不实现 coherence mechanism、
-  configuration write/readback、numerical guard、`relative_roll_rate_rad_s`、020B、Candidate 或
-  非零 executable projection。
+- 本轮所有帧/transport/lifecycle 验证只使用软件字节、fake serial 与进程内 ROS；未读写真实 IMU，
+  未访问 CAN/GPIO/PWM、电机或风扇，未修改配置、硬件映射、Flight takeover 或硬件 launch。
