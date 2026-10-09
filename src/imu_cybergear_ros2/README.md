@@ -36,6 +36,34 @@
 后端、端口、波特率、运动参数和安全参数统一由
 [`config/imu_cybergear_params.yaml`](config/imu_cybergear_params.yaml) 管理。
 
+## IMU 软件一致组件对
+
+`WitImuFrameParser.parse_byte()` 仍只在合法 `0x53 ANGLE` 完成时返回 `True`；
+`latest_imu_values()` 与 `/imu/data_raw` 仍使用 latest ACC/GYRO/ANGLE，ANGLE 单独或重复到达
+也可发布 legacy ROS `Imu`。新配对状态不收缩这些公开行为，不改变 Flight 基础有效性。
+
+parser 与 `ImuDriverNode.coherence_state()` 提供不可变 `ImuCoherenceState` 快照；driver 未配置时
+返回 `None`。`latest_component` 是最近接受的合法 ACC/GYRO/ANGLE 帧，`pending_gyro` 是未消费
+的最新合法 GYRO，`latest_pair` 是本代次最近一次形成的 `GyroAnglePair` 历史结果。
+读取快照不消费 pair；以 `(generation, pair_count)` 识别新结果，不能把非空 `latest_pair` 当作
+新的更新或时间有效性保证。`GyroAnglePair.sequence` 对应本代次 `pair_count`。
+
+- 合法 GYRO 建立/替换 pending；同代次随后合法 ANGLE 形成一对并清除 pending。
+- 无新 GYRO 的 ANGLE 不增加 pair count；坏校验不产生组件，已消费的 GYRO 绝不复用。
+  坏 ANGLE 或坏 GYRO 不消耗已有的未消费合法 pending；后续合法 ANGLE 可使用该 pending。
+- `pair.gyro` / `pair.angle` 各自保存 `frame_type`、不可变 `values`、`generation` 与
+  `received_monotonic`；GYRO 单位为 rad/s，ANGLE 为度。时间由完整合法帧在主机接受时的
+  `time.monotonic()` 记录，不是厂家采样时间或 ROS 发布时间，也不是 serial read 的共同时间。
+- `reset()` 建立新 generation，清除残帧、ACC/GYRO/ANGLE cache、组件时间、pending、pair 和
+  count；driver 在 activation、连接尝试、断线、停用及清理/关闭时调用，重新配置也不复用旧
+  generation。driver 在 read 开始前捕获代次，通过可选 `parse_byte(..., generation=...)`
+  拒绝 reset 后迟到的旧 read 字节；尚未退出的旧 reader 会阻止重新激活。
+
+以上只实现/测试 Level-2 ordered/new/no-reuse 软件一致性，不证明 Level-3 厂家同更新周期或
+Level-4 物理同采样；也不保证有限组件年龄。本轮仅形成底层可观察候选，不进入 Flight 或声明
+ALG-007 可用。配置读回验证、有限组件/pair 年龄规则和 roll-rate 数值规则仍是独立前置条件，
+见 [ALG-007 §7.9](../../docs/algorithm_tasks/ALG-007.md#79-imu-coherent-component-pair-and-configuration-verification-contract--v050-020a3-frozen)。
+
 ## 启动接口
 
 以下 launch 都会访问真实硬件，只有在本次运行已获授权后才能执行：

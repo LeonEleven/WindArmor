@@ -25,7 +25,9 @@
 import math
 import struct
 import threading
-from typing import Dict, List, Tuple
+import time
+from dataclasses import dataclass
+from typing import Callable, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # 协议常量（根据 IMU 出厂量程设定，如更换量程需同步修改）
@@ -57,6 +59,36 @@ def _hex_to_short(raw_data: bytes) -> List[int]:
     return list(struct.unpack("hhhh", bytearray(raw_data)))
 
 
+@dataclass(frozen=True)
+class ImuFrameComponent:
+    """合法帧快照；values 单位沿用 legacy decode，时间为主机完整帧接受时间。"""
+
+    frame_type: int
+    values: Tuple[float, float, float]
+    received_monotonic: float
+    generation: int
+
+
+@dataclass(frozen=True)
+class GyroAnglePair:
+    """Level-2 软件候选，不保证厂家周期、物理同采样或有限组件年龄。"""
+
+    gyro: ImuFrameComponent
+    angle: ImuFrameComponent
+    sequence: int
+
+
+@dataclass(frozen=True)
+class ImuCoherenceState:
+    """只读状态；latest_pair 是历史结果，更新由 (generation, pair_count) 标识。"""
+
+    generation: int
+    latest_component: Optional[ImuFrameComponent]
+    pending_gyro: Optional[ImuFrameComponent]
+    latest_pair: Optional[GyroAnglePair]
+    pair_count: int
+
+
 class WitImuFrameParser:
     """WIT IMU 11 字节串口帧逐字节解析器。
 
@@ -68,8 +100,17 @@ class WitImuFrameParser:
     安全地调用 parse_byte 和 latest_imu_values。
     """
 
-    def __init__(self):
+    def __init__(
+        self, *, monotonic_clock: Callable[[], float] = time.monotonic,
+        generation: int = 0,
+    ):
         self._lock = threading.Lock()
+        self._monotonic_clock = monotonic_clock
+        self._generation = generation
+        self._latest_component = None
+        self._pending_gyro = None
+        self._latest_pair = None
+        self._pair_count = 0
         self._key = 0
         self._buff: Dict[int, int] = {}
         # ---- 以下为最新解析结果（受 _lock 保护） ----
@@ -87,16 +128,40 @@ class WitImuFrameParser:
         self._key = 0
         self._buff.clear()
 
-    def parse_byte(self, raw_byte: int) -> bool:
+    def reset(self) -> None:
+        """建立新解析/连接代次，清除残帧、legacy 缓存与全部配对状态。"""
+        with self._lock:
+            self._generation += 1
+            self._reset_buffer()
+            self.acceleration = [0.0, 0.0, 0.0]
+            self.angular_velocity = [0.0, 0.0, 0.0]
+            self.angle_degree = [0.0, 0.0, 0.0]
+            self._latest_component = None
+            self._pending_gyro = None
+            self._latest_pair = None
+            self._pair_count = 0
+
+    def coherence_state(self) -> ImuCoherenceState:
+        """返回不可变快照；保留各组件时间，不将 ROS 发布时间当作组件时间。"""
+        with self._lock:
+            return ImuCoherenceState(
+                self._generation, self._latest_component, self._pending_gyro,
+                self._latest_pair, self._pair_count,
+            )
+
+    def parse_byte(self, raw_byte: int, *, generation: Optional[int] = None) -> bool:
         """向解析器喂入一个字节。
 
         参数：
             raw_byte: 从串口读取的单个字节（0~255）。
+            generation: 可选的 read 开始代次；reset 后迟到的旧 read 字节被拒绝。
 
         返回：
             当且仅当成功解析到一个角度帧（0x53）时返回 `True`。
         """
         with self._lock:
+            if generation is not None and generation != self._generation:
+                return False
             self._buff[self._key] = raw_byte
             self._key += 1
 
@@ -131,9 +196,30 @@ class WitImuFrameParser:
                         raw[i] / INT16_MAX * ANGLE_FULL_SCALE
                         for i in range(3)
                     ]
-                    self._reset_buffer()
-                    return True
                 # 0x54 磁场帧忽略
+
+                values = {
+                    FRAME_TYPE_ACCEL: self.acceleration,
+                    FRAME_TYPE_GYRO: self.angular_velocity,
+                    FRAME_TYPE_ANGLE: self.angle_degree,
+                }.get(frame_type)
+                if values is not None:
+                    component = ImuFrameComponent(
+                        frame_type, tuple(values), self._monotonic_clock(),
+                        self._generation,
+                    )
+                    self._latest_component = component
+                    if frame_type == FRAME_TYPE_GYRO:
+                        self._pending_gyro = component
+                    elif frame_type == FRAME_TYPE_ANGLE:
+                        if self._pending_gyro is not None:
+                            self._pair_count += 1
+                            self._latest_pair = GyroAnglePair(
+                                self._pending_gyro, component, self._pair_count,
+                            )
+                            self._pending_gyro = None
+                        self._reset_buffer()
+                        return True
 
             self._reset_buffer()
             return False

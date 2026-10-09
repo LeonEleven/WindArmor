@@ -299,6 +299,13 @@ Flight `ImuState` 还提供与 `relative_pitch_rad` 同软件正方向的
 `angular_velocity_rad_s` 的 IMU/body frame 语义保持不变，详见
 [Flight Control API](docs/FLIGHT_CONTROL_API.md)。
 
+IMU parser/driver 另提供只读的 Level-2 GYRO→ANGLE 软件一致组件对候选：每对使用同代次内
+新接受且只消费一次的 GYRO 与随后合法 ANGLE，分别保留主机单调接收时间；断线、重连、reset
+和 lifecycle 停用/重新激活清除旧状态。原有 ANGLE 触发的 ROS `Imu` 发布与 ALG-001～006
+基础有效性语义保持不变。该候选不证明厂家周期同步或物理同采样，也尚不满足 ALG-007 输入
+前置条件：配置读回验证、有限组件年龄阈值与 roll-rate 数值规则仍未完成。接口见
+[IMU 包说明](src/imu_cybergear_ros2/README.md#imu-软件一致组件对)。
+
 ## 测试
 
 仓库完整纯软件 CI 入口为：

@@ -9,6 +9,7 @@
 import math
 import struct
 import threading
+from dataclasses import FrozenInstanceError
 
 import pytest
 
@@ -344,6 +345,159 @@ class TestWitImuFrameParser:
         _, _, angle = parser.latest_imu_values()
         assert angle[0] == pytest.approx(0.0, abs=0.01)
         assert angle[1] == pytest.approx(90.0, abs=0.01)
+
+
+class TestGyroAngleCoherence:
+    """纯字节帧验证 Level-2 软件候选；不连接串口，也不声明厂家同步。"""
+
+    @pytest.mark.parametrize(
+        "types, expected_count, expected_gyro",
+        [
+            ([FRAME_TYPE_GYRO, FRAME_TYPE_ANGLE], 1, 100),
+            ([FRAME_TYPE_ACCEL, FRAME_TYPE_GYRO, FRAME_TYPE_ANGLE], 1, 200),
+            ([FRAME_TYPE_ANGLE], 0, None),
+            ([FRAME_TYPE_ACCEL, FRAME_TYPE_ANGLE], 0, None),
+            ([FRAME_TYPE_GYRO], 0, None),
+            ([FRAME_TYPE_ANGLE, FRAME_TYPE_GYRO], 0, None),
+            ([FRAME_TYPE_GYRO, FRAME_TYPE_ANGLE, FRAME_TYPE_ANGLE], 1, 100),
+            ([FRAME_TYPE_GYRO, FRAME_TYPE_GYRO, FRAME_TYPE_ANGLE], 1, 200),
+            ([FRAME_TYPE_GYRO, FRAME_TYPE_ANGLE, FRAME_TYPE_GYRO,
+              FRAME_TYPE_ANGLE], 2, 300),
+        ],
+    )
+    def test_order_latest_pending_and_no_reuse(self, types, expected_count,
+                                             expected_gyro):
+        parser = WitImuFrameParser()
+        for index, frame_type in enumerate(types, 1):
+            frame = _build_frame(frame_type, [index * 100, 0, 0, 0])
+            assert _feed_frame(parser, frame) == (frame_type == FRAME_TYPE_ANGLE)
+        state = parser.coherence_state()
+        assert state.pair_count == expected_count
+        if expected_gyro is None:
+            assert state.latest_pair is None
+        else:
+            pair = state.latest_pair
+            assert pair.sequence == expected_count
+            assert pair.gyro.frame_type == FRAME_TYPE_GYRO
+            assert pair.angle.frame_type == FRAME_TYPE_ANGLE
+            assert pair.gyro.generation == pair.angle.generation == state.generation
+            assert pair.gyro.values[0] == pytest.approx(
+                expected_gyro / INT16_MAX * GYRO_FULL_SCALE * math.pi / 180.0)
+
+    @pytest.mark.parametrize("prior_pair", [False, True])
+    def test_bad_gyro_does_not_reuse_consumed_or_create_component(self, prior_pair):
+        parser = WitImuFrameParser()
+        if prior_pair:
+            _feed_frame(parser, _build_frame(FRAME_TYPE_GYRO, [100, 0, 0, 0]))
+            _feed_frame(parser, _build_frame(FRAME_TYPE_ANGLE, [200, 0, 0, 0]))
+        before = parser.coherence_state()
+        bad = bytearray(_build_frame(FRAME_TYPE_GYRO, [300, 0, 0, 0]))
+        bad[-1] ^= 1
+        assert not _feed_frame(parser, bad)
+        assert parser.coherence_state() == before
+        assert _feed_frame(parser, _build_frame(FRAME_TYPE_ANGLE, [400, 0, 0, 0]))
+        after = parser.coherence_state()
+        assert after.pair_count == before.pair_count
+        assert after.latest_pair == before.latest_pair
+        assert after.pending_gyro is None
+
+    @pytest.mark.parametrize("bad_type", [FRAME_TYPE_GYRO, FRAME_TYPE_ANGLE])
+    def test_bad_frame_preserves_unconsumed_valid_pending(self, bad_type):
+        parser = WitImuFrameParser()
+        _feed_frame(parser, _build_frame(FRAME_TYPE_GYRO, [100, 0, 0, 0]))
+        before = parser.coherence_state()
+        bad = bytearray(_build_frame(bad_type, [300, 0, 0, 0]))
+        bad[-1] ^= 1
+        assert not _feed_frame(parser, bad)
+        assert parser.coherence_state() == before
+        assert _feed_frame(parser, _build_frame(FRAME_TYPE_ANGLE, [400, 0, 0, 0]))
+        assert parser.coherence_state().latest_pair.gyro == before.pending_gyro
+        assert parser.coherence_state().pending_gyro is None
+
+    def test_component_times_and_immutable_snapshots(self):
+        now = [10.0]
+        parser = WitImuFrameParser(monotonic_clock=lambda: now[0])
+        _feed_frame(parser, _build_frame(FRAME_TYPE_GYRO, [100, 200, 300, 0]))
+        pending = parser.coherence_state()
+        now[0] = 70.0  # 尚未冻结时间阈值；软件 FSM 允许长间隔。
+        _feed_frame(parser, _build_frame(FRAME_TYPE_ANGLE, [400, 500, 600, 0]))
+        state = parser.coherence_state()
+        assert state.latest_pair.gyro.received_monotonic == 10.0
+        assert state.latest_pair.angle.received_monotonic == 70.0
+        assert state.latest_pair.gyro == pending.pending_gyro
+        assert pending.latest_pair is None
+        with pytest.raises(FrozenInstanceError):
+            state.pair_count = 9
+        with pytest.raises(FrozenInstanceError):
+            state.latest_pair.gyro.received_monotonic = 99.0
+        with pytest.raises(TypeError):
+            state.latest_pair.gyro.values[0] = 99.0
+
+    @pytest.mark.parametrize("chunk_size", [1, 3, 10, 11, 15, 44])
+    def test_read_segmentation_and_partial_frame(self, chunk_size):
+        times = iter([10.0, 11.0, 12.0, 13.0])
+        parser = WitImuFrameParser(monotonic_clock=lambda: next(times))
+        stream = b"".join(_build_frame(kind, [100, 0, 0, 0]) for kind in [
+            FRAME_TYPE_GYRO, FRAME_TYPE_ANGLE, FRAME_TYPE_GYRO, FRAME_TYPE_ANGLE])
+        publications = 0
+        for start in range(0, len(stream), chunk_size):
+            for byte in stream[start:start + chunk_size]:
+                publications += parser.parse_byte(byte)
+        assert publications == 2
+        state = parser.coherence_state()
+        assert state.pair_count == 2
+        assert state.latest_pair.gyro.received_monotonic == 12.0
+        assert state.latest_pair.angle.received_monotonic == 13.0
+        frame = _build_frame(FRAME_TYPE_GYRO, [200, 0, 0, 0])
+        _feed_frame(parser, frame[:-1])
+        assert parser.coherence_state() == state
+
+    def test_reset_clears_all_caches_and_rejects_old_read_remainder(self):
+        parser = WitImuFrameParser()
+        for kind in [FRAME_TYPE_ACCEL, FRAME_TYPE_GYRO, FRAME_TYPE_ANGLE,
+                     FRAME_TYPE_GYRO]:
+            _feed_frame(parser, _build_frame(kind, [100, 200, 300, 0]))
+        old = parser.coherence_state()
+        partial = _build_frame(FRAME_TYPE_ANGLE, [400, 0, 0, 0])
+        _feed_frame(parser, partial[:6])
+        parser.reset()
+        fresh = parser.coherence_state()
+        assert fresh.generation == old.generation + 1
+        assert fresh.pending_gyro is None
+        assert fresh.latest_pair is None
+        assert fresh.latest_component is None
+        assert fresh.pair_count == 0
+        assert parser.latest_imu_values() == ([0.0] * 3, [0.0] * 3, [0.0] * 3)
+        for byte in partial[6:] + _build_frame(FRAME_TYPE_GYRO, [500, 0, 0, 0]):
+            assert not parser.parse_byte(byte, generation=old.generation)
+        assert parser.coherence_state() == fresh
+        assert _feed_frame(parser, _build_frame(FRAME_TYPE_ANGLE, [600, 0, 0, 0]))
+        assert parser.coherence_state().latest_pair is None
+        _feed_frame(parser, _build_frame(FRAME_TYPE_GYRO, [700, 0, 0, 0]))
+        _feed_frame(parser, _build_frame(FRAME_TYPE_ANGLE, [800, 0, 0, 0]))
+        assert parser.coherence_state().latest_pair.gyro.generation == fresh.generation
+
+    def test_garbage_and_ignored_frames_do_not_create_components(self):
+        parser = WitImuFrameParser()
+        _feed_frame(parser, _build_frame(FRAME_TYPE_GYRO, [100, 0, 0, 0]))
+        state = parser.coherence_state()
+        _feed_frame(parser, bytes([0x00, 0xFF, 0xAA]))
+        for kind in [FRAME_TYPE_MAG, 0x50, 0x59, 0x5F]:
+            _feed_frame(parser, _build_frame(kind, [200, 0, 0, 0]))
+            assert parser.coherence_state() == state
+        _feed_frame(parser, _build_frame(FRAME_TYPE_ANGLE, [300, 0, 0, 0]))
+        assert parser.coherence_state().latest_pair.gyro == state.pending_gyro
+
+    def test_legacy_publication_can_use_cache_without_new_pair(self):
+        parser = WitImuFrameParser()
+        _feed_frame(parser, _build_frame(FRAME_TYPE_GYRO, [100, 0, 0, 0]))
+        angle = _build_frame(FRAME_TYPE_ANGLE, [8192, 0, 0, 0])
+        assert _feed_frame(parser, angle)
+        pair = parser.coherence_state().latest_pair
+        assert _feed_frame(parser, angle)
+        assert parser.latest_imu_values()[1] == list(pair.gyro.values)
+        assert parser.latest_imu_values()[2] == [45.0, 0.0, 0.0]
+        assert parser.coherence_state().latest_pair == pair
 
 
 # =========================================================================
