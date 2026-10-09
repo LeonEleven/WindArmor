@@ -64,6 +64,37 @@ Level-4 物理同采样；也不保证有限组件年龄。本轮仅形成底层
 ALG-007 可用。配置读回验证、有限组件/pair 年龄规则和 roll-rate 数值规则仍是独立前置条件，
 见 [ALG-007 §7.9](../../docs/algorithm_tasks/ALG-007.md#79-imu-coherent-component-pair-and-configuration-verification-contract--v050-020a3-frozen)。
 
+## IMU 离线配置检查与匿名读回应答
+
+`encode_readaddr(start_address)` 编码 `FF AA 27 <start> 00`，仅返回字节，不执行串口写入。
+`decode_register_response(frame)` 校验完整 `0x55 0x5F` 帧并返回四个 unsigned little-endian
+16-bit word。现有 parser/reader 可解析穿插在普通连续帧中的 `0x5F`，不改变 ANGLE 发布或
+GYRO→ANGLE 配对。没有新增参数、读取线程、topic/service 或自动串口写入。
+
+`WitImuFrameParser.register_response_state()` 返回不可变匿名接收历史：`generation`、
+`latest_response`、`response_count`、`checksum_failure_count`、`partial_response`。
+`latest_response` 只含 `words`、`received_monotonic` 和 `generation`，**没有请求地址或验证
+generation**。无请求、重复或迟到的合法帧仍只是匿名诊断记录，不能标为已关联寄存器；坏
+校验不更新合法历史，残帧不产生结果。reset/断线/重连/生命周期变化清除旧历史与残帧；
+`parse_byte(..., generation=...)` 拒绝旧 read 的返回字节。非空历史不表示事务成功。
+
+`check_imu_configuration(registers, host_baud=...)` 是纯离线检查，输入为**调用者已独立确认
+地址**的 `{address: unsigned_word}`，不得将匿名应答直接补地址后输入。检查结果分别提供：
+
+- `required_values_passed`：RSW 的 GYRO/ANGLE 位 `0x000C`、GYRORANGE 低四位 `0x03`（当前
+  2000 deg/s 解码契约）、BAUD 低四位对应波特率与实际 host baud 一致；不强制全部设备 9600。
+- `observation_complete`：§7.9.6 的全部配置与 error-model provenance 寄存器都有值。
+  必需值检查通过但 provenance 缺失时不能声称整套配置已验证。
+- `observed_registers`、`missing_required`、`missing_provenance`、`failures`：不可变的 raw
+  word、缺失项与规则失败原因。RRATE/BANDWIDTH/ORIENT/AXIS6/FILTK/ACCFILT、校准阈值/
+  时间/静态阈值只记录，不因偏离厂家默认值失败；非零 gyro offset 允许，保留原 wire word。
+
+**启动/重连 READADDR 事务、连接配置验证快照及验证后的新 pair gate 尚未实现。** 厂家
+`0x5F` 不回显地址/ID，单在途不能排除上一请求的延迟重复帧。资料也未充分说明 KEY 与
+连续流事务规则，因此不能用多窗口 fake 成功替代真实关联证据；本轮不自动发 READADDR、
+KEY、SAVE、校准或配置写命令。离线规则 PASS 不等于真实设备读回成功、当前连接配置验证
+或 ALG-007 READY。继续实现事务前须补齐关联依据或明确接受保守受限的交付范围。
+
 ## 启动接口
 
 以下 launch 都会访问真实硬件，只有在本次运行已获授权后才能执行：
