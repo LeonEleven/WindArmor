@@ -429,16 +429,39 @@ E-STOP、物理断电、供电、现场观察、执行与证据分类。
 完整分支职责、PR、release/hotfix 和保护规则见
 [开发协作流程](DEVELOPMENT_WORKFLOW.md)。算法成员的标准协作顺序是：
 
-1. 从 `develop` 获取最新集成代码；
-2. 为单一算法任务创建 `feature/algo-<short-name>` 短期分支；
+1. 从 `dev` 获取最新协作者集成代码；
+2. 基于最新 `origin/dev` 为单一算法任务创建自己的 `feature/algo-<short-name>` 短期分支；
 3. 实现算法并运行对应 unit test；
 4. 运行纯软件 synthetic DRY_RUN，确认输出、safe-stop 和无执行许可状态；
-5. push 任务分支并向 `develop` 创建 PR；
+5. push 任务分支并向 `dev` 创建 PR；
 6. 等待 WindArmor Software CI；
 7. 由 maintainer review 算法边界、API、测试和安全假设；
-8. review 与 CI 通过后合入 `develop`，再删除短期分支。
+8. review 与 CI 通过后，由维护者批准合入 `dev`，再按授权删除短期分支。
+
+工作区干净且已获得任务分支创建授权时，可按以下示例获取基线并创建分支
+（将 `feature/algo-pitch-control` 换成当前任务的独立名称）：
+
+```bash
+git status --short --branch
+git fetch origin dev
+git switch -c feature/algo-pitch-control origin/dev
+```
+
+完成算法开发和软件测试后，获得推送授权再执行：
+
+```bash
+git push -u origin feature/algo-pitch-control
+```
+
+创建 PR 时明确选择 base branch 为 `dev`。这些命令只示范协作者流程，不授权 agent 自动
+创建分支、提交、推送、创建 PR、合并或删除分支；权限仍以当前任务授权和 `AGENTS.md` 为准。
+
+`develop` 是维护者的核心研发主线，与从 `master` 创建的协作者开发集成线 `dev` 长期
+并行、互不替代。协作者不得自行向 `develop` 或 `master` 合并；`dev` 上经过验证的成果
+是否进入 `develop` 必须由维护者另行决定，不自动执行两条开发线之间的 merge、rebase
+或 cherry-pick。不要将 `develop` 的新代码或新算法任务文件自动带入 `dev`。
 
 算法任务通常只修改 algorithms、algorithm tests 和必要算法文档。共享 `FlightController`、
 `FlightState`、`FlightCommand` 或 controller factory contract 的变化必须作为 API change
-协调，不得静默改变。代码合入 `develop` 只表示软件集成完成；任何真实电机、风扇、CAN、
+协调，不得静默改变。代码合入 `dev` 只表示协作者软件集成完成；任何真实电机、风扇、CAN、
 串口、GPIO 或 PWM 测试仍须维护者准备受限范围，并由用户/operator 独立明确授权。
