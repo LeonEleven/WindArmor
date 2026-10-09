@@ -306,6 +306,12 @@ IMU parser/driver 另提供只读的 Level-2 GYRO→ANGLE 软件一致组件对�
 前置条件：配置读回验证、有限组件年龄阈值与 roll-rate 数值规则仍未完成。接口见
 [IMU 包说明](src/imu_cybergear_ros2/README.md#imu-软件一致组件对)。
 
+IMU 已提供 READADDR 离线编码、`0x5F` 匿名应答解析与离线配置规则检查（RSW、GYRORANGE、
+实际 host/module baud 一致性），并记录未冻结配置与校准值的 provenance。匿名应答不带
+请求地址/ID，不能直接视为配置验证；启动/重连事务及验证后的 pair gate 尚未实现，无新增
+自动串口写入，ALG-007 仍未 READY。接口与证据限制见
+[离线配置检查](src/imu_cybergear_ros2/README.md#imu-离线配置检查与匿名读回应答)。
+
 ## 测试
 
 仓库完整纯软件 CI 入口为：

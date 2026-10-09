@@ -27,7 +27,7 @@ import struct
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Mapping, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # 协议常量（根据 IMU 出厂量程设定，如更换量程需同步修改）
@@ -38,6 +38,7 @@ FRAME_TYPE_ACCEL = 0x51      # 加速度帧
 FRAME_TYPE_GYRO = 0x52       # 角速度帧
 FRAME_TYPE_ANGLE = 0x53      # 角度帧（姿态角）
 FRAME_TYPE_MAG = 0x54        # 磁场帧（不解析）
+FRAME_TYPE_REGISTERS = 0x5F  # 四个连续寄存器；应答不包含起始地址
 
 ACCEL_FULL_SCALE = 16.0      # 加速度满量程 ±16g
 GYRO_FULL_SCALE = 2000.0     # 角速度满量程 ±2000°/s
@@ -57,6 +58,104 @@ def _hex_to_short(raw_data: bytes) -> List[int]:
         [v1, v2, v3, v4]，每个元素为 int16 范围（-32768 ~ 32767）。
     """
     return list(struct.unpack("hhhh", bytearray(raw_data)))
+
+
+def encode_readaddr(start_address: int) -> bytes:
+    """仅编码 READADDR，不执行 I/O；拒绝四寄存器窗口越过 8-bit 地址范围。"""
+    if type(start_address) is not int or not 0 <= start_address <= 0xFC:
+        raise ValueError("READADDR start address must be an integer in 0..252")
+    return bytes((0xFF, 0xAA, 0x27, start_address, 0x00))
+
+
+def decode_register_response(frame: bytes) -> Tuple[int, int, int, int]:
+    """解码无地址的 0x5F 应答；unsigned wire words 不自动关联任何请求。"""
+    if (len(frame) != FRAME_LENGTH or frame[:2] != b"\x55\x5f"
+            or (sum(frame[:10]) & 0xFF) != frame[10]):
+        raise ValueError("invalid register response frame")
+    return struct.unpack("<4H", frame[2:10])
+
+
+# 厂家寄存器表；不是允许值/defaults，也不授权配置写入。
+CONFIGURATION_REGISTERS = (
+    ("RSW", 0x02), ("RRATE", 0x03), ("BAUD", 0x04),
+    ("GXOFFSET", 0x08), ("GYOFFSET", 0x09), ("GZOFFSET", 0x0A),
+    ("BANDWIDTH", 0x1F), ("GYRORANGE", 0x20), ("ORIENT", 0x23),
+    ("AXIS6", 0x24), ("FILTK", 0x25), ("ACCFILT", 0x2A),
+    ("GYROCALITHR", 0x61), ("GYROCALTIME", 0x63),
+    ("WZTIME", 0x6E), ("WZSTATIC", 0x6F),
+)
+REQUIRED_CONFIGURATION_NAMES = frozenset(("RSW", "BAUD", "GYRORANGE"))
+MODULE_BAUD_CODES = (
+    (1, 4800), (2, 9600), (3, 19200), (4, 38400), (5, 57600),
+    (6, 115200), (7, 230400), (8, 460800), (9, 921600),
+)
+
+
+@dataclass(frozen=True)
+class ImuConfigurationCheck:
+    """离线规则检查，不证明地址关联、连接代次验证或 ALG-007 availability。"""
+
+    required_values_passed: bool
+    observation_complete: bool
+    observed_registers: Tuple[Tuple[str, int, int], ...]
+    missing_required: Tuple[str, ...]
+    missing_provenance: Tuple[str, ...]
+    failures: Tuple[str, ...]
+
+
+def check_imu_configuration(
+    registers: Mapping[int, int], *, host_baud: int,
+) -> ImuConfigurationCheck:
+    """检查调用者已独立确认地址的离线数据；不得直接给匿名应答补地址。
+
+    只冻结 GYRO/ANGLE 输出位、2000 deg/s 解码范围和实际 host/module baud
+    一致性。其余寄存器只记录 raw word；校准 offset 不要求为零。
+    """
+    if type(host_baud) is not int or host_baud <= 0:
+        raise ValueError("host baud must be a positive integer")
+    words = dict(registers)
+    if any(type(address) is not int or not 0 <= address <= 0xFF
+           or type(word) is not int or not 0 <= word <= 0xFFFF
+           for address, word in words.items()):
+        raise ValueError("registers must contain 8-bit addresses and unsigned 16-bit words")
+    missing_required = tuple(name for name, address in CONFIGURATION_REGISTERS
+                             if name in REQUIRED_CONFIGURATION_NAMES and address not in words)
+    missing_provenance = tuple(name for name, address in CONFIGURATION_REGISTERS
+                               if name not in REQUIRED_CONFIGURATION_NAMES and address not in words)
+    failures = []
+    if 0x02 in words and words[0x02] & 0x000C != 0x000C:
+        failures.append("RSW missing GYRO/ANGLE output bits")
+    if 0x20 in words and words[0x20] & 0x000F != 0x0003:
+        failures.append("GYRORANGE incompatible with 2000 deg/s decode")
+    if 0x04 in words and dict(MODULE_BAUD_CODES).get(words[0x04] & 0x000F) != host_baud:
+        failures.append("module BAUD does not match effective host baud")
+    return ImuConfigurationCheck(
+        not missing_required and not failures,
+        not missing_required and not missing_provenance,
+        tuple((name, address, words[address]) for name, address in CONFIGURATION_REGISTERS
+              if address in words),
+        missing_required, missing_provenance, tuple(failures),
+    )
+
+
+@dataclass(frozen=True)
+class ImuRegisterResponse:
+    """合法匿名应答，仅为主机接收历史；不是已关联或已验证的配置。"""
+
+    words: Tuple[int, int, int, int]
+    received_monotonic: float
+    generation: int
+
+
+@dataclass(frozen=True)
+class ImuRegisterResponseState:
+    """无地址应答的只读诊断快照；latest_response 不代表新的有效事务。"""
+
+    generation: int
+    latest_response: Optional[ImuRegisterResponse]
+    response_count: int
+    checksum_failure_count: int
+    partial_response: bool
 
 
 @dataclass(frozen=True)
@@ -111,6 +210,9 @@ class WitImuFrameParser:
         self._pending_gyro = None
         self._latest_pair = None
         self._pair_count = 0
+        self._latest_register_response = None
+        self._register_response_count = 0
+        self._register_checksum_failure_count = 0
         self._key = 0
         self._buff: Dict[int, int] = {}
         # ---- 以下为最新解析结果（受 _lock 保护） ----
@@ -140,6 +242,18 @@ class WitImuFrameParser:
             self._pending_gyro = None
             self._latest_pair = None
             self._pair_count = 0
+            self._latest_register_response = None
+            self._register_response_count = 0
+            self._register_checksum_failure_count = 0
+
+    def register_response_state(self) -> ImuRegisterResponseState:
+        """观察匿名帧，绝不根据帧内容猜测起始地址或配置验证状态。"""
+        with self._lock:
+            return ImuRegisterResponseState(
+                self._generation, self._latest_register_response,
+                self._register_response_count, self._register_checksum_failure_count,
+                self._key >= 2 and self._buff.get(1) == FRAME_TYPE_REGISTERS,
+            )
 
     def coherence_state(self) -> ImuCoherenceState:
         """返回不可变快照；保留各组件时间，不将 ROS 发布时间当作组件时间。"""
@@ -178,6 +292,18 @@ class WitImuFrameParser:
             data_buff = [self._buff[i] for i in range(FRAME_LENGTH)]
             frame_type = self._buff[1]
             valid = self._check_sum(data_buff[0:10], data_buff[10])
+
+            if frame_type == FRAME_TYPE_REGISTERS:
+                if valid:
+                    self._latest_register_response = ImuRegisterResponse(
+                        decode_register_response(bytes(data_buff)),
+                        self._monotonic_clock(), self._generation,
+                    )
+                    self._register_response_count += 1
+                else:
+                    self._register_checksum_failure_count += 1
+                self._reset_buffer()
+                return False
 
             if valid:
                 raw = _hex_to_short(bytes(data_buff[2:10]))
