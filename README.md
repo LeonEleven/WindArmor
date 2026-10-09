@@ -224,6 +224,13 @@ ros2 service call /fans/reset_e_stop std_srvs/srv/Trigger "{}"
    命令时效租约、generation、失效后安全闭锁与状态机设计；
 4. [硬件参考](docs/HARDWARE_REFERENCE.md)：轴、符号、限位、接线和机械边界。
 
+协作者从最新 `dev` 创建 `feature/algo-*` 短期任务分支，完成算法开发与软件测试后，
+推送任务分支并向 `dev` 创建 PR，等待 CI 和维护者 review；通过后合入 `dev`。
+协作者不得自行向 `develop` 或 `master` 合并。`develop` 继续作为维护者的核心研发主线，
+与从 `master` 创建的协作者开发集成线 `dev` 长期并行、互不替代；`dev` 成果是否进入
+`develop` 由维护者另行决定，不自动执行两条开发线之间的 merge、rebase 或 cherry-pick。
+完整分支与发布规则见[开发协作流程](docs/DEVELOPMENT_WORKFLOW.md)。
+
 算法开发默认使用 synthetic/fake 路径，不应通过启动真实硬件节点来验证纯控制逻辑。
 
 ## 测试

@@ -9,7 +9,8 @@
 WindArmor 是运行于树莓派 5（Ubuntu 24.04、ROS 2 Jazzy）的飞行机器人
 工作空间，整合 Hiwonder IMU、4 个 CyberGear 微电机和 2 个涵道风扇。
 `v0.4.0` 是当前正式稳定发布基线，`v0.3.2` 保留为上一稳定版本历史。后续开发采用
-`master`、`develop` 和短期任务分支模型；分支是否已经创建以及任务实际基线，仍以当前
+`master`、`develop`、`dev` 和短期任务分支模型；`develop` 是维护者核心研发主线，`dev`
+是从 `master` 创建的协作者开发集成线，两者长期并行且互不替代。任务实际基线仍以当前
 分支、`HEAD`、远端状态和任务开始时已有的工作区修改为准。未发布的开发 `HEAD` 不属于
 stable release。
 
@@ -95,15 +96,22 @@ stable release。
 
 ### 分支与协作治理
 
-v0.4.0 发布后的正式分支模型为 `master`、`develop` 和短期任务分支。定义该模型不代表
-`develop` 已经存在，也不授权 agent 创建或切换任何分支。
+v0.4.0 发布后的正式分支模型为 `master`、`develop`、`dev` 和短期任务分支。分支存在性与
+实际基线以 Git / GitHub 当前状态为准；定义该模型不授权 agent 创建或切换任何分支。
 
 - `master` 是稳定、已验证、可发布并对应正式 release/tag 的主线；不作为日常开发入口，
   推荐只通过经过 CI 和 review 的 PR 接收变更。
-- `develop` 是下一版本集成主线；正常 feature、fix 和 docs 原则上先合入该分支。它必须
+- `develop` 是维护者的核心研发与下一版本集成主线；维护者核心任务从该分支创建并通过
+  PR 返回该分支，其开发流程不受协作者开发线影响。它必须
   保持可构建、软件 CI green 且无已知严重破坏，但不代表任何真实硬件执行授权。
-- `feature/*`、`fix/*`、`docs/*` 和 `experiment/*` 是从 `develop` 创建的短期任务分支；
-  一个分支只承载一个可 review/test/merge 的工作单元，PR 合入 `develop` 后删除。
+- `dev` 是从 `master` 创建的协作者开发集成线，与 `develop` 长期并行、互不替代；协作者
+  默认从最新 `dev` 创建任务分支，通过 CI 和维护者 review 后以 PR 合入 `dev`。
+- `feature/*`、`fix/*`、`docs/*` 和 `experiment/*` 是短期任务分支；协作者默认从 `dev`
+  创建并以 `dev` 为 PR 目标，维护者核心任务从 `develop` 创建并以 `develop` 为 PR 目标。
+  一个分支只承载一个可 review/test/merge 的工作单元，合并后按授权删除。
+- 协作者不得自行向 `develop` 或 `master` 合并。`dev` 上经过验证的成果是否进入
+  `develop` 必须由维护者另行决定；不得自动执行两条开发线之间的 merge、rebase 或
+  cherry-pick，也不得将 `develop` 的新代码或算法任务文件自动带入 `dev`。
 - `hotfix/*` 从 `master` 创建，修复进入 `master` 并发布后必须同步回 `develop`。
 - `release/*` 按需从 `develop` 创建，不要求长期存在；冻结后只接收 bug fix、文档、版本
   元数据、发布说明和验证驱动修复，最终通过 PR 进入 `master`，必要修复同步回 `develop`。
