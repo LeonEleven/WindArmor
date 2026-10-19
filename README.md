@@ -308,8 +308,10 @@ IMU parser/driver 另提供只读的 Level-2 GYRO→ANGLE 软件一致组件对�
 
 IMU 已提供 READADDR 离线编码、`0x5F` 匿名应答解析与离线配置规则检查（RSW、GYRORANGE、
 实际 host/module baud 一致性），并记录未冻结配置与校准值的 provenance。匿名应答不带
-请求地址/ID，不能直接视为配置验证；启动/重连事务及验证后的 pair gate 尚未实现，无新增
-自动串口写入，ALG-007 仍未 READY。接口与证据限制见
+请求地址/ID，不能直接视为配置验证。可选启动/重连读回现已实现：默认关闭，并须显式提供
+有限应答寿命的主机假设才发送两个 READADDR。结果只称为 `host-associated-checked`，不证明
+厂家关联；验证后另取新 GYRO→ANGLE，故障只闭锁该配置前置条件。默认零串口写入，真实启用
+仍须单独授权，ALG-007 仍 BLOCKED。接口、参数与剩余假设见
 [离线配置检查](src/imu_cybergear_ros2/README.md#imu-离线配置检查与匿名读回应答)。
 
 ## 测试

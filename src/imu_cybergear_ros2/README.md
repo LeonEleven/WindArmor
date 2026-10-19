@@ -69,7 +69,7 @@ ALG-007 可用。配置读回验证、有限组件/pair 年龄规则和 roll-rat
 `encode_readaddr(start_address)` 编码 `FF AA 27 <start> 00`，仅返回字节，不执行串口写入。
 `decode_register_response(frame)` 校验完整 `0x55 0x5F` 帧并返回四个 unsigned little-endian
 16-bit word。现有 parser/reader 可解析穿插在普通连续帧中的 `0x5F`，不改变 ANGLE 发布或
-GYRO→ANGLE 配对。没有新增参数、读取线程、topic/service 或自动串口写入。
+GYRO→ANGLE 配对。读回路径复用现有 reader，没有新增读取线程或 topic/service。
 
 `WitImuFrameParser.register_response_state()` 返回不可变匿名接收历史：`generation`、
 `latest_response`、`response_count`、`checksum_failure_count`、`partial_response`。
@@ -79,7 +79,8 @@ generation**。无请求、重复或迟到的合法帧仍只是匿名诊断记�
 `parse_byte(..., generation=...)` 拒绝旧 read 的返回字节。非空历史不表示事务成功。
 
 `check_imu_configuration(registers, host_baud=...)` 是纯离线检查，输入为**调用者已独立确认
-地址**的 `{address: unsigned_word}`，不得将匿名应答直接补地址后输入。检查结果分别提供：
+地址**的 `{address: unsigned_word}`；运行时只有下述显式有界主机关联策略才允许条件性解释
+窗口，不能仅按 pending request 给任意匿名应答补地址。检查结果分别提供：
 
 - `required_values_passed`：RSW 的 GYRO/ANGLE 位 `0x000C`、GYRORANGE 低四位 `0x03`（当前
   2000 deg/s 解码契约）、BAUD 低四位对应波特率与实际 host baud 一致；不强制全部设备 9600。
@@ -89,11 +90,55 @@ generation**。无请求、重复或迟到的合法帧仍只是匿名诊断记�
   word、缺失项与规则失败原因。RRATE/BANDWIDTH/ORIENT/AXIS6/FILTK/ACCFILT、校准阈值/
   时间/静态阈值只记录，不因偏离厂家默认值失败；非零 gyro offset 允许，保留原 wire word。
 
-**启动/重连 READADDR 事务、连接配置验证快照及验证后的新 pair gate 尚未实现。** 厂家
-`0x5F` 不回显地址/ID，单在途不能排除上一请求的延迟重复帧。资料也未充分说明 KEY 与
-连续流事务规则，因此不能用多窗口 fake 成功替代真实关联证据；本轮不自动发 READADDR、
-KEY、SAVE、校准或配置写命令。离线规则 PASS 不等于真实设备读回成功、当前连接配置验证
-或 ALG-007 READY。继续实现事务前须补齐关联依据或明确接受保守受限的交付范围。
+### 可选启动/重连读回：主机条件性关联
+
+driver 在 configure 时读取两个附加参数，默认路径零串口写入，现有 launch/config 不变：
+
+| 参数 | 默认值 | 含义 |
+| --- | --- | --- |
+| `config_readback_enabled` | `false` | 明确启用 READADDR 路径；不是硬件执行授权 |
+| `config_readback_response_bound_sec` | `0.0` | 全部应答及重复帧从请求开始到完整主机接受的最大寿命假设 B，单位秒；0 表示未建立假设 |
+
+即使 enabled=true，没有正有限 B 也保持 `incomplete`，不发送请求。**仓库没有经过硬件验证
+的 B 推荐值**；fake 使用的 1 秒只是测试输入。正数不是厂家时限证据。以后在真实设备启用
+之前，必须另行取得用户硬件授权并审查 B 的适用依据、独占命令来源、没有 unsolicited
+`0x5F` 输出、读回期间配置稳定等前提。configure 后参数才生效，不运行中切换。
+
+有限事务策略（不是厂家 normative transaction procedure）：
+
+1. 新连接先观察至少 B，隔离前一连接在该寿命假设内可能残留的应答；观察到任何 `0x5F`
+   前缀（包括随后合法或坏校验的应答）均闭锁，不丢弃后继续猜测。在 reader 已读空且位于
+   完整帧边界时才发送，普通 ACC/GYRO/ANGLE 仍正常解析。
+2. 只顺序发送 `FF AA 27 02 00`、`FF AA 27 20 00`；每次至多一个在途。发送前记录响应计数
+   和 generation，只接纳完整帧在请求开始后的 `[sent, sent+B)` 内被主机接受的唯一响应。
+   每个请求完整观察 B，再在读空/完整帧边界提交窗口；不在首次收到一帧时提前放行。
+3. 两个成功窗口的首 word 形状不相交：RSW 必含 `0x000C`，GYRORANGE 低四位须为 `3`。
+   看起来属于另一窗口的帧拒绝为 `ambiguous`；这只排除这两类成功响应的交叉误用，不证明
+   任意来源的地址。两窗口都完成后复用 `check_imu_configuration()`。
+4. 初始隔离、两窗口观察及等待边界总共最多 4B（在 reader 下一次调度时检查），串口 write
+   使用有限 `write_timeout=0.1s`。超时、截断、坏校验、意外/重复帧、短写/写失败闭锁；
+   同一 transport 不重试。读取和 legacy 发布继续；不暂停连续流，不改变设备配置。
+5. reset/断线/重连/deactivate/reactivate/cleanup/shutdown 立即使旧结果、pending、pair
+   失效；停止时先失效再等待 reader 退出。新连接必须重新隔离及完成两窗口。旧 read 的
+   generation 标记拒绝旧字节；检查后必须重新接受 GYRO→ANGLE，旧 pending GYRO 不放行。
+
+parser 与 `ImuDriverNode.configuration_state()` 返回不可变 `ImuConfigurationState`，未配置的
+driver 返回 `None`。`status` 区分 `disabled / pending / host-associated-checked / incomplete /
+mismatch / ambiguous / timeout / connection-invalidated`；`detail`、`generation`、
+`response_bound_sec`、`pending_address`、`windows`、`check`、`checked_monotonic` 与
+`post_check_pair` 提供诊断。`windows` 保存主机解释的起始地址及原始匿名 `ImuRegisterResponse`。
+`config_prerequisite_passed` 仅对应 `host-associated-checked`；`post_check_pair` 是检查后取得的
+Level-2 历史 pair，非空不代表新更新、有限时间有效性或完整 ALG-007 availability。
+成功后任何额外 `0x5F` 前缀或坏校验会撤销该前置条件和 pair；已取出的快照仅是历史证据，
+消费者须重新核对当前 generation/status，不得缓存成功标志作为永久授权。
+
+**匿名应答关联仍未被厂家协议证明。** B 以外的迟到帧（包括上一连接的同窗口响应）、
+外部并发请求或伪装成期待内容的 unsolicited 帧可能无法区分；观察到矛盾会 fail closed，
+但这些不可观察的假设违背不能被软件保证检出。若无法建立前提，保持默认关闭/无 B，不能
+把 `host-associated-checked` 提升为 runtime-proven configuration。不会发送 KEY、SAVE、
+校准、factory reset 或任何寄存器写入。额外输出位、非默认 RRATE、非零校准值不自动失败；
+两段以外的 error-model/校准寄存器仍为 `provenance incomplete`。本实现仅经 pure/fake 软件
+测试，真实启用及主机假设的适用性**未验证**；ALG-007 仍 **BLOCKED**，年龄与数值门槛未冻结。
 
 ## 启动接口
 

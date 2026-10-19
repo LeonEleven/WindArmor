@@ -26,7 +26,9 @@ from rclpy.lifecycle import LifecycleNode, TransitionCallbackReturn, State
 from sensor_msgs.msg import Imu
 from std_msgs.msg import String
 
-from .imu_protocol import ImuCoherenceState, WitImuFrameParser, quaternion_from_euler
+from .imu_protocol import (
+    ImuCoherenceState, ImuConfigurationState, WitImuFrameParser, quaternion_from_euler,
+)
 
 # ---------------------------------------------------------------------------
 # 重连策略常量
@@ -60,6 +62,9 @@ class ImuDriverNode(LifecycleNode):
         self.declare_parameter("baud", 9600)
         self.declare_parameter("frame_id", "imu_link")
         self.declare_parameter("topic_name", "/imu/data_raw")
+        # 双重 opt-in：开启请求且显式给出主机应答寿命假设；0 表示没有依据。
+        self.declare_parameter("config_readback_enabled", False)
+        self.declare_parameter("config_readback_response_bound_sec", 0.0)
 
         # ---- 初始化实例变量（资源在 on_configure 中创建） ----
         self._parser = None
@@ -76,6 +81,7 @@ class ImuDriverNode(LifecycleNode):
         self._baud = 0
         self._frame_id = ""
         self._topic_name = ""
+        self._readback_enabled = False
 
         self.get_logger().info("IMU 节点已创建（等待 configure）")
 
@@ -84,7 +90,7 @@ class ImuDriverNode(LifecycleNode):
     # ------------------------------------------------------------------
 
     def on_configure(self, state: State) -> TransitionCallbackReturn:
-        """配置阶段：读取参数、创建解析器和发布器、尝试打开串口。"""
+        """配置阶段：读取参数、创建解析器和发布器；不打开串口。"""
         self.get_logger().info("IMU 节点正在配置...")
 
         # 读取参数
@@ -92,10 +98,15 @@ class ImuDriverNode(LifecycleNode):
         self._baud = self.get_parameter("baud").get_parameter_value().integer_value
         self._frame_id = self.get_parameter("frame_id").get_parameter_value().string_value
         self._topic_name = self.get_parameter("topic_name").get_parameter_value().string_value
+        self._readback_enabled = self.get_parameter("config_readback_enabled").value
+        response_bound = self.get_parameter("config_readback_response_bound_sec").value
 
         # 创建组件
         self._parser_generation += 1
-        self._parser = WitImuFrameParser(generation=self._parser_generation)
+        self._parser = WitImuFrameParser(
+            generation=self._parser_generation, readback_enabled=self._readback_enabled,
+            response_bound_sec=response_bound, host_baud=self._baud,
+        )
         self._imu_pub = self.create_publisher(Imu, self._topic_name, 20)
         self._status_pub = self.create_publisher(String, "/imu/status", 10)
         self._stop_event = threading.Event()
@@ -126,6 +137,7 @@ class ImuDriverNode(LifecycleNode):
         self._is_active = False
         if self._stop_event is not None:
             self._stop_event.set()
+        self._reset_parser()
         if self._thread is not None:
             self._thread.join(timeout=2.0)
         self._close_serial()
@@ -160,6 +172,7 @@ class ImuDriverNode(LifecycleNode):
         self._is_active = False
         if self._stop_event is not None:
             self._stop_event.set()
+        self._reset_parser()
         if self._thread is not None:
             self._thread.join(timeout=2.0)
         self._close_serial()
@@ -185,7 +198,9 @@ class ImuDriverNode(LifecycleNode):
                 port=self._port,
                 baudrate=self._baud,
                 timeout=SERIAL_TIMEOUT,
+                **({"write_timeout": SERIAL_TIMEOUT} if self._readback_enabled else {}),
             )
+            self._parser.begin_configuration_readback()
             self.get_logger().info(f"IMU 串口已连接: {self._port} @ {self._baud}")
             self._publish_status("connected")
             return True
@@ -213,6 +228,23 @@ class ImuDriverNode(LifecycleNode):
         """只读底层 Level-2 候选；未配置时为 None，不代表 ALG-007 可用。"""
         parser = self._parser
         return None if parser is None else parser.coherence_state()
+
+    def configuration_state(self) -> Optional[ImuConfigurationState]:
+        """当前代次只读诊断；成功仅为主机条件性关联，不代表 ALG-007 READY。"""
+        parser = self._parser
+        return None if parser is None else parser.configuration_state()
+
+    def _advance_readback(self, connection, parser, stop_event, generation, *, drained):
+        def send(request):
+            if (stop_event.is_set() or connection is not self._serial
+                    or not connection.is_open):
+                raise OSError("connection invalidated before readback write")
+            return connection.write(request)
+
+        if not stop_event.is_set():
+            parser.advance_configuration_readback(
+                send, generation=generation, input_drained=drained,
+            )
 
     def _publish_status(self, status: str) -> None:
         """发布 IMU 连接状态字符串。"""
@@ -293,6 +325,9 @@ class ImuDriverNode(LifecycleNode):
                 continue
 
             if buff_count <= 0:
+                self._advance_readback(
+                    connection, parser, stop_event, read_generation, drained=True,
+                )
                 stop_event.wait(IDLE_SLEEP_SEC)
                 continue
 
@@ -311,6 +346,9 @@ class ImuDriverNode(LifecycleNode):
                     break
                 if parser.parse_byte(data_byte, generation=read_generation):
                     self._publish_imu()
+            self._advance_readback(
+                connection, parser, stop_event, read_generation, drained=False,
+            )
 
     # ------------------------------------------------------------------
     # IMU 消息发布
