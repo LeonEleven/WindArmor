@@ -26,7 +26,7 @@ import math
 import struct
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable, Dict, List, Mapping, Optional, Tuple
 
 # ---------------------------------------------------------------------------
@@ -106,8 +106,10 @@ class ImuConfigurationCheck:
 def check_imu_configuration(
     registers: Mapping[int, int], *, host_baud: int,
 ) -> ImuConfigurationCheck:
-    """检查调用者已独立确认地址的离线数据；不得直接给匿名应答补地址。
+    """检查调用者提供的寄存器解释；本函数不建立或提升地址关联证据。
 
+    离线数据应独立确认地址；runtime 仅可在显式有界主机策略完成后调用，
+    并单独保留其条件性状态与假设，不能仅凭 pending request 给匿名帧补地址。
     只冻结 GYRO/ANGLE 输出位、2000 deg/s 解码范围和实际 host/module baud
     一致性。其余寄存器只记录 raw word；校准 offset 不要求为零。
     """
@@ -188,6 +190,29 @@ class ImuCoherenceState:
     pair_count: int
 
 
+@dataclass(frozen=True)
+class ImuConfigurationState:
+    """有界主机假设下的诊断；不是厂家地址关联证明或 ALG-007 availability。
+
+    post_check_pair 仅为检查后重新取得的 Level-2 历史 pair，无年龄保证。
+    windows 中的地址都是主机条件性解释，原始 response 始终匿名。
+    """
+
+    generation: int
+    status: str
+    detail: str
+    response_bound_sec: float
+    pending_address: Optional[int] = None
+    windows: Tuple[Tuple[int, ImuRegisterResponse], ...] = ()
+    check: Optional[ImuConfigurationCheck] = None
+    checked_monotonic: Optional[float] = None
+    post_check_pair: Optional[GyroAnglePair] = None
+
+    @property
+    def config_prerequisite_passed(self) -> bool:
+        return self.status == "host-associated-checked"
+
+
 class WitImuFrameParser:
     """WIT IMU 11 字节串口帧逐字节解析器。
 
@@ -202,6 +227,8 @@ class WitImuFrameParser:
     def __init__(
         self, *, monotonic_clock: Callable[[], float] = time.monotonic,
         generation: int = 0,
+        readback_enabled: bool = False, response_bound_sec: float = 0.0,
+        host_baud: int = 9600,
     ):
         self._lock = threading.Lock()
         self._monotonic_clock = monotonic_clock
@@ -213,6 +240,19 @@ class WitImuFrameParser:
         self._latest_register_response = None
         self._register_response_count = 0
         self._register_checksum_failure_count = 0
+        self._readback_enabled = readback_enabled
+        self._response_bound_sec = response_bound_sec
+        self._host_baud = host_baud
+        self._configuration = ImuConfigurationState(
+            generation, "connection-invalidated" if readback_enabled else "disabled",
+            "no readback session", response_bound_sec,
+        )
+        self._config_candidate = None
+        self._config_pending_gyro = None
+        self._config_deadline = 0.0
+        self._config_overall_deadline = 0.0
+        self._config_sent_at = 0.0
+        self._config_response_baseline = 0
         self._key = 0
         self._buff: Dict[int, int] = {}
         # ---- 以下为最新解析结果（受 _lock 保护） ----
@@ -245,6 +285,148 @@ class WitImuFrameParser:
             self._latest_register_response = None
             self._register_response_count = 0
             self._register_checksum_failure_count = 0
+            self._configuration = ImuConfigurationState(
+                self._generation,
+                "connection-invalidated" if self._readback_enabled else "disabled",
+                "parser/connection generation invalidated", self._response_bound_sec,
+            )
+            self._config_candidate = None
+            self._config_pending_gyro = None
+
+    def configuration_state(self) -> ImuConfigurationState:
+        with self._lock:
+            return self._configuration
+
+    def _fail_configuration(self, status: str, detail: str) -> None:
+        self._configuration = replace(
+            self._configuration, status=status, detail=detail, pending_address=None,
+            checked_monotonic=None, post_check_pair=None,
+        )
+        self._config_candidate = None
+        self._config_pending_gyro = None
+
+    def begin_configuration_readback(self) -> None:
+        """仅在新 transport 打开后调用；reset 自身不重试、不重新发送。
+
+        正 bound 是调用者对全部应答/重复帧最大寿命的显式假设，不是厂家保证。
+        还要求独占命令来源、没有主动 0x5F 流且读回期间配置不变。
+        """
+        with self._lock:
+            if not self._readback_enabled:
+                return
+            if self._configuration.status != "connection-invalidated":
+                self._fail_configuration("ambiguous", "session already started; no retry")
+                return
+            bound = self._response_bound_sec
+            if not math.isfinite(4.0 * bound) or bound <= 0.0:
+                self._fail_configuration("incomplete", "no finite response-lifetime assumption")
+                return
+            if type(self._host_baud) is not int or self._host_baud <= 0:
+                self._fail_configuration("incomplete", "no valid effective host baud")
+                return
+            if self._register_response_count or self._register_checksum_failure_count:
+                self._fail_configuration("ambiguous", "register traffic predates session")
+                return
+            now = self._monotonic_clock()
+            self._configuration = replace(
+                self._configuration, status="pending", detail="initial quarantine",
+            )
+            self._config_deadline = now + bound
+            # 有限首轮静默隔离 + 两窗口观察；另留一窗口等待完整帧边界。
+            self._config_overall_deadline = now + 4.0 * bound
+
+    def advance_configuration_readback(
+        self, send: Callable[[bytes], int], *, generation: int, input_drained: bool,
+    ) -> None:
+        """由既有 reader 驱动，无等待/重试；send 必须有有限 write timeout。
+
+        同一锁覆盖 generation 检查、单在途预约和注入的有限 write，reset 不可
+        在检查与发送之间插入。仅发送两个 READADDR；不持有任何串口对象。
+        """
+        with self._lock:
+            state = self._configuration
+            if generation != self._generation or state.status != "pending":
+                return
+            now = self._monotonic_clock()
+            if now >= self._config_overall_deadline:
+                self._fail_configuration("incomplete", "session deadline / no drained frame boundary")
+                return
+            if state.pending_address is not None and now >= self._config_deadline:
+                if self._config_candidate is None:
+                    partial = self._key >= 2 and self._buff.get(1) == FRAME_TYPE_REGISTERS
+                    self._fail_configuration(
+                        "incomplete" if partial else "timeout",
+                        "partial register response" if partial else "no response within lifetime bound",
+                    )
+                    return
+                if not input_drained:
+                    return
+                if self._key:
+                    self._fail_configuration("incomplete", "partial frame at observation boundary")
+                    return
+                state = replace(
+                    state, pending_address=None,
+                    windows=state.windows + ((state.pending_address, self._config_candidate),),
+                )
+                self._configuration = state
+                self._config_candidate = None
+                if len(state.windows) == 2:
+                    # 只有完整窗口观察结束后才执行条件性地址解释，绝不见帧即放行。
+                    words = {address + i: word
+                             for address, response in state.windows
+                             for i, word in enumerate(response.words)}
+                    check = check_imu_configuration(words, host_baud=self._host_baud)
+                    self._configuration = replace(state, check=check)
+                    if not check.required_values_passed:
+                        self._fail_configuration("mismatch", "; ".join(check.failures))
+                    else:
+                        self._configuration = replace(
+                            self._configuration, status="host-associated-checked",
+                            detail="conditional on bounded replies, sole requester, stable config",
+                            checked_monotonic=now,
+                        )
+                        self._config_pending_gyro = None
+                    return
+            if (state.pending_address is not None or now < self._config_deadline
+                    or not input_drained or self._key):
+                return
+            address = (0x02, 0x20)[len(state.windows)]
+            request = encode_readaddr(address)
+            self._configuration = replace(
+                state, pending_address=address, detail="one READADDR in flight",
+            )
+            self._config_response_baseline = self._register_response_count
+            self._config_sent_at = now
+            self._config_deadline = now + self._response_bound_sec
+            try:
+                written = send(request)
+            except Exception:
+                self._fail_configuration("incomplete", "READADDR write failed; no retry")
+                return
+            if written != len(request):
+                self._fail_configuration("incomplete", "short READADDR write; no retry")
+
+    def _observe_configuration_response(self) -> None:
+        state = self._configuration
+        if state.status not in ("pending", "host-associated-checked"):
+            return
+        response = self._latest_register_response
+        if (state.pending_address is None or self._config_candidate is not None
+                or self._register_response_count != self._config_response_baseline + 1
+                or response.generation != state.generation):
+            self._fail_configuration("ambiguous", "unsolicited / duplicate register response")
+        elif not self._config_sent_at <= response.received_monotonic < self._config_deadline:
+            self._fail_configuration("timeout", "register response outside request window")
+        else:
+            # 两个成功窗口的首 word 形状不相交：RSW 必须含 0xC；GYRORANGE 低位为3。
+            # 上一窗口的成功应答不能作为下一窗口成功输入；不猜测其它来源/地址。
+            first = response.words[0]
+            wrong_window = ((state.pending_address == 0x20 and first & 0x000C == 0x000C)
+                            or (state.pending_address == 0x02 and first & 0x000F == 3))
+            if wrong_window:
+                self._fail_configuration("ambiguous", "response also fits the other window")
+            else:
+                self._config_candidate = response
 
     def register_response_state(self) -> ImuRegisterResponseState:
         """观察匿名帧，绝不根据帧内容猜测起始地址或配置验证状态。"""
@@ -284,6 +466,13 @@ class WitImuFrameParser:
                 self._reset_buffer()
                 return False
 
+            if self._key == 2 and raw_byte == FRAME_TYPE_REGISTERS:
+                state = self._configuration
+                if (state.status == "host-associated-checked"
+                        or (state.status == "pending"
+                            and (state.pending_address is None or self._config_candidate is not None))):
+                    self._fail_configuration("ambiguous", "unexpected register response prefix")
+
             # 还未收满一帧
             if self._key < FRAME_LENGTH:
                 return False
@@ -300,8 +489,11 @@ class WitImuFrameParser:
                         self._monotonic_clock(), self._generation,
                     )
                     self._register_response_count += 1
+                    self._observe_configuration_response()
                 else:
                     self._register_checksum_failure_count += 1
+                    if self._configuration.status in ("pending", "host-associated-checked"):
+                        self._fail_configuration("ambiguous", "register checksum failure")
                 self._reset_buffer()
                 return False
 
@@ -337,13 +529,21 @@ class WitImuFrameParser:
                     self._latest_component = component
                     if frame_type == FRAME_TYPE_GYRO:
                         self._pending_gyro = component
+                        if self._configuration.config_prerequisite_passed:
+                            self._config_pending_gyro = component
                     elif frame_type == FRAME_TYPE_ANGLE:
                         if self._pending_gyro is not None:
                             self._pair_count += 1
                             self._latest_pair = GyroAnglePair(
                                 self._pending_gyro, component, self._pair_count,
                             )
+                            if (self._configuration.config_prerequisite_passed
+                                    and self._pending_gyro is self._config_pending_gyro):
+                                self._configuration = replace(
+                                    self._configuration, post_check_pair=self._latest_pair,
+                                )
                             self._pending_gyro = None
+                            self._config_pending_gyro = None
                         self._reset_buffer()
                         return True
 
