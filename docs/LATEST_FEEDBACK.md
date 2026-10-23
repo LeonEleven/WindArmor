@@ -5,6 +5,42 @@
 
 ## 当前工作单元
 
+- 日期：2026-10-23；Task：`IMU_REAL_EVIDENCE_020A6`，仅归档既有证据，无生产代码变更。
+- task-start / 实测生产源码 baseline：
+  `develop@d5245a901229c2880a471f8e19c55309bf0a74e1`。
+- operator 在宿主机完成的 A、B、C v2、诊断 runner D：**PASS，限单设备正常场景**。
+  本次从原始字节及连续 JSONL 复核统计、窗口、新 pair 与清理事件；
+  完整结果、文件大小/哈希及证据边界见
+  [020A.6 IMU 读回实测记录](verification/IMU_020A6_READBACK_EVIDENCE.md)。
+- A：53,024 字节、4,820 条合法普通帧、602 对；B：单次 `0x02`，
+  `[639, 6, 2, 5]`，host write-return 到响应 read-return 为 204.715079 ms；
+  C v2：单次 `0x20`，`[3, 3, 0, 0]`，204.576116 ms、603 对。
+  初次 Stage C 因没有安全发送机会为 **NOT EXECUTED**，不是硬件通信失败。
+- D：生产源码指纹匹配；一次 activation、一次连接、两次各 5 字节写入；
+  `host-associated-checked`、`required_values_passed=true`，随后新 `post_check_pair`
+  的 GYRO/ANGLE 同属 generation 3，均在检查完成后接受；约 4.10 秒，程序清理证据完整。
+  无 guard violation。`observation_complete=false`，仍缺少 11 项 provenance。
+  终端退出码及外部无占用由 operator 报告，提供的 JSON 文件不含独立终端记录。
+- 原始证据 12/12 文件已非破坏性保存到 `~/windarmor_evidence/020A6/`，
+  源文件与副本的大小及 SHA-256 一致；原 `/tmp` 目录保留，日志和临时 helper 不进入 Git。
+- B=1.0 秒仍是有限主机实验假设，不是厂家最大寿命保证；匿名应答关联仍为条件性结果。
+  RSW 实测 `0x027F` 不等于历史预期 default `0x001E`；额外输出位不自动失败，也不写回默认值。
+- Level-2 软件配对有本次正常实机证据；Level-3/4 周期/物理同采样仍 **NOT PROVEN**。
+  有限 component/pair 年龄、完整数值误差预算、near-singularity 规则、`theta_max`/`K_max`
+  及非零 `FlightCommand` projection / actuator authority 仍未冻结或未验证。
+- `relative_roll_rate_rad_s`：**PLANNED / NOT IMPLEMENTED**；020B 与 ALG-007 Candidate：
+  **BLOCKED / NOT IMPLEMENTED**；Candidate Result **NOT CREATED**，Formal Qualification
+  **NOT EXECUTED**。原生 launch、真实异常/重连、电机、风扇及整机恢复不由此次正常样本验证。
+- 本轮归档 hardware access：**NO**，没有重新运行 A/B/C/D；任何新实机场景仍需另行授权。
+  Stable release 仍为 `v0.4.0`，v0.5.0 **NOT RELEASED**。
+
+## 020A.5 历史交接
+
+> 以下保留 2026-10-19 的软件实现交接。其“当前／本轮／未执行／未验证”均指 020A.5
+> 当时，不否定上方 020A.6 后续 operator 实测；当时未执行硬件测试的历史结论不作改写。
+
+### 当时工作单元
+
 - 日期：2026-10-19；Task：`IMU_CONFIG_RUNTIME_020A5`。
 - task-start baseline：`develop@1240afa8be2b97324f63103167678919928ef3b7`。
 - 当前交付为默认关闭的 startup/reconnect READADDR 及验证后新 pair gate；成功仅称
@@ -21,7 +57,7 @@
   **BLOCKED / NOT IMPLEMENTED**；Candidate Result：**NOT CREATED**；Formal Qualification：
   **NOT EXECUTED**。本轮普通回归测试不是新一轮资格验证。
 
-## Level-2 实现与接口
+### Level-2 实现与接口
 
 parser 在原有合法 ACC/GYRO/ANGLE decode 路径记录不可变组件与配对快照：
 
@@ -52,7 +88,7 @@ legacy ANGLE 触发 ROS 发布仍允许 latest cached GYRO，并不代表严格 
 消费，ALG-001～006 base validity、默认控制行为与既有 ROS 接口保持兼容；新增读回参数默认
 关闭，不激活请求路径。
 
-## 厂家与配置依据
+### 厂家与配置依据
 
 020A.5 离线子集工作单元曾直接复核 git-ignored `reference/document/IMU/` 的《10轴IMU模块通讯协议》与
 《用户手册》，未将 PDF 加入 Git。厂家 `0x52` signed-int16 / 32768 * 2000 deg/s 与 `0x53`
@@ -100,7 +136,7 @@ GYRORANGE 2000 deg/s 与 actual host/module BAUD 一致性。§7.9.6 的全部 p
 pending 与 pair，旧 read 字节通过 generation 拒绝。快照是历史，消费者必须核对当前
 generation/status。没有接入 Flight，也不保证 finite component/pair age。
 
-## 软件验证与剩余前置条件
+### 软件验证与剩余前置条件
 
 - 020A.4 定向 parser + fake serial/lifecycle 测试：**PASS，86 项**；覆盖 normal pair、ANGLE alone/
   duplicate、latest pending、坏校验、跨 read/多帧、独立组件时间、旧缓存/残帧/迟到 read 的
@@ -154,7 +190,7 @@ generation/status。没有接入 Flight，也不保证 finite component/pair age
 - 非零 executable `FlightCommand` projection、物理 motor/fan authority 与 allocation 仍为独立
   **NOT DEFINED / NOT VERIFIED** 前置条件；本轮未实现 020B、ALG-007 Candidate 或 roll-rate API。
 
-## Hardware / evidence boundary
+### Hardware / evidence boundary
 
 - Hardware access：**NO**；authorization：**NONE**；hardware validation / Level F：
   **NOT AUTHORIZED / NOT EXECUTED**。
