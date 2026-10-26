@@ -5,6 +5,36 @@
 
 ## 当前工作单元
 
+- 日期：2026-10-26；Task：`IMU_TEMPORAL_PROVENANCE_020A7`；docs-only / design-only。
+- task-start baseline：`develop@c86be2c2f9f08f78a2a3ab5d7917a012fec158c3`。
+- 主交付为 [IMU 组件年龄与时序来源契约](IMU_TEMPORAL_PROVENANCE_CONTRACT.md)，
+  [ALG-007 §7.10](algorithm_tasks/ALG-007.md#710-imu-temporal-provenance--v050-020a7-structure-frozen)
+  记录 prerequisite 状态。本轮只冻结 future contract，不创建生产接口或修改实现。
+- 推荐方案 A：保留 legacy ROS/base 行为，未来单条 typed message 原子携带严格 pair values、
+  receive ns、source/session、clock-domain 与 transport/parser/config/pair generation/sequence；
+  禁止 legacy cache 与另一 pair metadata 拼接。
+- V1 限同 host/boot、独立验证的同 time namespace 与 `CLOCK_MONOTONIC`；未来本地进程
+  绑定、准入 challenge/barrier、原子快照及新组件 gate 尚未实现/部署验证。不可比较则
+  unavailable；不能以 ROS stamp、source age 或负年龄 clamp 代替域验证。
+- 逻辑 `t_pair=t_angle`；gap、最老组件消费年龄、pair 消费年龄分别定义。
+  具体 G/A/P、活性监督有效期与传播/调度预算均 **NOT FROZEN**，缺少批准策略必须关闭
+  future derived capability。新 acceptance matrix 仅为设计，**NOT EXECUTED**。
+- session/generation/config/reference 失效撤销 derived；配置检查后须新 GYRO→ANGLE，
+  reference/Flight 重启须新准入或 fence；失效状态传播是异步的，不宣称 DDS 零延迟获知。
+- ALG-001～006 的 base validity/freshness、sample_age_sec、pitch-rate、factory/validation
+  保持现义；未来 optional roll-rate 仍兼容追加，目前 **PLANNED / NOT IMPLEMENTED**。
+  numerical guard、theta_max、K_max、combined error budget 与非零执行器投影仍为独立 blocker；
+  020B、ALG-007 Candidate 仍 **BLOCKED / NOT IMPLEMENTED**，Result **NOT CREATED**，
+  Formal Qualification **NOT EXECUTED**。
+- 下一独立任务先实现并验证只读准入与 typed provenance/默认不可用的 gate，并同步评审
+  reference 身份和未来 API 绑定；冻结阈值仍需动态误差及端到端预算，不能凭有限日志 max/p99。
+- hardware access：**NO**；不重跑 A/B/C/D，不访问 IMU/CAN/GPIO/PWM 或执行器。
+  Stable release 仍为 `v0.4.0`，v0.5.0 **NOT RELEASED**。
+
+## 020A.6 历史交接与实测证据
+
+以下保留已归档的有限实测状态、资源清理与证据边界；020A.7 不改写或扩大该验证结论。
+
 - 日期：2026-10-23；Task：`IMU_REAL_EVIDENCE_020A6`，仅归档既有证据，无生产代码变更。
 - task-start / 实测生产源码 baseline：
   `develop@d5245a901229c2880a471f8e19c55309bf0a74e1`。
